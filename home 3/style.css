@@ -1,0 +1,841 @@
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap");
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: "Inter", sans-serif;
+  background: #0a0a0a;
+  color: #f5f5f5;
+  min-height: 100vh;
+  padding: 40px 20px;
+}
+
+.container {
+  max-width: 900px;
+  margin: 0 auto;
+  background: #ffffff;
+  color: #0a0a0a;
+  padding: 50px;
+  border: 1px solid #e0e0e0;
+}
+
+h1 {
+  font-size: 2rem;
+  font-weight: 300;
+  text-align: center;
+  margin-bottom: 50px;
+  letter-spacing: 3px;
+  text-transform: uppercase;
+  border-bottom: 1px solid #0a0a0a;
+  padding-bottom: 20px;
+}
+
+.status-bar {
+  background: #f5f5f5;
+  padding: 20px;
+  margin-bottom: 40px;
+  border: 1px solid #d0d0d0;
+}
+
+.status-bar h3 {
+  font-size: 0.9rem;
+  font-weight: 600;
+  margin-bottom: 15px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  text-align: center;
+}
+
+.status-item {
+  display: flex;
+  justify-content: space-between;
+  padding: 8px 0;
+  border-bottom: 1px solid #e0e0e0;
+}
+
+.status-item:last-child {
+  border-bottom: none;
+}
+
+.status-label {
+  font-weight: 400;
+  color: #666;
+}
+
+.status-value {
+  font-weight: 600;
+  color: #0a0a0a;
+}
+
+.status-value.active {
+  color: #00aa00;
+}
+
+.status-value.inactive {
+  color: #cc0000;
+}
+
+.section {
+  background: #fafafa;
+  padding: 30px;
+  margin-bottom: 30px;
+  border: 1px solid #e0e0e0;
+}
+
+.section h3 {
+  font-size: 1.1rem;
+  font-weight: 600;
+  margin-bottom: 25px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+
+.form-group {
+  margin-bottom: 20px;
+}
+
+label {
+  display: block;
+  color: #333;
+  font-weight: 500;
+  margin-bottom: 8px;
+  font-size: 0.9rem;
+  letter-spacing: 0.5px;
+  text-align: center;
+}
+
+input[type="number"],
+input[type="range"],
+select {
+  width: 100%;
+  padding: 12px;
+  background: #ffffff;
+  border: 1px solid #d0d0d0;
+  color: #0a0a0a;
+  font-size: 0.95rem;
+  font-family: "Inter", sans-serif;
+  transition: border-color 0.2s ease;
+}
+
+input[type="number"]:focus,
+select:focus {
+  outline: none;
+  border-color: #0a0a0a;
+}
+
+input[type="range"] {
+  padding: 0;
+  height: 2px;
+  appearance: none;
+  -webkit-appearance: none;
+  background: #d0d0d0;
+  border: none;
+}
+
+input[type="range"]::-webkit-slider-thumb {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 18px;
+  height: 18px;
+  background: #0a0a0a;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+input[type="range"]::-webkit-slider-thumb:hover {
+  background: #333;
+}
+
+input[type="checkbox"] {
+  width: 20px;
+  height: 20px;
+  cursor: pointer;
+  accent-color: #0a0a0a;
+}
+
+select option {
+  background: #ffffff;
+  color: #0a0a0a;
+}
+
+button {
+  background: #0a0a0a;
+  color: #ffffff;
+  padding: 14px 22px;
+  border: none;
+  font-size: 0.9rem;
+  font-weight: 500;
+  cursor: pointer;
+  margin: 5px auto;
+  display: block;
+  transition: all 0.2s ease;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  border-radius: 4px;
+  width: auto;
+  min-width: 160px;
+}
+
+button:hover {
+  background: #333;
+}
+
+button:active {
+  background: #000;
+}
+
+.status {
+  padding: 15px 20px;
+  margin-bottom: 20px;
+  font-weight: 500;
+  border: 1px solid;
+}
+
+.status.success {
+  background: #f0f9f0;
+  color: #006600;
+  border-color: #00aa00;
+}
+
+.status.error {
+  background: #fff0f0;
+  color: #660000;
+  border-color: #cc0000;
+}
+
+span {
+  color: #0a0a0a;
+  font-weight: 600;
+  margin-left: 10px;
+}
+
+@media (max-width: 768px) {
+  body {
+    padding: 0;
+    background: #ffffff; /* Match container background */
+  }
+
+  .container {
+    padding: 30px 20px;
+    border: none;
+    max-width: 100%;
+    min-height: 100vh;
+  }
+
+  h1 {
+    font-size: 1.5rem;
+    margin-top: 20px;
+  }
+
+  button {
+    width: 100%;
+    margin-right: 0;
+  }
+}
+
+/* --- Dial / Drum Control Styles --- */
+
+.dial-wrapper {
+  width: 100%;
+  /* max-width: 500px; */
+  padding: 10px 0;
+  background: rgba(237, 237, 237, 1);
+  border: 1px solid #eee;
+  border-radius: 8px;
+  margin-top: 10px;
+}
+
+/* Current Value Display */
+.dial-value-display {
+  text-align: center;
+  margin-bottom: 20px;
+}
+
+.dial-value-display .number {
+  font-size: 48px;
+  font-weight: 700;
+  color: #000;
+  letter-spacing: -2px;
+}
+
+.dial-value-display .unit {
+  font-size: 24px;
+  font-weight: 300;
+  color: #666;
+  margin-left: 5px;
+}
+
+/* Triangle Indicator */
+.triangle-indicator {
+  display: flex;
+  justify-content: center;
+  margin-bottom: -1px; /* Overlap slightly with drum */
+  position: relative;
+  z-index: 10;
+}
+
+.triangle {
+  width: 0;
+  height: 0;
+  border-left: 10px solid transparent;
+  border-right: 10px solid transparent;
+  border-top: 14px solid #0a0a0a;
+}
+
+/* Drum Container */
+.drum-container {
+  position: relative;
+  height: 100px;
+  overflow: hidden;
+  cursor: grab;
+  background: #ffffff;
+  border-top: 1px solid #eee;
+  border-bottom: 1px solid #eee;
+}
+
+.drum-container:active {
+  cursor: grabbing;
+}
+
+/* The drum surface */
+.drum-surface {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-start;
+}
+
+.number-line {
+  position: absolute;
+  display: flex;
+  align-items: flex-start;
+  height: 100%;
+  padding-top: 0;
+  transition: transform 0.1s ease-out;
+  will-change: transform;
+  /* Prevent text selection */
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.number-line.dragging {
+  transition: none;
+}
+
+.tick {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 20px; /* Base tick width - will be adjustable in JS via logic if needed, but CSS width matters for layout */
+  flex-shrink: 0;
+  position: relative;
+  padding-top: 10px;
+}
+
+.tick-line {
+  width: 1.5px;
+  background: #000;
+  transition: opacity 0.1s ease-out;
+}
+
+.tick-label {
+  position: absolute;
+  top: 50px; /* Adjust based on max tick height */
+  font-size: 12px;
+  font-weight: 600;
+  color: #000;
+  white-space: nowrap;
+}
+
+/* Gradient fade on edges */
+.drum-container::before,
+.drum-container::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 80px;
+  z-index: 5;
+  pointer-events: none;
+}
+
+.drum-container::before {
+  left: 0;
+  background: linear-gradient(to right, #ffffff, transparent);
+}
+
+.drum-container::after {
+  right: 0;
+  background: linear-gradient(to left, #ffffff, transparent);
+}
+
+/* --- Toggle Switch Styles --- */
+
+.toggle-row {
+  display: flex;
+  gap: 15px;
+  justify-content: space-between;
+  flex-wrap: wrap;
+}
+
+.toggle-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  flex: 1;
+  min-width: 80px;
+  max-width: 120px;
+}
+
+.toggle-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: #333;
+  text-align: center;
+  margin-bottom: 8px;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  width: 27px;
+  padding-top: 1px;
+  padding-bottom: 1px;
+  margin-right: 6px;
+  padding-left: 5px;
+  padding-right: 5px;
+  margin-left: 3px;
+}
+
+.switch-body {
+  position: relative;
+  width: 36px;
+  height: 64px;
+  cursor: pointer;
+}
+
+.switch-body .bezel {
+    position: absolute;
+    inset: 0;
+    background: #f0f0f0;
+    border: 1px solid #ccc;
+    border-radius: 18px;
+}
+
+/* Remove weird border from specific ID if needed, but generic is better */
+#switch-timestamp { border: none; }
+
+.switch-body .slot {
+  position: absolute;
+  top: 6px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 14px;
+  height: 52px;
+  background: #333;
+  border-radius: 7px;
+  overflow: hidden;
+}
+
+.switch-body .lever {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 28px;
+  height: 36px;
+  background: #fff;
+  border: 1px solid #999;
+  border-radius: 14px;
+  transition: top 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding-top: 5px;
+  top: 24px; /* Center/Off position if vertical? Usually toggle is up/down */
+}
+
+/* Vertical Toggle Logic: 
+   Let's say Down is OFF, Up is ON. Or Top/Bottom.
+   Original CSS had .lever.off {}, .lever.on { top: 4px; }
+   Let's check the slot height. Slot is 52px high. Top is 6px.
+   Bottom of slot is 6+52 = 58px.
+   Lever is 36px high.
+   
+   ON Position (Top): top: 4px;
+   OFF Position (Bottom): top: 24px; (64 - 36 - 4) = 24px
+*/
+
+.switch-body .lever.off {
+  top: 24px;
+}
+
+.switch-body .lever.on {
+  top: 4px;
+  background: #fff;
+  border-color: #000;
+}
+
+.switch-body .grip {
+  width: 14px;
+  height: 2px;
+  background: #ccc;
+  margin-bottom: 2px;
+}
+
+.switch-body .lever.on .grip {
+    background: #000;
+}
+
+.switch-body .indicator {
+  width: 4px;
+  height: 4px;
+  background: #cc0000; /* Red dot for ON? or just style */
+  border-radius: 50%;
+  margin-top: 4px;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+.switch-body .lever.on .indicator {
+    opacity: 1; 
+    background: #00aa00;
+}
+
+/* --- Rotary Knob Styles --- */
+
+.knob-wrapper {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 15px 0;
+}
+
+.knob-container {
+  position: relative;
+  width: 160px;
+  height: 160px;
+}
+
+.knob-container .knob-label {
+  position: absolute;
+  color: #999;
+  font-size: 11px;
+  font-weight: 500;
+  transition: color 0.2s;
+}
+
+.knob-container .knob-label.active {
+  color: #000;
+  font-weight: 700;
+}
+
+.knob {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 80px;
+  height: 80px;
+  background: #fff;
+  border-radius: 50%;
+  border: 3px solid #000;
+  cursor: grab;
+  user-select: none;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+
+.knob:active {
+  cursor: grabbing;
+}
+
+.knob .knob-indicator {
+  position: absolute;
+  top: 6px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 3px;
+  height: 16px;
+  background: #000;
+  border-radius: 2px;
+}
+
+.knob-value-display {
+  margin-top: 10px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #000;
+  text-align: center;
+}
+
+/* --- Status Indicators Section --- */
+
+.monitoring-gauge-wrapper {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 15px;
+}
+
+.monitoring-gauge {
+  text-align: center;
+  padding: 15px 25px;
+  background: #fff;
+  border: 2px solid rgba(224, 224, 224, 1);
+  border-radius: 8px;
+}
+
+.gauge-label {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 2px;
+  color: #666;
+  margin-bottom: 8px;
+}
+
+.gauge-display {
+  margin-bottom: 10px;
+}
+
+.gauge-value {
+  font-size: 24px;
+  font-weight: 700;
+  color: #0a0a0a;
+  letter-spacing: 1px;
+}
+
+.gauge-value.active {
+  color: #00aa00;
+}
+
+.gauge-value.inactive {
+  color: #cc0000;
+}
+
+.threshold-display {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 15px;
+  background: #f5f5f5;
+  border-radius: 4px;
+}
+
+.threshold-label {
+  font-size: 11px;
+  font-weight: 500;
+  color: #666;
+}
+
+.threshold-value {
+  font-size: 18px;
+  font-weight: 700;
+  color: #0a0a0a;
+}
+
+/* 3 Horizontal Indicators */
+.indicator-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.indicator-item {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 12px 8px;
+  background: #fff;
+  border: 1px solid #e0e0e0;
+  border-radius: 6px;
+}
+
+.indicator-label {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: #666;
+  margin-bottom: 6px;
+}
+
+.indicator-status {
+  font-size: 16px;
+  font-weight: 800;
+  letter-spacing: 2px;
+  padding: 4px 12px;
+  border-radius: 4px;
+  transition: all 0.2s ease;
+}
+
+.indicator-status.off {
+  color: #999;
+  background: #f0f0f0;
+}
+
+.indicator-status.on {
+  color: #fff;
+  background: #00aa00;
+  box-shadow: 0 0 8px rgba(0, 170, 0, 0.4);
+}
+
+
+/* --- Wi-Fi Settings Section --- */
+
+.wifi-status-panel {
+  background: #fff;
+  border: 1px solid #e0e0e0;
+  border-radius: 6px;
+  padding: 15px;
+  margin-bottom: 20px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.wifi-mode-display {
+  font-size: 1.1rem;
+  font-weight: 600;
+}
+
+.mode-badge {
+    padding: 6px 12px;
+    border-radius: 20px;
+    font-size: 0.9rem;
+    font-weight: 700;
+    color: #fff;
+    white-space: nowrap;
+}
+
+.mode-badge.ap {
+    background-color: #007bff; /* Blue for AP */
+}
+
+.mode-badge.tethering {
+    background-color: #28a745; /* Green for Client */
+}
+
+.mode-badge.unknown {
+    background-color: #6c757d;
+}
+
+.wifi-info {
+  text-align: right;
+  font-size: 0.85rem;
+  color: #666;
+  line-height: 1.4;
+}
+
+/* Wi-Fi Toggle Switch */
+.wifi-toggle-container {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 20px;
+}
+
+.toggle-switch-wrapper {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+  background: #f0f0f0;
+  padding: 10px 20px;
+  border-radius: 30px;
+}
+
+.toggle-option {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #999;
+  transition: color 0.3s;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+/* The Switch */
+.switch {
+  position: relative;
+  display: inline-block;
+  width: 50px;
+  height: 26px;
+}
+
+.switch input { 
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: #ccc;
+  -webkit-transition: .4s;
+  transition: .4s;
+}
+
+.slider:before {
+  position: absolute;
+  content: "";
+  height: 20px;
+  width: 20px;
+  left: 3px;
+  bottom: 3px;
+  background-color: white;
+  -webkit-transition: .4s;
+  transition: .4s;
+}
+
+input:checked + .slider {
+  background-color: #0a0a0a;
+}
+
+input:focus + .slider {
+  box-shadow: 0 0 1px #0a0a0a;
+}
+
+input:checked + .slider:before {
+  -webkit-transform: translateX(24px);
+  -ms-transform: translateX(24px);
+  transform: translateX(24px);
+}
+
+/* Rounded sliders */
+.slider.round {
+  border-radius: 34px;
+}
+
+.slider.round:before {
+  border-radius: 50%;
+}
+
+/* AP Settings Inputs */
+#ap-settings-panel input[type="text"] {
+  width: 100%;
+  padding: 10px;
+  margin-top: 5px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  font-family: inherit;
+  font-size: 0.9rem;
+  background: #fff;
+  color: #000;
+}
+
+#ap-settings-panel {
+    background: #eef !important; /* Slightly distinct background */
+    border: 1px solid #dde;
+}
+
+#tethering-msg-panel {
+    background: #f0f4f8;
+    border-radius: 8px;
+    color: #444;
+}

@@ -1,0 +1,15 @@
+[Unit]
+Description=Camera Control Web Interface
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/python3 /home/pi/camera_control.py
+WorkingDirectory=/home/pi
+StandardOutput=journal
+StandardError=journal
+Restart=always
+User=pi
+Group=pi
+
+[Install]
+WantedBy=multi-user.target

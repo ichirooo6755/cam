@@ -1,0 +1,15 @@
+[Unit]
+Description=Simple Photo Server (Port 8000)
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/python3 /home/pi/server.py
+WorkingDirectory=/home/pi
+StandardOutput=journal
+StandardError=journal
+Restart=always
+User=pi
+Group=pi
+
+[Install]
+WantedBy=multi-user.target

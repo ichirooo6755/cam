@@ -1,0 +1,1105 @@
+<!DOCTYPE html>
+<html lang="ja">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pi Camera Control</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+    <div class="container">
+        <h1>Pi Camera Control</h1>
+
+        <!-- Status Indicators Section -->
+        <div class="status-bar" id="statusBar">
+            <h3>現在の状態</h3>
+            
+            <!-- Monitoring Status with Speed-style Gauge -->
+            <div class="monitoring-gauge-wrapper">
+                <div class="monitoring-gauge" id="monitoringGauge">
+                    <div class="gauge-label">監視状態</div>
+                    <div class="gauge-display">
+                        <span class="gauge-value" id="monitoringStatus">確認中...</span>
+                    </div>
+                    <div class="threshold-display">
+                        <span class="threshold-label">検知閾値:</span>
+                        <span class="threshold-value" id="currentThreshold">-</span>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- 3 Horizontal Indicators -->
+            <div class="indicator-row">
+                <div class="indicator-item">
+                    <span class="indicator-label">多重</span>
+                    <span class="indicator-status off" id="indicatorMultiple">OFF</span>
+                </div>
+                <div class="indicator-item">
+                    <span class="indicator-label">2in1</span>
+                    <span class="indicator-status off" id="indicator2in1">OFF</span>
+                </div>
+                <div class="indicator-item">
+                    <span class="indicator-label">日時</span>
+                    <span class="indicator-status off" id="indicatorTimestamp">OFF</span>
+                </div>
+            </div>
+        </div>
+
+        <div id="status" class="status" style="display: none;"></div>
+
+        <div class="section">
+            <h3>カメラ設定</h3>
+            <form id="settingsForm">
+                <div class="form-group">
+                    <label>ISO感度:</label>
+                    <input type="hidden" id="iso" name="iso" value="auto">
+                    <div id="iso-dial-container"></div>
+                </div>
+
+                <div class="form-group">
+                    <label>シャッタースピード:</label>
+                    <input type="hidden" id="shutter_speed" name="shutter_speed" value="auto">
+                    <div id="shutter-dial-container"></div>
+                </div>
+
+                <div class="form-group">
+                    <label>検知閾値 (0-100%):</label>
+                    <input type="hidden" id="detection_threshold" name="detection_threshold" value="30">
+                    <div id="threshold-dial-container"></div>
+                </div>
+
+                <div class="form-group">
+                    <label>ホワイトバランス:</label>
+                    <input type="hidden" id="white_balance" name="white_balance" value="auto">
+                    <div id="white-balance-knob-container"></div>
+                </div>
+
+                <!-- Toggle Switches Row -->
+                <div class="form-group">
+                    <label>撮影オプション:</label>
+                    <div class="toggle-row">
+                        <div class="toggle-item">
+                            <span class="toggle-label">多重露光</span>
+                            <input type="hidden" id="enable_multiple_exposure" name="enable_multiple_exposure" value="false">
+                            <div class="switch-body" id="switch-multiple">
+                                <div class="bezel"></div>
+                                <div class="slot"></div>
+                                <div class="lever off">
+                                    <div class="grip"></div>
+                                    <div class="grip"></div>
+                                    <div class="grip"></div>
+                                    <div class="indicator"></div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="toggle-item">
+                            <span class="toggle-label">2in1</span>
+                            <input type="hidden" id="enable_2in1_composition" name="enable_2in1_composition" value="false">
+                            <div class="switch-body" id="switch-2in1">
+                                <div class="bezel"></div>
+                                <div class="slot"></div>
+                                <div class="lever off">
+                                    <div class="grip"></div>
+                                    <div class="grip"></div>
+                                    <div class="grip"></div>
+                                    <div class="indicator"></div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="toggle-item">
+                            <span class="toggle-label">日時</span>
+                            <input type="hidden" id="enable_timestamp" name="enable_timestamp" value="false">
+                            <div class="switch-body" id="switch-timestamp">
+                                <div class="bezel"></div>
+                                <div class="slot"></div>
+                                <div class="lever off">
+                                    <div class="grip"></div>
+                                    <div class="grip"></div>
+                                    <div class="grip"></div>
+                                    <div class="indicator"></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <button type="submit">設定を保存</button>
+                <button type="button" onclick="loadSettings()">設定を読み込み</button>
+            </form>
+        </div>
+
+        <div class="section">
+            <h3>監視制御</h3>
+            <div style="display: flex; gap: 10px;">
+                <button onclick="restartMonitoring()" style="flex: 1;">監視を再開</button>
+                <button onclick="stopMonitoring()" style="flex: 1; background-color: #cc0000;">監視を停止</button>
+            </div>
+        </div>
+
+        <div class="section">
+            <h3>ネットワーク設定 (Wi-Fi)</h3>
+            <div class="wifi-status-panel">
+                <div class="wifi-mode-display">
+                    <span id="wifiModeLabel">現在のモード: <strong id="currentWifiMode">取得中...</strong></span>
+                </div>
+                <div class="wifi-info">
+                    SSID: <span id="currentWifiSSID">-</span><br>
+                    IP: <span id="currentWifiIP">-</span>
+                </div>
+            </div>
+
+            <div class="wifi-toggle-container">
+                <div class="toggle-switch-wrapper">
+                    <span class="toggle-option" id="label-tethering">テザリング (Client)</span>
+                    <label class="switch">
+                        <input type="checkbox" id="wifiModeSwitch">
+                        <span class="slider round"></span>
+                    </label>
+                    <span class="toggle-option" id="label-ap">APモード (Host)</span>
+                </div>
+            </div>
+
+            <div id="ap-settings-panel" style="display: none; margin-top: 15px; padding: 10px; background: rgba(255,255,255,0.05); border-radius: 8px;">
+                <h4>APモード設定</h4>
+                <div class="form-group">
+                    <label>SSID:</label>
+                    <input type="text" id="ap_ssid" placeholder="PiCamera">
+                </div>
+                <div class="form-group">
+                    <label>パスワード (8文字以上):</label>
+                    <input type="text" id="ap_password" placeholder="picamera123">
+                </div>
+                <p style="font-size: 0.8em; color: #aaa;">
+                    <br>注意: APモードに切り替えると現在のWi-Fiは切断されます。<br>
+                    切り替え後はスマホから上記SSIDに接続し直し、<br>
+                    <strong>http://192.168.4.1:8001</strong> にアクセスしてください。
+                </p>
+            </div>
+            
+            <div id="tethering-msg-panel" style="display: none; margin-top: 15px; padding: 10px;">
+                <p style="font-size: 0.9em;">
+                    テザリングモードに切り替えると、Raspberry Piは記憶されているWi-Fi (スマホのテザリング等) に自動接続を試みます。<br>
+                    切り替え後、<strong>http://raspberrypi.local:8001</strong> にアクセスしてください。
+                </p>
+            </div>
+
+            <button id="btnSwitchWifi" onclick="switchWifiMode()" style="margin-top: 15px; background-color: #007bff;">モード切り替え実行</button>
+        </div>
+    </div>
+
+    <script>
+        // --- Generic Dial Control Class ---
+        class DialControl {
+            constructor(containerId, options) {
+                this.container = document.getElementById(containerId);
+                if (!this.container) return; // Error handling
+                
+                this.options = Object.assign({
+                    min: 0,
+                    max: 100,
+                    step: 1,
+                    valueMap: null, // For non-linear, e.g. [{value: 'auto', label: 'Auto'}, {value: 1000, label: '1/1000'}]
+                    initialValue: 0,
+                    tickWidth: 30,
+                    labelUnit: '',
+                    onUpdate: null,
+                    majorTickInterval: 10,
+                    mediumTickInterval: 5
+                }, options);
+
+                // State
+                this.currentValue = this.options.initialValue;
+                this.isDragging = false;
+                this.startX = 0;
+                this.currentOffset = 0;
+
+                // Setup DOM
+                this.render();
+                
+                // Bind elements
+                this.valueDisplay = this.container.querySelector('.number');
+                this.unitDisplay = this.container.querySelector('.unit');
+                this.drumContainer = this.container.querySelector('.drum-container');
+                this.numberLine = this.container.querySelector('.number-line');
+
+                // Init Logic
+                this.initScale();
+                
+                // Initial set without animation
+                requestAnimationFrame(() => {
+                    this.updatePositionFromValue(this.currentValue, false);
+                });
+
+                // Events
+                this.bindEvents();
+                
+                // Add resize listener
+                window.addEventListener('resize', () => {
+                   this.updatePositionFromValue(this.currentValue, false); 
+                });
+            }
+
+            render() {
+                this.container.innerHTML = `
+                    <div class="dial-wrapper">
+                        <div class="dial-value-display">
+                            <span class="number"></span><span class="unit">${this.options.labelUnit}</span>
+                        </div>
+                        <div class="triangle-indicator">
+                            <div class="triangle"></div>
+                        </div>
+                        <div class="drum-container">
+                            <div class="drum-surface">
+                                <div class="number-line"></div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }
+
+            initScale() {
+                this.numberLine.innerHTML = '';
+                
+                let scaleItems = [];
+                if (this.options.valueMap) {
+                    scaleItems = this.options.valueMap;
+                } else {
+                    // Generate linear scale
+                    for (let i = this.options.min; i <= this.options.max; i += this.options.step) {
+                        scaleItems.push({ value: i, label: i });
+                    }
+                }
+                
+                this.scaleItems = scaleItems; // Store for lookup
+
+                scaleItems.forEach((item, index) => {
+                    const tick = document.createElement('div');
+                    tick.className = 'tick';
+                    tick.style.width = this.options.tickWidth + 'px';
+                    
+                    const tickLine = document.createElement('div');
+                    tickLine.className = 'tick-line';
+                    
+                    // Tick styling logic
+                    let isMajor = false;
+                    let isMedium = false;
+
+                    if (this.options.valueMap) {
+                        // For value maps, maybe first and every 5th?
+                        // Or custom flags in valueMap?
+                        // Simple heuristic:
+                        if (index === 0 || index % 5 === 0) isMajor = true;
+                        else isMedium = true; // All visible
+                    } else {
+                        // Linear
+                        const val = item.value;
+                        if (val % (this.options.step * 10) === 0) isMajor = true; // e.g. 1000 step 100, 10th
+                        else if (val % (this.options.step * 5) === 0) isMedium = true;
+                        
+                        // Override for small ranges like 0-100
+                        if (this.options.max - this.options.min <= 100) {
+                            if (val % 10 === 0) isMajor = true;
+                            else if (val % 5 === 0) isMedium = true;
+                        }
+                    }
+
+                    if (isMajor) {
+                        tickLine.style.height = '40px';
+                        tickLine.style.width = '2px';
+                        const label = document.createElement('div');
+                        label.className = 'tick-label';
+                        label.textContent = item.label;
+                        tick.appendChild(tickLine);
+                        tick.appendChild(label);
+                    } else if (isMedium) {
+                        tickLine.style.height = '30px';
+                        tickLine.style.width = '1.5px';
+                        tick.appendChild(tickLine);
+                    } else {
+                        tickLine.style.height = '18px';
+                        tickLine.style.width = '1px';
+                        tick.appendChild(tickLine);
+                    }
+                    
+                    this.numberLine.appendChild(tick);
+                });
+            }
+
+            getIndexForValue(value) {
+                if (this.options.valueMap) {
+                    return this.options.valueMap.findIndex(item => String(item.value) === String(value));
+                }
+                if (value === 'auto' && this.options.min !== 'auto') return -1; // Should not happen if configured right
+                return Math.round((value - this.options.min) / this.options.step);
+            }
+            
+            getValueForIndex(index) {
+                if (this.options.valueMap) {
+                    if (index < 0) index = 0;
+                    if (index >= this.options.valueMap.length) index = this.options.valueMap.length - 1;
+                    return this.options.valueMap[index].value;
+                }
+                const val = (index * this.options.step) + this.options.min;
+                return Math.max(this.options.min, Math.min(this.options.max, val));
+            }
+
+            getOffsetForIndex(index) {
+                const containerWidth = this.drumContainer.offsetWidth;
+                const centerOffset = containerWidth / 2;
+                // Center of tick at 'index'
+                // Ticks are 0-indexed in DOM
+                return centerOffset - (index * this.options.tickWidth) - (this.options.tickWidth / 2);
+            }
+
+            getIndexFromOffset(offset) {
+                const containerWidth = this.drumContainer.offsetWidth;
+                const centerOffset = containerWidth / 2;
+                const rawIndex = (centerOffset - offset - (this.options.tickWidth / 2)) / this.options.tickWidth;
+                
+                let maxIndex = 0;
+                if (this.options.valueMap) {
+                    maxIndex = this.options.valueMap.length - 1;
+                } else {
+                    maxIndex = (this.options.max - this.options.min) / this.options.step;
+                }
+                
+                const index = Math.round(rawIndex);
+                return Math.max(0, Math.min(maxIndex, index));
+            }
+
+            updatePositionFromValue(value, animate = true) {
+                let index = this.getIndexForValue(value);
+                // Fallback if not found (e.g. init value mismatch)
+                if (index === -1) index = 0; 
+                
+                const offset = this.getOffsetForIndex(index);
+                this.currentOffset = offset;
+                this.currentValue = value;
+                
+                this.updateUI(value);
+
+                if (animate) {
+                    this.numberLine.classList.remove('dragging');
+                } else {
+                    this.numberLine.classList.add('dragging');
+                }
+                
+                this.numberLine.style.transform = `translateX(${offset}px)`;
+                this.updateTickOpacity();
+            }
+
+            updateUI(value) {
+                // Determine label
+                let label = value;
+                if (this.options.valueMap) {
+                    const item = this.options.valueMap.find(i => String(i.value) === String(value));
+                    if (item) label = item.label;
+                }
+                
+                // If label is number and large, maybe format?
+                this.valueDisplay.textContent = label;
+                
+                // Callback
+                if (this.options.onUpdate) {
+                    this.options.onUpdate(value);
+                }
+            }
+
+            updateTickOpacity() {
+                const containerWidth = this.drumContainer.offsetWidth;
+                const centerX = containerWidth / 2;
+                const ticks = this.numberLine.children;
+                const containerRect = this.drumContainer.getBoundingClientRect();
+                
+                for (let tick of ticks) {
+                    const rect = tick.getBoundingClientRect();
+                    const tickCenterX = rect.left + rect.width / 2 - containerRect.left;
+                    const distance = Math.abs(tickCenterX - centerX);
+                    const maxDistance = containerWidth / 2;
+                    const normalizedDistance = Math.min(distance / maxDistance, 1);
+                    const opacity = 1 - normalizedDistance * 0.7;
+                    tick.style.opacity = Math.max(0.1, opacity);
+                }
+            }
+            
+            haptic(type = 'light') {
+               if ('vibrate' in navigator) navigator.vibrate(type === 'medium' ? 15 : 5);
+            }
+
+            bindEvents() {
+                // Mouse
+                this.drumContainer.addEventListener('mousedown', (e) => {
+                    this.isDragging = true;
+                    this.startX = e.clientX - this.currentOffset;
+                    this.numberLine.classList.add('dragging');
+                    this.haptic('light');
+                });
+                
+                document.addEventListener('mousemove', (e) => {
+                    if (!this.isDragging) return;
+                    this.handleDrag(e.clientX);
+                });
+                
+                document.addEventListener('mouseup', () => {
+                    this.finishDrag();
+                });
+
+                // Touch
+                this.drumContainer.addEventListener('touchstart', (e) => {
+                    this.isDragging = true;
+                    this.startX = e.touches[0].clientX - this.currentOffset;
+                    this.haptic('light');
+                });
+                
+                document.addEventListener('touchmove', (e) => {
+                   if (this.isDragging) {
+                       e.preventDefault();
+                       this.handleDrag(e.touches[0].clientX);
+                   } 
+                }, { passive: false });
+                
+                document.addEventListener('touchend', () => {
+                   this.finishDrag(); 
+                });
+            }
+
+            handleDrag(clientX) {
+                const newOffset = clientX - this.startX;
+                
+                // Calc min/max offsets
+                // Max offset (leftmost content) corresponds to index 0? No.
+                // Index 0 is at offset: Center - Width/2. (Positive big number if center >> 0?)
+                // Actually: Offset gets SMALLER as we go to higher indices (slide left).
+                // Max Index offset: Center - (MaxIdx * W) - W/2
+                // Min Index (0) offset: Center - (0) - W/2
+                
+                let maxIndex = 0;
+                if (this.options.valueMap) maxIndex = this.options.valueMap.length - 1;
+                else maxIndex = (this.options.max - this.options.min) / this.options.step;
+                
+                const minOffset = this.getOffsetForIndex(maxIndex);
+                const maxOffset = this.getOffsetForIndex(0);
+                
+                const clampedOffset = Math.max(minOffset, Math.min(maxOffset, newOffset));
+                
+                this.currentOffset = clampedOffset;
+                this.numberLine.style.transform = `translateX(${clampedOffset}px)`;
+                
+                const index = this.getIndexFromOffset(clampedOffset);
+                const value = this.getValueForIndex(index);
+                
+                this.updateTickOpacity();
+                
+                if (String(value) !== String(this.currentValue)) {
+                    this.currentValue = value;
+                    this.updateUI(value);
+                    this.haptic('light');
+                }
+            }
+            
+            finishDrag() {
+                if (!this.isDragging) return;
+                this.isDragging = false;
+                this.numberLine.classList.remove('dragging');
+                
+                // Snap to current value
+                this.updatePositionFromValue(this.currentValue, true);
+                this.haptic('medium');
+            }
+            
+            // Public API to set value externally
+            setValue(value) {
+                this.updatePositionFromValue(value, true);
+            }
+        }
+
+        // --- Init Dials ---
+        
+        let thresholdDial, isoDial, shutterDial;
+
+        window.addEventListener('load', function () {
+            // 1. Threshold Dial (0-100)
+            thresholdDial = new DialControl('threshold-dial-container', {
+                min: 0,
+                max: 100,
+                step: 1,
+                initialValue: 30,
+                labelUnit: '',
+                onUpdate: (val) => {
+                    document.getElementById('detection_threshold').value = val;
+                }
+            });
+
+            // 2. ISO Dial (Auto + 100-3200)
+            // Need a value map because of "Auto" at the start
+            // Or just treat Auto as 0? No, Auto is 'auto'.
+            // Construct value map: Auto, 100, 200... 3200
+            const isoMap = [{ value: 'auto', label: 'Auto' }];
+            for (let i = 100; i <= 3200; i += 100) {
+                isoMap.push({ value: i, label: i });
+            }
+            
+            isoDial = new DialControl('iso-dial-container', {
+                valueMap: isoMap,
+                initialValue: 'auto',
+                tickWidth: 35, // Wider for ISO numbers
+                onUpdate: (val) => {
+                    document.getElementById('iso').value = val;
+                }
+            });
+
+            // 3. Shutter Speed Dial (Auto + Mapped)
+            const shutterMap = [
+                { value: 'auto', label: 'Auto' },
+                { value: 1000, label: '1/1000' },
+                { value: 2000, label: '1/500' },
+                { value: 4000, label: '1/250' },
+                { value: 8000, label: '1/125' },
+                { value: 16666, label: '1/60' },
+                { value: 33333, label: '1/30' },
+                { value: 66666, label: '1/15' },
+                { value: 125000, label: '1/8' },
+                { value: 250000, label: '1/4' },
+                { value: 500000, label: '1/2' },
+                { value: 1000000, label: '1"' },
+                { value: 2000000, label: '2"' },
+                { value: 5000000, label: '5"' },
+                { value: 10000000, label: '10"' },
+                { value: 30000000, label: '30"' }
+            ];
+            
+            shutterDial = new DialControl('shutter-dial-container', {
+                valueMap: shutterMap,
+                initialValue: 'auto',
+                tickWidth: 50, // Wider for text labels
+                onUpdate: (val) => {
+                    document.getElementById('shutter_speed').value = val;
+                }
+            });
+
+            // 4. White Balance Knob
+            const wbOptions = [
+                { value: 'auto', label: '自動' },
+                { value: 'daylight', label: '晴天' },
+                { value: 'cloudy', label: '曇り' },
+                { value: 'tungsten', label: '電球' },
+                { value: 'fluorescent', label: '蛍光灯' },
+                { value: 'shade', label: '日陰' }
+            ];
+            wbKnob = new KnobControl('white-balance-knob-container', {
+                options: wbOptions,
+                initialValue: 'auto',
+                onUpdate: (val) => {
+                    document.getElementById('white_balance').value = val;
+                }
+            });
+
+            // 5. Toggle Switches
+            toggleMultiple = new ToggleSwitch('switch-multiple', 'enable_multiple_exposure');
+            toggle2in1 = new ToggleSwitch('switch-2in1', 'enable_2in1_composition');
+            toggleTimestamp = new ToggleSwitch('switch-timestamp', 'enable_timestamp');
+
+            // Load settings
+            loadSettings();
+        });
+
+        // --- Toggle Switch Class ---
+        class ToggleSwitch {
+            constructor(switchId, hiddenInputId) {
+                this.switchBody = document.getElementById(switchId);
+                this.hiddenInput = document.getElementById(hiddenInputId);
+                this.lever = this.switchBody.querySelector('.lever');
+                this.isOn = false;
+
+                this.switchBody.addEventListener('click', () => this.toggle());
+            }
+
+            toggle() {
+                this.isOn = !this.isOn;
+                this.lever.className = this.isOn ? 'lever on' : 'lever off';
+                this.hiddenInput.value = this.isOn ? 'true' : 'false';
+            }
+
+            setValue(val) {
+                this.isOn = (val === true || val === 'true' || val === 'on' || val === 1);
+                this.lever.className = this.isOn ? 'lever on' : 'lever off';
+                this.hiddenInput.value = this.isOn ? 'true' : 'false';
+            }
+        }
+
+        // --- Knob Control Class ---
+        class KnobControl {
+            constructor(containerId, options) {
+                this.container = document.getElementById(containerId);
+                if (!this.container) return;
+
+                this.options = Object.assign({
+                    options: [], // [{value, label}]
+                    initialValue: null,
+                    onUpdate: null
+                }, options);
+
+                this.items = this.options.options;
+                this.currentIndex = 0;
+                this.startAngle = -135;
+                this.endAngle = 135;
+                this.angleRange = this.endAngle - this.startAngle;
+                this.isDragging = false;
+
+                this.render();
+                this.knob = this.container.querySelector('.knob');
+                this.knobContainer = this.container.querySelector('.knob-container');
+                this.valueDisplay = this.container.querySelector('.knob-value-display');
+
+                this.createLabels();
+                this.bindEvents();
+
+                // Set initial value
+                const initIdx = this.items.findIndex(i => i.value === this.options.initialValue);
+                if (initIdx !== -1) {
+                    this.currentIndex = initIdx;
+                }
+                this.updateKnobVisual();
+            }
+
+            render() {
+                this.container.innerHTML = `
+                    <div class="knob-wrapper">
+                        <div class="knob-container">
+                            <div class="knob">
+                                <div class="knob-indicator"></div>
+                            </div>
+                        </div>
+                        <div class="knob-value-display"></div>
+                    </div>
+                `;
+            }
+
+            createLabels() {
+                const knobContainer = this.container.querySelector('.knob-container');
+                const steps = this.items.length - 1;
+                const radius = 70;
+
+                this.items.forEach((item, i) => {
+                    const angle = this.startAngle + (this.angleRange / steps) * i;
+                    const radian = (angle - 90) * (Math.PI / 180);
+                    const x = 80 + radius * Math.cos(radian);
+                    const y = 80 + radius * Math.sin(radian);
+
+                    const label = document.createElement('div');
+                    label.className = 'knob-label';
+                    label.textContent = item.label;
+                    label.dataset.index = i;
+                    label.style.left = `${x}px`;
+                    label.style.top = `${y}px`;
+                    label.style.transform = 'translate(-50%, -50%)';
+                    knobContainer.appendChild(label);
+                });
+            }
+
+            updateKnobVisual() {
+                const steps = this.items.length - 1;
+                const angle = this.startAngle + (this.angleRange / steps) * this.currentIndex;
+                this.knob.style.transform = `translate(-50%, -50%) rotate(${angle}deg)`;
+
+                // Update value display
+                this.valueDisplay.textContent = this.items[this.currentIndex].label;
+
+                // Update active label
+                this.container.querySelectorAll('.knob-label').forEach((lbl, idx) => {
+                    lbl.classList.toggle('active', idx === this.currentIndex);
+                });
+
+                // Callback
+                if (this.options.onUpdate) {
+                    this.options.onUpdate(this.items[this.currentIndex].value);
+                }
+            }
+
+            getAngle(e) {
+                const rect = this.knobContainer.getBoundingClientRect();
+                const centerX = rect.left + rect.width / 2;
+                const centerY = rect.top + rect.height / 2;
+                const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+                const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+                let raw = Math.atan2(clientY - centerY, clientX - centerX) * (180 / Math.PI) + 90;
+                // Normalize to [-180, 180)
+                return ((((raw + 180) % 360) + 360) % 360) - 180;
+            }
+
+            angleToIndex(angle) {
+                const clamped = Math.max(this.startAngle, Math.min(this.endAngle, angle));
+                const normalized = (clamped - this.startAngle) / this.angleRange;
+                return Math.round(normalized * (this.items.length - 1));
+            }
+
+            bindEvents() {
+                this.knob.addEventListener('mousedown', () => this.isDragging = true);
+                this.knob.addEventListener('touchstart', () => this.isDragging = true);
+
+                document.addEventListener('mousemove', (e) => {
+                    if (this.isDragging) {
+                        const angle = this.getAngle(e);
+                        this.currentIndex = this.angleToIndex(angle);
+                        this.updateKnobVisual();
+                    }
+                });
+
+                document.addEventListener('touchmove', (e) => {
+                    if (this.isDragging) {
+                        e.preventDefault();
+                        const angle = this.getAngle(e);
+                        this.currentIndex = this.angleToIndex(angle);
+                        this.updateKnobVisual();
+                    }
+                }, { passive: false });
+
+                document.addEventListener('mouseup', () => this.isDragging = false);
+                document.addEventListener('touchend', () => this.isDragging = false);
+            }
+
+            setValue(value) {
+                const idx = this.items.findIndex(i => i.value === value);
+                if (idx !== -1) {
+                    this.currentIndex = idx;
+                    this.updateKnobVisual();
+                }
+            }
+        }
+
+        // Globals for new controls
+        let wbKnob, toggleMultiple, toggle2in1, toggleTimestamp;
+
+        // --- Load Settings Overwrite ---
+        // (We need to update dials when settings load)
+        
+        // Previous loadSettings function...
+        // We will hook into the existing loadSettings response via the global scope or redefine logic if possible.
+        // Actually, the previous script block had `function loadSettings() { ... }`.
+        // We can just rely on `updateDial` pattern or direct update.
+
+        // Redefine updateDial to be updateAllDials or handle individually
+        function updateDialsFromSettings(data) {
+             if (thresholdDial) thresholdDial.setValue(data.detection_threshold);
+             if (isoDial) isoDial.setValue(data.iso);
+             if (shutterDial) shutterDial.setValue(data.shutter_speed);
+        }
+
+        // Note: The original loadSettings calls `updateDial(data.detection_threshold)`.
+        // We should replace that logic.
+        
+
+
+        // ステータスバー更新
+        function updateStatusBar(settings) {
+            // 監視状態を取得
+            fetch('/api/status')
+                .then(response => response.json())
+                .then(status => {
+                    const monitoringStatus = document.getElementById('monitoringStatus');
+                    if (status.monitoring_active) {
+                        monitoringStatus.textContent = '監視中';
+                        monitoringStatus.className = 'gauge-value active';
+                    } else {
+                        monitoringStatus.textContent = '停止中';
+                        monitoringStatus.className = 'gauge-value inactive';
+                    }
+                })
+                .catch(error => {
+                    document.getElementById('monitoringStatus').textContent = '不明';
+                });
+
+            // 検知閾値を表示
+            document.getElementById('currentThreshold').textContent = settings.detection_threshold + '%';
+
+            // 3つのインジケーター更新
+            updateIndicator('indicatorTimestamp', settings.enable_timestamp);
+            updateIndicator('indicator2in1', settings.enable_2in1_composition);
+            updateIndicator('indicatorMultiple', settings.enable_multiple_exposure);
+
+            // Wi-Fiステータス更新
+            updateWifiStatus();
+        }
+
+        // --- Wi-Fi Control Logic ---
+        
+        const wifiSwitch = document.getElementById('wifiModeSwitch');
+        const apPanel = document.getElementById('ap-settings-panel');
+        const tetheringPanel = document.getElementById('tethering-msg-panel');
+        
+        function toggleWifiPanel(isAp) {
+            if (isAp) {
+                // AP Mode selected
+                apPanel.style.display = 'block';
+                tetheringPanel.style.display = 'none';
+                document.getElementById('label-ap').style.color = '#000';
+                document.getElementById('label-ap').style.fontWeight = 'bold';
+                document.getElementById('label-tethering').style.color = '#999';
+                document.getElementById('label-tethering').style.fontWeight = 'normal';
+            } else {
+                // Tethering Mode selected
+                apPanel.style.display = 'none';
+                tetheringPanel.style.display = 'block';
+                document.getElementById('label-ap').style.color = '#999';
+                document.getElementById('label-ap').style.fontWeight = 'normal';
+                document.getElementById('label-tethering').style.color = '#000';
+                document.getElementById('label-tethering').style.fontWeight = 'bold';
+            }
+        }
+
+        wifiSwitch.addEventListener('change', function() {
+            toggleWifiPanel(this.checked);
+        });
+
+        function updateWifiStatus() {
+            fetch('/api/wifi/status')
+                .then(r => r.json())
+                .then(status => {
+                    // Wi-Fiモード表示更新
+                    const modeEl = document.getElementById('currentWifiMode');
+                    const ssidEl = document.getElementById('currentWifiSSID');
+                    const ipEl = document.getElementById('currentWifiIP');
+                    
+                    if (status.mode === 'ap') {
+                        modeEl.innerHTML = '<span class="mode-badge ap">APモード (Host)</span>';
+                    } else if (status.mode === 'tethering') {
+                        modeEl.innerHTML = '<span class="mode-badge tethering">テザリング (Client)</span>';
+                    } else {
+                        modeEl.innerHTML = '<span class="mode-badge unknown">不明</span>';
+                    }
+                    
+                    ssidEl.textContent = status.ssid || '-';
+                    ipEl.textContent = status.ip_address || '-';
+                    
+                    // スイッチの状態を同期
+                    const wifiSwitch = document.getElementById('wifiModeSwitch');
+                    // Only update switch if not currently interacting (optional, but safer to just sync)
+                    wifiSwitch.checked = (status.mode === 'ap');
+                    
+                    // 表示切り替え
+                    toggleWifiPanel(status.mode === 'ap');
+                })
+                .catch(e => console.error("Wi-Fi status error:", e));
+        }
+        
+        function switchWifiMode() {
+            const isApMode = wifiSwitch.checked;
+            const payload = {
+                mode: isApMode ? 'ap' : 'tethering'
+            };
+            
+            if (isApMode) {
+                const ssid = document.getElementById('ap_ssid').value;
+                const pw = document.getElementById('ap_password').value;
+                if (pw.length < 8) {
+                    alert('パスワードは8文字以上必要です');
+                    return;
+                }
+                payload.ssid = ssid;
+                payload.password = pw;
+            }
+            
+            if (!confirm(`Wi-Fiモードを「${isApMode ? 'APモード' : 'テザリングモード'}」に切り替えますか？\n接続が切断されます。`)) {
+                return;
+            }
+            
+            document.getElementById('btnSwitchWifi').disabled = true;
+            document.getElementById('btnSwitchWifi').textContent = '切り替え中...';
+            
+            fetch('/api/wifi/switch', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data.success) {
+                    alert(data.message);
+                } else {
+                    alert('エラー: ' + data.message);
+                    document.getElementById('btnSwitchWifi').disabled = false;
+                    document.getElementById('btnSwitchWifi').textContent = 'モード切り替え実行';
+                }
+            })
+            .catch(e => {
+                alert('通信エラー（切り替えが開始された可能性があります）');
+            });
+        }
+        
+        function updateIndicator(id, isOn) {
+            const el = document.getElementById(id);
+            if (!el) return;
+            if (isOn) {
+                el.textContent = 'ON';
+                el.className = 'indicator-status on';
+            } else {
+                el.textContent = 'OFF';
+                el.className = 'indicator-status off';
+            }
+        }
+
+        // 設定保存
+        document.getElementById('settingsForm').addEventListener('submit', function (e) {
+            e.preventDefault();
+            const formData = new FormData(e.target);
+            const settings = Object.fromEntries(formData);
+
+            // ISOは 'auto' または数値
+            if (settings.iso !== 'auto') {
+                settings.iso = parseInt(settings.iso);
+            }
+
+            // シャッタースピードは 'auto' または数値
+            if (settings.shutter_speed !== 'auto') {
+                settings.shutter_speed = parseInt(settings.shutter_speed);
+            }
+
+            settings.detection_threshold = parseInt(settings.detection_threshold);
+            // Convert string 'true'/'false' to actual booleans
+            settings.enable_multiple_exposure = (settings.enable_multiple_exposure === 'true');
+            settings.enable_2in1_composition = (settings.enable_2in1_composition === 'true');
+            settings.enable_timestamp = (settings.enable_timestamp === 'true');
+
+            fetch('/api/settings', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(settings)
+            })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        showStatus('設定を保存しました', 'success');
+                        // 設定保存後にステータスバーも更新
+                        loadSettings();
+                    } else {
+                        showStatus('設定の保存に失敗しました: ' + data.error, 'error');
+                    }
+                })
+                .catch(error => {
+                    showStatus('設定の保存に失敗しました: ' + error, 'error');
+                });
+        });
+
+        // 写真撮影
+        function capturePhoto() {
+            fetch('/api/capture', { method: 'POST' })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        showStatus('写真を撮影しました: ' + data.filename, 'success');
+                        loadPhotos();
+                    } else {
+                        showStatus('撮影に失敗しました: ' + data.error, 'error');
+                    }
+                })
+                .catch(error => {
+                    showStatus('撮影に失敗しました: ' + error, 'error');
+                });
+        }
+
+
+        // 監視再開
+        function restartMonitoring() {
+            fetch('/api/restart_monitoring', { method: 'POST' })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        showStatus('監視を再開しました', 'success');
+                        // ステータス更新のために少し待機
+                        setTimeout(loadSettings, 1000);
+                    } else {
+                        showStatus('監視の再開に失敗しました: ' + data.error, 'error');
+                    }
+                })
+                .catch(error => {
+                    showStatus('監視の再開に失敗しました: ' + error, 'error');
+                });
+        }
+
+        // 監視停止
+        function stopMonitoring() {
+            fetch('/api/stop_monitoring', { method: 'POST' })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        showStatus('監視を停止しました', 'success');
+                        // ステータス更新のために少し待機
+                        setTimeout(loadSettings, 1000);
+                    } else {
+                        showStatus('監視の停止に失敗しました: ' + data.error, 'error');
+                    }
+                })
+                .catch(error => {
+                    showStatus('監視の停止に失敗しました: ' + error, 'error');
+                });
+        }
+
+        // ステータス表示
+        function showStatus(message, type) {
+            const status = document.getElementById('status');
+            status.textContent = message;
+            status.className = 'status ' + type;
+            status.style.display = 'block';
+
+            setTimeout(() => {
+                status.style.display = 'none';
+            }, 5000);
+        }
+
+        // スライダー値の更新 (Deleted as replaced by Dial)
+        /*
+        document.getElementById('detection_threshold').addEventListener('input', function () {
+            document.getElementById('thresholdValue').textContent = this.value;
+        });
+        */
+
+        // Initialize (replaced by generic init above)
+        // window.addEventListener('load', function () {
+        //     loadSettings();
+        // });
+        /* 
+           Redefine loadSettings here to use the new dials.
+           The above Generic Dial Class block replaces the previous script logic.
+           We need to make sure the loadSettings function handles the new dials.
+        */
+        
+        function loadSettings() {
+             fetch('/api/settings')
+                .then(response => response.json())
+                .then(data => {
+                     // Set hidden inputs
+                    document.getElementById('iso').value = data.iso;
+                    document.getElementById('shutter_speed').value = data.shutter_speed;
+                    document.getElementById('detection_threshold').value = data.detection_threshold;
+                    document.getElementById('white_balance').value = data.white_balance || 'auto';
+                    
+                    // Update Dials
+                    if (isoDial) isoDial.setValue(data.iso);
+                    if (shutterDial) shutterDial.setValue(data.shutter_speed);
+                    if (thresholdDial) thresholdDial.setValue(data.detection_threshold);
+
+                    // Update White Balance Knob
+                    if (wbKnob) wbKnob.setValue(data.white_balance || 'auto');
+
+                    // Update Toggle Switches
+                    if (toggleMultiple) toggleMultiple.setValue(data.enable_multiple_exposure);
+                    if (toggle2in1) toggle2in1.setValue(data.enable_2in1_composition);
+                    if (toggleTimestamp) toggleTimestamp.setValue(data.enable_timestamp);
+
+                    updateStatusBar(data);
+                    showStatus('設定を読み込みました', 'success');
+                })
+                .catch(error => {
+                    console.error(error);
+                    showStatus('設定の読み込みに失敗しました', 'error');
+                });
+        }
+
+    </script>
+</body>
+
+</html>
