@@ -57,12 +57,12 @@ actor CameraAPI {
 
     init(baseURL: String = "http://192.168.4.1:8001") {
         // SSRF対策: URL検証
-        guard validateServerURL(baseURL) else {
+        if validateServerURL(baseURL) {
+            self.baseURL = baseURL
+        } else {
             // 検証失敗時はデフォルト値を使用
             self.baseURL = "http://192.168.4.1:8001"
-            print("⚠️ Invalid server URL provided, using default: \(self.baseURL)")
-        } else {
-            self.baseURL = baseURL
+            print("Warning: Invalid server URL provided, using default: \(self.baseURL)")
         }
 
         let config = URLSessionConfiguration.default

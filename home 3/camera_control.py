@@ -8,9 +8,8 @@ import json
 import os
 import sys
 import time
-import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse
 import subprocess
 import logging
 import wifi_manager
@@ -74,6 +73,8 @@ class CameraControlHandler(BaseHTTPRequestHandler):
             self.serve_photo(parsed_path.path[8:])  # /photos/ を除去
         elif parsed_path.path == '/api/wifi/status':
             self.serve_wifi_status()
+        elif parsed_path.path == '/api/wifi/diag':
+            self.serve_wifi_diag()
         else:
             self.send_error(404)
     
@@ -89,6 +90,8 @@ class CameraControlHandler(BaseHTTPRequestHandler):
             self.restart_monitoring()
         elif parsed_path.path == '/api/stop_monitoring':
             self.stop_monitoring()
+        elif parsed_path.path == '/api/wifi/write_wpa':
+            self.write_wpa_settings()
         elif parsed_path.path == '/api/wifi/switch':
             self.switch_wifi_mode()
         else:
@@ -152,56 +155,6 @@ class CameraControlHandler(BaseHTTPRequestHandler):
             self.send_error(500)
 
     # ... (省略) ...
-
-    def restart_monitoring(self):
-        """監視プロセス再開（フラグ有効化）"""
-        try:
-            # 設定で監視を有効にする
-            settings = load_settings()
-            settings['monitoring_enabled'] = True
-            save_settings(settings)
-            
-            # プロセス再起動は不要（ポーリングで検知）
-            response = {'success': True}
-            
-            self.send_response(200)
-            self.send_header('Content-type', 'application/json')
-            self.end_headers()
-            self.wfile.write(json.dumps(response).encode('utf-8'))
-            
-        except Exception as e:
-            logger.error(f"Restart monitoring error: {e}")
-            response = {'success': False, 'error': str(e)}
-            
-            self.send_response(500)
-            self.send_header('Content-type', 'application/json')
-            self.end_headers()
-            self.wfile.write(json.dumps(response).encode('utf-8'))
-
-    def stop_monitoring(self):
-        """監視プロセス停止（フラグ無効化）"""
-        try:
-            # 設定で監視を無効にする
-            settings = load_settings()
-            settings['monitoring_enabled'] = False
-            save_settings(settings)
-            
-            # プロセス停止は不要（ループ内で待機）
-            response = {'success': True}
-            
-            self.send_response(200)
-            self.send_header('Content-type', 'application/json')
-            self.end_headers()
-            self.wfile.write(json.dumps(response).encode('utf-8'))
-            
-        except Exception as e:
-            logger.error(f"Stop monitoring error: {e}")
-            response = {'success': False, 'error': str(e)}
-            
-            self.send_response(500)
-            self.send_header('Content-type', 'application/json')
-            self.end_headers()
-            self.wfile.write(json.dumps(response).encode('utf-8'))
     
     def serve_photo_list(self):
         """写真一覧をJSON形式で配信"""
@@ -280,7 +233,7 @@ class CameraControlHandler(BaseHTTPRequestHandler):
             self.wfile.write(json.dumps(response).encode('utf-8'))
     
     def capture_photo(self):
-        """手動写真撮影"""
+        """写真を撮影"""
         try:
             settings = load_settings()
             timestamp = time.time()
@@ -343,32 +296,34 @@ class CameraControlHandler(BaseHTTPRequestHandler):
             self.send_header('Content-type', 'application/json')
             self.end_headers()
             self.wfile.write(json.dumps(response).encode('utf-8'))
-    
+
     def restart_monitoring(self):
         """監視プロセス再開"""
         try:
-            # 設定で監視を有効にする
             settings = load_settings()
             settings['monitoring_enabled'] = True
             save_settings(settings)
-            
-            result = subprocess.run(['sudo', 'systemctl', 'restart', 'shutter-trigger'], 
-                                  capture_output=True, text=True)
-            
+
+            result = subprocess.run(
+                ['sudo', '-n', 'systemctl', 'restart', 'shutter-trigger'],
+                capture_output=True,
+                text=True,
+            )
+
             if result.returncode == 0:
                 response = {'success': True}
             else:
-                response = {'success': False, 'error': result.stderr}
-            
+                response = {'success': False, 'error': result.stderr or result.stdout}
+
             self.send_response(200)
             self.send_header('Content-type', 'application/json')
             self.end_headers()
             self.wfile.write(json.dumps(response).encode('utf-8'))
-            
+
         except Exception as e:
             logger.error(f"Restart monitoring error: {e}")
             response = {'success': False, 'error': str(e)}
-            
+
             self.send_response(500)
             self.send_header('Content-type', 'application/json')
             self.end_headers()
@@ -377,29 +332,30 @@ class CameraControlHandler(BaseHTTPRequestHandler):
     def stop_monitoring(self):
         """監視プロセス停止"""
         try:
-            # 設定で監視を無効にする
             settings = load_settings()
             settings['monitoring_enabled'] = False
             save_settings(settings)
-            
-            # プロセスを停止
-            result = subprocess.run(['sudo', 'systemctl', 'stop', 'shutter-trigger'], 
-                                  capture_output=True, text=True)
-            
+
+            result = subprocess.run(
+                ['sudo', '-n', 'systemctl', 'stop', 'shutter-trigger'],
+                capture_output=True,
+                text=True,
+            )
+
             if result.returncode == 0:
                 response = {'success': True}
             else:
-                response = {'success': False, 'error': result.stderr}
-            
+                response = {'success': False, 'error': result.stderr or result.stdout}
+
             self.send_response(200)
             self.send_header('Content-type', 'application/json')
             self.end_headers()
             self.wfile.write(json.dumps(response).encode('utf-8'))
-            
+
         except Exception as e:
             logger.error(f"Stop monitoring error: {e}")
             response = {'success': False, 'error': str(e)}
-            
+
             self.send_response(500)
             self.send_header('Content-type', 'application/json')
             self.end_headers()
@@ -417,6 +373,68 @@ class CameraControlHandler(BaseHTTPRequestHandler):
         self.send_header('Content-type', 'application/json')
         self.end_headers()
         self.wfile.write(json.dumps(status).encode('utf-8'))
+
+    def serve_wifi_diag(self):
+        try:
+            def run_cmd(cmd):
+                try:
+                    r = subprocess.run(cmd, capture_output=True, text=True, timeout=3)
+                    return {
+                        'returncode': r.returncode,
+                        'stdout': (r.stdout or '').strip(),
+                        'stderr': (r.stderr or '').strip(),
+                    }
+                except Exception as e:
+                    return {'returncode': -1, 'stdout': '', 'stderr': str(e)}
+
+            diag = {
+                'wifi_status': wifi_manager.get_wifi_status(),
+                'ip_link': run_cmd(['ip', '-o', 'link', 'show']),
+                'iw_dev': run_cmd(['iw', 'dev']),
+                'run_wpa_supplicant_ls': run_cmd(['ls', '-la', '/run/wpa_supplicant']),
+                'var_run_wpa_supplicant_ls': run_cmd(['ls', '-la', '/var/run/wpa_supplicant']),
+                'ps_wpa': run_cmd(['sh', '-c', "ps -ef | egrep 'wpa_supplicant|hostapd|dnsmasq' | egrep -v egrep || true"]),
+                'wpa_cli_status': run_cmd(['wpa_cli', 'status']),
+            }
+
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps(diag).encode('utf-8'))
+
+        except Exception as e:
+            logger.error(f"serve_wifi_diag error: {e}")
+            self.send_response(500)
+            self.send_header('Content-type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({'success': False, 'message': str(e)}).encode('utf-8'))
+
+    def write_wpa_settings(self):
+        try:
+            content_length = int(self.headers.get('Content-Length', 0))
+            post_data = self.rfile.read(content_length)
+            data = json.loads(post_data.decode('utf-8'))
+
+            ssid = data.get('ssid')
+            psk = data.get('psk')
+            result = wifi_manager.configure_wpa_supplicant(ssid, psk)
+
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps(result).encode('utf-8'))
+
+        except json.JSONDecodeError:
+            self.send_response(400)
+            self.send_header('Content-type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({'success': False, 'message': 'Invalid JSON'}).encode('utf-8'))
+        except Exception as e:
+            logger.error(f"write_wpa_settings error: {e}")
+            self.send_response(500)
+            self.send_header('Content-type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({'success': False, 'message': str(e)}).encode('utf-8'))
 
     def switch_wifi_mode(self):
         """Wi-Fiモード切り替え処理"""
@@ -518,6 +536,24 @@ def get_photo_list():
         logger.error(f"Photo list error: {e}")
         return []
 
+def _get_uptime_seconds():
+    try:
+        with open('/proc/uptime', 'r') as f:
+            first = f.read().strip().split()[0]
+        return float(first)
+    except Exception:
+        return None
+
+def _boot_network_already_applied():
+    return os.path.exists('/run/picamera_boot_network_applied')
+
+def _mark_boot_network_applied():
+    try:
+        with open('/run/picamera_boot_network_applied', 'w') as f:
+            f.write('1')
+    except Exception:
+        pass
+
 def main():
     """メイン関数"""
     try:
@@ -526,22 +562,48 @@ def main():
         
         # --- 起動時のネットワーク設定適用 ---
         try:
-            settings = load_settings()
-            current_mode = wifi_manager.get_current_mode()
-            target_mode = settings.get('wifi_mode', 'tethering')
-            
-            logger.info(f"Boot check: current_mode={current_mode}, target_mode={target_mode}")
-            
-            if target_mode == 'ap' and current_mode != 'ap':
-                logger.info("Switching to AP mode on boot...")
-                ssid = settings.get('ap_ssid', 'PiCamera')
-                password = settings.get('ap_password', 'picamera123')
-                wifi_manager.switch_to_ap_mode(ssid, password)
-            
-            elif target_mode == 'tethering' and current_mode == 'ap':
-                logger.info("Switching to Tethering mode on boot...")
-                wifi_manager.switch_to_tethering_mode()
-                
+            uptime = _get_uptime_seconds()
+            if uptime is not None and uptime < 120 and not _boot_network_already_applied():
+                settings = load_settings()
+                current_mode = wifi_manager.get_current_mode()
+                target_mode = settings.get('wifi_mode', 'tethering')
+
+                logger.info(f"Boot check: current_mode={current_mode}, target_mode={target_mode}")
+
+                if target_mode == 'ap' and current_mode != 'ap':
+                    if not wifi_manager.has_nmcli():
+                        logger.warning("Skip switching to AP mode on boot: nmcli is not available")
+                    else:
+                        logger.info("Switching to AP mode on boot...")
+                        saved_ap = wifi_manager.get_saved_ap_settings()
+                        ssid = settings.get('ap_ssid') or saved_ap.get('ssid')
+                        password = settings.get('ap_password') or saved_ap.get('password')
+                        wifi_manager.switch_to_ap_mode(ssid, password)
+
+                elif target_mode == 'tethering':
+                    if current_mode != 'tethering':
+                        logger.info("Switching to Tethering mode on boot...")
+                    else:
+                        logger.info("Reasserting Tethering mode on boot...")
+                    
+                    wifi_manager.switch_to_tethering_mode()
+                    
+                    # テザリング接続確認
+                    logger.info("Verifying tethering connection...")
+                    if wifi_manager.check_tethering_connection(timeout=20):
+                        logger.info("Tethering connection successful")
+                    else:
+                        logger.warning("Tethering connection failed, falling back to AP mode")
+                        saved_ap = wifi_manager.get_saved_ap_settings()
+                        ssid = settings.get('ap_ssid') or saved_ap.get('ssid')
+                        password = settings.get('ap_password') or saved_ap.get('password')
+                        logger.info(f"Starting AP mode: SSID={ssid}")
+                        wifi_manager.switch_to_ap_mode(ssid, password)
+
+                _mark_boot_network_applied()
+            else:
+                logger.info(f"Skip boot network apply (not system boot): uptime={uptime}")
+
         except Exception as e:
             logger.error(f"Failed to apply boot network settings: {e}")
         # ------------------------------------
@@ -550,8 +612,8 @@ def main():
         server_address = ('0.0.0.0', 8001)
         httpd = HTTPServer(server_address, CameraControlHandler)
         
-        logger.info(f"Camera control server starting on port 8001")
-        logger.info(f"Access via: http://localhost:8001")
+        logger.info("Camera control server starting on port 8001")
+        logger.info("Access via: http://localhost:8001")
         
         httpd.serve_forever()
         

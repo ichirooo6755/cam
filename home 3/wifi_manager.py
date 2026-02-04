@@ -12,6 +12,8 @@ import json
 import logging
 import time
 import shutil
+import binascii
+import hashlib
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +50,249 @@ def _get_primary_ip():
 def has_nmcli():
     """Check if nmcli is available"""
     return shutil.which('nmcli') is not None
+
+def _detect_wifi_interface():
+    try:
+        res = _run(['iw', 'dev'])
+        if res['returncode'] == 0 and res['stdout']:
+            for line in res['stdout'].splitlines():
+                line = line.strip()
+                if line.startswith('Interface '):
+                    return line.split('Interface ', 1)[1].strip()
+    except Exception:
+        pass
+
+    for candidate in ('wlan0', 'wlan1'):
+        if os.path.exists(f'/sys/class/net/{candidate}'):
+            return candidate
+    return 'wlan0'
+
+def _detect_wpa_ctrl_dir():
+    for path in ('/run/wpa_supplicant', '/var/run/wpa_supplicant'):
+        if os.path.isdir(path):
+            return path
+    return '/run/wpa_supplicant'
+
+def _ensure_wpa_supplicant_running(iface, ctrl_dir):
+    sock_path = os.path.join(ctrl_dir, iface)
+    if os.path.exists(sock_path):
+        return True
+
+    _run(['sudo', '-n', 'systemctl', 'stop', 'hostapd'])
+    _run(['sudo', '-n', 'systemctl', 'stop', 'dnsmasq'])
+    _run(['sudo', '-n', 'ip', 'link', 'set', iface, 'down'])
+    time.sleep(1)
+    _run(['sudo', '-n', 'ip', 'link', 'set', iface, 'up'])
+    time.sleep(1)
+
+    _run(['sudo', '-n', 'systemctl', 'start', 'wpa_supplicant'])
+    time.sleep(2)
+    if os.path.exists(sock_path):
+        return True
+
+    _run(['sudo', '-n', 'systemctl', 'start', f'wpa_supplicant@{iface}'])
+    time.sleep(2)
+    if os.path.exists(sock_path):
+        return True
+
+    _run([
+        'sudo', '-n', 'wpa_supplicant',
+        '-B',
+        '-i', iface,
+        '-c', WPA_SUPPLICANT_CONF,
+        '-C', ctrl_dir,
+    ])
+    time.sleep(2)
+    return os.path.exists(sock_path)
+
+def _unsafe_shell_chars_present(value):
+    if value is None:
+        return False
+    return any(ch in value for ch in ('\n', '\r', '\x00'))
+
+def _read_existing_country():
+    try:
+        res = _run(['sudo', '-n', 'cat', WPA_SUPPLICANT_CONF])
+        if res['returncode'] != 0 or not res['stdout']:
+            return None
+        country = None
+        for line in res['stdout'].splitlines():
+            line = line.strip()
+            if line.startswith('country='):
+                country = line.split('=', 1)[1].strip()
+        return country
+    except Exception:
+        pass
+    return None
+
+def _run_with_input(cmd, input_text, timeout=20):
+    result = subprocess.run(
+        cmd,
+        input=input_text,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+    return {
+        'returncode': result.returncode,
+        'stdout': (result.stdout or '').strip(),
+        'stderr': (result.stderr or '').strip(),
+    }
+
+def _validate_wifi_credentials(ssid, psk):
+    if not ssid or not psk:
+        return False, 'ssid と psk は必須です'
+    if _unsafe_shell_chars_present(ssid) or _unsafe_shell_chars_present(psk):
+        return False, 'ssid/psk に未対応の文字が含まれています（改行・NULLなど）。'
+
+    ssid_bytes = ssid.encode('utf-8')
+    if len(ssid_bytes) == 0 or len(ssid_bytes) > 32:
+        return False, 'ssid は 1〜32 byte の範囲で指定してください'
+
+    if len(psk) < 8 or len(psk) > 63:
+        return False, 'psk は 8〜63 文字で指定してください'
+
+    return True, None
+
+def _ssid_to_hex(ssid):
+    return binascii.hexlify(ssid.encode('utf-8')).decode('ascii')
+
+def _derive_psk_hex(ssid, psk):
+    derived = hashlib.pbkdf2_hmac(
+        'sha1',
+        psk.encode('utf-8'),
+        ssid.encode('utf-8'),
+        4096,
+        32,
+    )
+    return binascii.hexlify(derived).decode('ascii')
+
+def _write_wpa_supplicant_conf(ssid, psk):
+    valid, message = _validate_wifi_credentials(ssid, psk)
+    if not valid:
+        return {
+            'success': False,
+            'message': message,
+        }
+
+    country = _read_existing_country()
+
+    ssid_hex = _ssid_to_hex(ssid)
+    psk_hex = _derive_psk_hex(ssid, psk)
+    network_block = [
+        'network={',
+        f'    ssid={ssid_hex}',
+        f'    psk={psk_hex}',
+        '    key_mgmt=WPA-PSK',
+        '}',
+    ]
+
+    conf_lines = []
+    conf_lines.append('ctrl_interface=DIR=/run/wpa_supplicant GROUP=netdev')
+    conf_lines.append('update_config=1')
+    if country:
+        conf_lines.append(f'country={country}')
+    conf_lines.extend(network_block)
+    conf_text = '\n'.join(conf_lines) + '\n'
+
+    tmp_path = '/tmp/wpa_supplicant.conf.picamera'
+    write_res = _run_with_input(['sudo', '-n', 'tee', tmp_path], conf_text)
+    if write_res['returncode'] != 0:
+        return {
+            'success': False,
+            'message': f"write wpa_supplicant.conf failed: {write_res['stderr'] or write_res['stdout']}",
+        }
+
+    _run(['sudo', '-n', 'mv', tmp_path, WPA_SUPPLICANT_CONF])
+    _run(['sudo', '-n', 'chmod', '600', WPA_SUPPLICANT_CONF])
+
+    iface = _detect_wifi_interface()
+    _run(['sudo', '-n', 'systemctl', 'stop', 'hostapd'])
+    _run(['sudo', '-n', 'systemctl', 'stop', 'dnsmasq'])
+    _run(['sudo', '-n', 'systemctl', 'restart', f'wpa_supplicant@{iface}'])
+    _run(['sudo', '-n', 'systemctl', 'restart', 'wpa_supplicant'])
+    time.sleep(2)
+    _run(['sudo', '-n', 'dhcpcd', '-n', iface])
+
+    return {
+        'success': True,
+        'message': 'wpa_supplicant.conf を更新しました（ファイル書き換えフォールバック）',
+        'iface': iface,
+        'country': country,
+        'psk_derived': True,
+    }
+
+def _run(cmd, timeout=20):
+    result = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+    return {
+        'returncode': result.returncode,
+        'stdout': (result.stdout or '').strip(),
+        'stderr': (result.stderr or '').strip(),
+    }
+
+def _run_wpa_cli(args, iface=None, timeout=20):
+    iface = iface or _detect_wifi_interface()
+    ctrl_dir = _detect_wpa_ctrl_dir()
+    _ensure_wpa_supplicant_running(iface, ctrl_dir)
+
+    base_cmd = ['wpa_cli', '-p', ctrl_dir, '-i', iface] + list(args)
+    res = _run(base_cmd, timeout=timeout)
+    if res['returncode'] == 0 and res['stdout'] and 'FAIL' not in res['stdout']:
+        return res
+
+    sudo_cmd = ['sudo', '-n'] + base_cmd
+    sudo_res = _run(sudo_cmd, timeout=timeout)
+    return sudo_res
+
+def configure_wpa_supplicant(ssid, psk):
+    valid, message = _validate_wifi_credentials(ssid, psk)
+    if not valid:
+        return {'success': False, 'message': message}
+
+    try:
+        return _write_wpa_supplicant_conf(ssid, psk)
+    except subprocess.TimeoutExpired:
+        return {'success': False, 'message': 'wpa_supplicant update timed out'}
+    except Exception as e:
+        logger.error(f"Failed to configure wpa_supplicant: {e}")
+        return {'success': False, 'message': str(e)}
+
+def check_tethering_connection(timeout=15):
+    """
+    テザリングモードで実際に接続できているか確認
+    Returns: True if connected, False otherwise
+    """
+    import time
+    start_time = time.time()
+    
+    while time.time() - start_time < timeout:
+        try:
+            # SSIDが取得できるか確認
+            result = subprocess.run(
+                ['iwgetid', '-r'],
+                capture_output=True, text=True, timeout=5
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                ssid = result.stdout.strip()
+                logger.info(f"Connected to SSID: {ssid}")
+                
+                # IPアドレスが取得できているか確認（APの192.168.4.x以外）
+                ip = _get_primary_ip()
+                if ip and not ip.startswith('192.168.4.') and not ip.startswith('10.42.0.'):
+                    logger.info(f"Tethering connection confirmed: IP={ip}")
+                    return True
+        except Exception as e:
+            logger.debug(f"Connection check error: {e}")
+        
+        time.sleep(2)
+    
+    logger.warning("Tethering connection check failed")
+    return False
 
 def get_current_mode():
     """
@@ -205,8 +450,31 @@ def switch_to_tethering_mode():
         # すでにwpa_supplicant.confが適切なら、単にインターフェース再起動
         try:
             logger.info("Switching to tethering mode (legacy)")
-            subprocess.run(['sudo', 'wpa_cli', '-i', 'wlan0', 'reconfigure'], capture_output=True)
+            iface = _detect_wifi_interface()
+            _run(['sudo', '-n', 'systemctl', 'stop', 'hostapd'])
+            _run(['sudo', '-n', 'systemctl', 'stop', 'dnsmasq'])
+
+            reconfigure = _run_wpa_cli(['reconfigure'], iface=iface)
+            if reconfigure['returncode'] != 0 or 'FAIL' in reconfigure['stdout']:
+                _run(['sudo', '-n', 'systemctl', 'restart', f'wpa_supplicant@{iface}'])
+                time.sleep(2)
+                reconfigure = _run_wpa_cli(['reconfigure'], iface=iface)
+
+            if reconfigure['returncode'] != 0 or 'FAIL' in reconfigure['stdout']:
+                return {
+                    'success': False,
+                    'message': f"wpa_cli reconfigure failed: {reconfigure['stderr'] or reconfigure['stdout']}",
+                }
+
             time.sleep(3)
+
+            reconnect = _run_wpa_cli(['reconnect'], iface=iface)
+            if reconnect['returncode'] != 0 or 'FAIL' in reconnect['stdout']:
+                return {
+                    'success': False,
+                    'message': f"wpa_cli reconnect failed: {reconnect['stderr'] or reconnect['stdout']}",
+                }
+            time.sleep(2)
             
             _save_wifi_settings('tethering', None, None)
             return {'success': True, 'message': '設定を再読み込みしました (Legacy mode)'}
