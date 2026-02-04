@@ -4,7 +4,17 @@ import SwiftUI
 struct PiCameraControlApp: App {
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            TabView {
+                PhotoGalleryView()
+                    .tabItem {
+                        Label("写真", systemImage: "photo.on.rectangle")
+                    }
+                
+                SettingsView()
+                    .tabItem {
+                        Label("設定", systemImage: "gearshape")
+                    }
+            }
         }
     }
 }
