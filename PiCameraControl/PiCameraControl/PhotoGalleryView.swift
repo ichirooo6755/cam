@@ -77,7 +77,8 @@ struct PhotoGalleryView: View {
             ], spacing: 12) {
                 ForEach(photos, id: \.self) { filename in
                     PhotoThumbnail(filename: filename, serverIP: serverIP)
-                        .aspectRatio(1, contentMode: .fill)
+                        .frame(minHeight: 150, maxHeight: 150)
+                        .clipped()
                         .clipShape(RoundedRectangle(cornerRadius: 12))
                         .liquidGlassStyle(radius: 16)
                         .onTapGesture {
@@ -139,7 +140,9 @@ struct PhotoThumbnail: View {
             if let image = image {
                 Image(uiImage: image)
                     .resizable()
-                    .aspectRatio(contentMode: .fill)
+                    .scaledToFill()
+                    .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
+                    .clipped()
             } else {
                 Color.gray.opacity(0.2)
                 ProgressView()

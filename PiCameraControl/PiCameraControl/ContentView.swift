@@ -164,7 +164,7 @@ struct ContentView: View {
                         }
 
                         // Toggles
-                        HStack(spacing: 16) {
+                        LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 12) {
                             GlassToggle(title: "手動モード", isOn: $manualModeEnabled) {
                                 updateMonitoringEnabled(!manualModeEnabled)
                             }
@@ -186,7 +186,7 @@ struct ContentView: View {
                         // Network
                         networkSection
 
-                        Spacer(minLength: 40)
+                        Spacer(minLength: 80)
                     }
                     .padding(20)
                 }
@@ -289,7 +289,9 @@ struct ContentView: View {
                 Image(uiImage: image)
                     .resizable()
                     .scaledToFill()
+                    .frame(maxWidth: .infinity)
                     .frame(height: 300)
+                    .clipped()
                     .clipShape(RoundedRectangle(cornerRadius: 30))
                     .overlay(
                         RoundedRectangle(cornerRadius: 30)
@@ -354,9 +356,9 @@ struct ContentView: View {
                     }
                 }
             }
-            .pickerStyle(.wheel)
-            .frame(height: 80)
-            .clipped()
+            .pickerStyle(.menu)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 4)
             .onChange(of: selection.wrappedValue) { oldValue, newValue in
                 onChange(newValue)
             }
@@ -409,9 +411,9 @@ struct ContentView: View {
                     Text(opt.label).tag(opt)
                 }
             }
-            .pickerStyle(.wheel)
-            .frame(height: 80)
-            .clipped()
+            .pickerStyle(.menu)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 4)
             .onChange(of: selectedShutterSpeed) { _, newValue in
                 updateShutterSpeed(newValue)
             }
