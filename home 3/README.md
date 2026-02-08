@@ -125,6 +125,17 @@ iOS側が常にデフォルト値30を使用していました。
 **解決策**
 通常写真でもPILで再保存してquality設定を反映するよう修正しました。
 
+### 症状: api-serverが起動しない（Address already in use）
+**原因**
+旧`camera-control.service`（`camera_control.py`）が同じポート8001を使用しており、
+新`api-server.service`と競合していました。
+
+**解決策**
+1. `camera-control.service`を`disable`して無効化
+2. `update.sh`の再起動処理から旧サービスを除去し、停止+無効化を追加
+3. `api_server.py`に`ReusableHTTPServer`（`allow_reuse_address=True`）を導入し、
+   TIME_WAITによるポート占有でも起動できるようにした
+
 ### 症状: 再起動するとAPモードが維持されない
 **原因**
 nmcliのHotspotは再起動後に自動起動しません。
@@ -135,6 +146,21 @@ nmcliのHotspotは再起動後に自動起動しません。
 `api_server.py` の起動時に `camera_settings.json` の `wifi_mode` を読み取り、
 保存されたモード（ap/tethering）と現在のモードが異なる場合に自動復元するようにしました。
 `api-server.service` を `network-online.target` 待ちに変更し、Wi-Fi準備完了後に実行。
+
+### 症状: 画質(quality)設定を変えても写真がぼやける / 劣化する
+**原因**
+`camera_service.py` が撮影後にPILで再保存していたため、JPEG二重圧縮が発生し画質が劣化していました。
+
+**解決策**
+`switch_mode_and_capture_file()` に `quality` 引数を直接渡すことで、一度の圧縮で済むようにしました。
+タイムスタンプ付与時のみPIL再保存を行います。
+
+### 症状: 同一秒内の連続撮影でファイルが上書きされる
+**原因**
+ファイル名が `photo_YYYYMMDD_HHMMSS.jpg` で秒単位だったため、同一秒内に2回撮影すると上書き。
+
+**解決策**
+マイクロ秒 (`%f`) をファイル名に追加し `photo_YYYYMMDD_HHMMSS_ffffff.jpg` 形式に変更。
 
 ### 症状: 手動撮影で `--awb shade` エラー
 **原因**

@@ -37,6 +37,9 @@ DEFAULT_SETTINGS = {
     'quality': 90,
 }
 
+class ReusableHTTPServer(HTTPServer):
+    allow_reuse_address = True
+
 class APIHandler(BaseHTTPRequestHandler):
     
     def do_GET(self):
@@ -240,6 +243,8 @@ class APIHandler(BaseHTTPRequestHandler):
 
             if 'detection_threshold' in new_settings and 'brightness_threshold' not in new_settings:
                 new_settings['brightness_threshold'] = new_settings['detection_threshold']
+            if 'brightness_threshold' in new_settings and 'detection_threshold' not in new_settings:
+                new_settings['detection_threshold'] = new_settings['brightness_threshold']
             
             settings.update(new_settings)
             
@@ -441,8 +446,7 @@ def main():
     restore_wifi_mode_on_boot()
     
     server_address = ('0.0.0.0', 8001)
-    HTTPServer.allow_reuse_address = True
-    httpd = HTTPServer(server_address, APIHandler)
+    httpd = ReusableHTTPServer(server_address, APIHandler)
     logger.info("API Server running on port 8001")
     httpd.serve_forever()
 

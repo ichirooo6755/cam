@@ -166,13 +166,14 @@ def capture_photo(camera, settings: dict, composition_state: dict, detected_at: 
     """
     写真を撮影して保存
     """
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
     filepath = os.path.join(PHOTOS_DIR, f'photo_{timestamp}.jpg')
 
     try:
+        quality = settings.get('quality', 90)
         capture_start = time.time()
         _apply_camera_controls(camera, settings)
-        camera.switch_mode_and_capture_file(camera.still_configuration, filepath)
+        camera.switch_mode_and_capture_file(camera.still_configuration, filepath, quality=quality)
         capture_end = time.time()
         if detected_at is not None:
             detect_delay = capture_end - detected_at
@@ -212,15 +213,10 @@ def capture_photo(camera, settings: dict, composition_state: dict, detected_at: 
             composition_state['last_frame_path'] = None
             return True
 
-        quality = settings.get('quality', 90)
-        if settings.get('enable_timestamp', False):
+        if settings.get('enable_timestamp', False) and Image is not None:
             image = Image.open(filepath)
             image.load()
             image = _add_timestamp(image, timestamp)
-            image.save(filepath, quality=quality)
-        elif quality != 95:
-            image = Image.open(filepath)
-            image.load()
             image.save(filepath, quality=quality)
 
         return True
