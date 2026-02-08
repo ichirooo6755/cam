@@ -138,14 +138,14 @@ iOS側が常にデフォルト値30を使用していました。
 
 ### 症状: 再起動するとAPモードが維持されない
 **原因**
-nmcliのHotspotは再起動後に自動起動しません。
-`wifi_manager.py` が `camera_settings.json` に `wifi_mode` を保存していましたが、
-起動時に誰も読んで復元していませんでした。
+2つの問題がありました：
+1. Wi-Fiモード切替時に `wifi_mode` が `camera_settings.json` に保存されていなかった
+2. 起動時に保存されたモードを読んで復元するロジックが無かった
 
 **解決策**
-`api_server.py` の起動時に `camera_settings.json` の `wifi_mode` を読み取り、
-保存されたモード（ap/tethering）と現在のモードが異なる場合に自動復元するようにしました。
-`api-server.service` を `network-online.target` 待ちに変更し、Wi-Fi準備完了後に実行。
+1. `api_server.py` の `switch_wifi_mode()` で切替成功時に `wifi_mode`, `ap_ssid`, `ap_password` を `camera_settings.json` に保存
+2. `api_server.py` 起動時に `restore_wifi_mode_on_boot()` で保存モードと現在モードを比較し、異なれば自動復元
+3. `api-server.service` を `network-online.target` 待ちに変更し、Wi-Fi準備完了後に実行
 
 ### 症状: 画質(quality)設定を変えても写真がぼやける / 劣化する
 **原因**

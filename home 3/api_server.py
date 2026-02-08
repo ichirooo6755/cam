@@ -299,8 +299,12 @@ class APIHandler(BaseHTTPRequestHandler):
                 ssid = data.get('ssid')
                 password = data.get('password')
                 result = wifi_manager.switch_to_ap_mode(ssid, password)
+                if result.get('success'):
+                    self._save_wifi_mode('ap', ap_ssid=ssid, ap_password=password)
             elif mode == 'tethering':
                 result = wifi_manager.switch_to_tethering_mode()
+                if result.get('success'):
+                    self._save_wifi_mode('tethering')
             else:
                 result = {'success': False, 'message': 'Unknown mode'}
 
@@ -407,6 +411,24 @@ class APIHandler(BaseHTTPRequestHandler):
             if service_stopped:
                 subprocess.run(['sudo', '-n', 'systemctl', 'start', 'camera-service'], check=False)
     
+    def _save_wifi_mode(self, mode, ap_ssid=None, ap_password=None):
+        """Wi-Fiモードをcamera_settings.jsonに保存"""
+        try:
+            settings = {}
+            if os.path.exists(SETTINGS_FILE):
+                with open(SETTINGS_FILE, 'r') as f:
+                    settings = json.load(f)
+            settings['wifi_mode'] = mode
+            if ap_ssid:
+                settings['ap_ssid'] = ap_ssid
+            if ap_password:
+                settings['ap_password'] = ap_password
+            with open(SETTINGS_FILE, 'w') as f:
+                json.dump(settings, f, indent=2)
+            logger.info(f"Wi-Fi mode saved: {mode}")
+        except Exception as e:
+            logger.error(f"Failed to save Wi-Fi mode: {e}")
+
     def log_message(self, format, *args):
         """アクセスログ"""
         logger.info("%s - %s", self.client_address[0], format % args)
