@@ -12,6 +12,12 @@ from datetime import datetime
 
 PORT = 8001
 PHOTOS_DIR = "/tmp/picamera_photos"
+ALLOWED_ORIGINS = {
+    "http://localhost",
+    "http://127.0.0.1",
+    "http://localhost:8001",
+    "http://127.0.0.1:8001",
+}
 
 # モック設定
 MOCK_SETTINGS = {
@@ -31,14 +37,18 @@ class MockCameraHandler(http.server.BaseHTTPRequestHandler):
     def _send_json(self, data, status=200):
         self.send_response(status)
         self.send_header('Content-Type', 'application/json')
-        self.send_header('Access-Control-Allow-Origin', '*')
+        origin = self.headers.get('Origin')
+        if origin in ALLOWED_ORIGINS:
+            self.send_header('Access-Control-Allow-Origin', origin)
         self.end_headers()
         self.wfile.write(json.dumps(data).encode())
 
     def _send_text(self, text, status=200):
         self.send_response(status)
         self.send_header('Content-Type', 'text/html')
-        self.send_header('Access-Control-Allow-Origin', '*')
+        origin = self.headers.get('Origin')
+        if origin in ALLOWED_ORIGINS:
+            self.send_header('Access-Control-Allow-Origin', origin)
         self.end_headers()
         self.wfile.write(text.encode())
 

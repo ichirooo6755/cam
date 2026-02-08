@@ -55,6 +55,25 @@ actor CameraAPI {
 
     private let session: URLSession
 
+    private func sanitizeFilename(_ filename: String) -> SafeFilename? {
+        let trimmed = filename.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return nil
+        }
+
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "._-"))
+        guard trimmed.rangeOfCharacter(from: allowed.inverted) == nil else {
+            return nil
+        }
+
+        let lower = trimmed.lowercased()
+        guard lower.hasSuffix(".jpg") || lower.hasSuffix(".jpeg") || lower.hasSuffix(".png") else {
+            return nil
+        }
+
+        return SafeFilename(value: trimmed)
+    }
+
     init(baseURL: String = "http://192.168.4.1:8001") {
         // SSRF対策: URL検証
         if validateServerURL(baseURL) {
@@ -157,6 +176,16 @@ actor CameraAPI {
         try await updateSettings(["detection_threshold": threshold])
     }
 
+    /// 画質を更新
+    func updateQuality(_ quality: Int) async throws {
+        try await updateSettings(["quality": quality])
+    }
+
+    /// 光検知の有効/無効を更新
+    func updateMonitoringEnabled(_ enabled: Bool) async throws {
+        try await updateSettings(["monitoring_enabled": enabled])
+    }
+
     /// トグル設定を更新
     func updateToggleSettings(
         multipleExposure: Bool? = nil, composition2in1: Bool? = nil, timestamp: Bool? = nil
@@ -171,7 +200,7 @@ actor CameraAPI {
     // MARK: - 撮影
 
     /// 撮影を実行し、ファイル名を返す
-    func capture() async throws -> String {
+    func capture() async throws -> SafeFilename {
         guard let url = URL(string: "\(baseURL)/api/capture") else {
             throw CameraAPIError.invalidURL
         }
@@ -195,18 +224,33 @@ actor CameraAPI {
             throw CameraAPIError.captureFailed(result.error ?? "Unknown error")
         }
 
-        return filename
+        guard let safeFilename = sanitizeFilename(filename) else {
+            throw CameraAPIError.invalidFilename
+        }
+
+        return safeFilename
     }
 
     // MARK: - 画像ダウンロード
 
     /// 撮影した画像をダウンロード
-    func downloadImage(filename: String) async throws -> UIImage {
-        guard let url = URL(string: "\(baseURL)/photos/\(filename)") else {
+    func downloadImage(filename: SafeFilename) async throws -> UIImage {
+        let safeFilename = filename.value
+        guard !safeFilename.isEmpty else {
+            throw CameraAPIError.invalidFilename
+        }
+
+        guard let url = URL(string: "\(baseURL)/api/photo") else {
             throw CameraAPIError.invalidURL
         }
 
-        let (data, response) = try await session.data(from: url)
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let body = ["filename": safeFilename]
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let (data, response) = try await session.data(for: request)
 
         guard let httpResponse = response as? HTTPURLResponse,
             httpResponse.statusCode == 200
@@ -309,12 +353,39 @@ actor CameraAPI {
             throw CameraAPIError.updateFailed(result.message ?? "Wi-Fi switch failed")
         }
     }
+
+    /// 家Wi-Fi設定を書き込み
+    func writeWpaSettings(ssid: String, psk: String) async throws {
+        guard let url = URL(string: "\(baseURL)/api/wifi/write_wpa") else {
+            throw CameraAPIError.invalidURL
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let body = ["ssid": ssid, "psk": psk]
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let (data, response) = try await session.data(for: request)
+
+        guard let httpResponse = response as? HTTPURLResponse,
+            httpResponse.statusCode == 200
+        else {
+            throw CameraAPIError.serverError
+        }
+
+        let result = try JSONDecoder().decode(WiFiSwitchResponse.self, from: data)
+        if !result.success {
+            throw CameraAPIError.updateFailed(result.message ?? "Wi-Fi write failed")
+        }
+    }
 }
 
 // MARK: - エラー定義
 
 enum CameraAPIError: LocalizedError {
     case invalidURL
+    case invalidFilename
     case serverError
     case updateFailed(String)
     case captureFailed(String)
@@ -325,6 +396,8 @@ enum CameraAPIError: LocalizedError {
         switch self {
         case .invalidURL:
             return "無効なURLです"
+        case .invalidFilename:
+            return "無効なファイル名です"
         case .serverError:
             return "サーバーエラーが発生しました"
         case .updateFailed(let msg):

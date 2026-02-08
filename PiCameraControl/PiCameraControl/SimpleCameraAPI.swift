@@ -4,12 +4,31 @@ import SwiftUI
 actor SimpleCameraAPI {
     private let baseURL: String
     private let session: URLSession
-    
-    init(baseURL: String = "http://192.168.0.20:8001") {
+
+    private func sanitizeFilename(_ filename: String) -> String? {
+        let trimmed = filename.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return nil
+        }
+
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "._-"))
+        guard trimmed.rangeOfCharacter(from: allowed.inverted) == nil else {
+            return nil
+        }
+
+        let lower = trimmed.lowercased()
+        guard lower.hasSuffix(".jpg") || lower.hasSuffix(".jpeg") || lower.hasSuffix(".png") else {
+            return nil
+        }
+
+        return trimmed
+    }
+
+    init(baseURL: String = "http://192.168.4.1:8001") {
         if validateServerURL(baseURL) {
             self.baseURL = baseURL
         } else {
-            self.baseURL = "http://192.168.0.20:8001"
+            self.baseURL = "http://192.168.4.1:8001"
         }
         
         let config = URLSessionConfiguration.default
@@ -31,16 +50,26 @@ actor SimpleCameraAPI {
             throw APIError.serverError
         }
         
-        return try JSONDecoder().decode([String].self, from: data)
+        let files = try JSONDecoder().decode([String].self, from: data)
+        return files.compactMap { sanitizeFilename($0) }
     }
     
     /// 写真をダウンロード
     func downloadPhoto(filename: String) async throws -> UIImage {
-        guard let url = URL(string: "\(baseURL)/photos/\(filename)") else {
+        guard let safeFilename = sanitizeFilename(filename) else {
+            throw APIError.invalidFilename
+        }
+
+        guard let url = URL(string: "\(baseURL)/api/photo") else {
             throw APIError.invalidURL
         }
-        
-        let (data, response) = try await session.data(from: url)
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["filename": safeFilename])
+
+        let (data, response) = try await session.data(for: request)
         
         guard let httpResponse = response as? HTTPURLResponse,
               httpResponse.statusCode == 200 else {
@@ -115,6 +144,7 @@ struct SimpleResponse: Codable {
 
 enum APIError: LocalizedError {
     case invalidURL
+    case invalidFilename
     case serverError
     case downloadFailed
     case invalidImageData
@@ -123,6 +153,7 @@ enum APIError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .invalidURL: return "無効なURL"
+        case .invalidFilename: return "無効なファイル名"
         case .serverError: return "サーバーエラー"
         case .downloadFailed: return "ダウンロード失敗"
         case .invalidImageData: return "無効な画像データ"

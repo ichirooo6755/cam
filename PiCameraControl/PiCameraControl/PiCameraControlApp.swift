@@ -10,7 +10,7 @@ struct PiCameraControlApp: App {
                         Label("写真", systemImage: "photo.on.rectangle")
                     }
                 
-                SettingsView()
+                ContentView()
                     .tabItem {
                         Label("設定", systemImage: "gearshape")
                     }

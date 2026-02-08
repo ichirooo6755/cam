@@ -10,6 +10,7 @@ echo "Deploying to $RASPI_USER@$RASPI_HOST..."
 echo "Transferring files..."
 scp camera_service.py $RASPI_USER@$RASPI_HOST:/home/pi/
 scp api_server.py $RASPI_USER@$RASPI_HOST:/home/pi/
+scp wifi_manager.py $RASPI_USER@$RASPI_HOST:/home/pi/
 scp camera-service.service $RASPI_USER@$RASPI_HOST:/home/pi/
 scp api-server.service $RASPI_USER@$RASPI_HOST:/home/pi/
 

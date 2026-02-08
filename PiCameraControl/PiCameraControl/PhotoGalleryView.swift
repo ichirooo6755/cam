@@ -1,11 +1,11 @@
 import SwiftUI
 
 struct PhotoGalleryView: View {
-    @AppStorage("serverIP") private var serverIP: String = "192.168.0.20"
+    @AppStorage("serverIP") private var serverIP: String = "192.168.4.1"
     
     @State private var photos: [String] = []
     @State private var isLoading = false
-    @State private var selectedPhoto: String?
+    @State private var selectedPhoto: SelectedPhoto?
     
     private var api: SimpleCameraAPI {
         SimpleCameraAPI(baseURL: "http://\(serverIP):8001")
@@ -14,6 +14,9 @@ struct PhotoGalleryView: View {
     var body: some View {
         NavigationView {
             ZStack {
+                backgroundGradient
+                    .ignoresSafeArea()
+
                 if photos.isEmpty {
                     emptyState
                 } else {
@@ -43,8 +46,8 @@ struct PhotoGalleryView: View {
             .onAppear {
                 loadPhotos()
             }
-            .sheet(item: $selectedPhoto) { filename in
-                PhotoDetailView(filename: filename, serverIP: serverIP)
+            .sheet(item: $selectedPhoto) { selection in
+                PhotoDetailView(filename: selection.id, serverIP: serverIP)
             }
         }
     }
@@ -63,6 +66,8 @@ struct PhotoGalleryView: View {
                 .multilineTextAlignment(.center)
         }
         .padding()
+        .liquidGlassStyle(radius: 24)
+        .padding(.horizontal, 24)
     }
     
     private var photoGrid: some View {
@@ -74,12 +79,34 @@ struct PhotoGalleryView: View {
                     PhotoThumbnail(filename: filename, serverIP: serverIP)
                         .aspectRatio(1, contentMode: .fill)
                         .clipShape(RoundedRectangle(cornerRadius: 12))
+                        .liquidGlassStyle(radius: 16)
                         .onTapGesture {
-                            selectedPhoto = filename
+                            selectedPhoto = SelectedPhoto(id: filename)
                         }
                 }
             }
             .padding()
+        }
+    }
+
+    private var backgroundGradient: some View {
+        ZStack {
+            Color(.systemBackground)
+            LinearGradient(
+                colors: [
+                    Color.blue.opacity(0.18),
+                    Color.teal.opacity(0.12),
+                    Color.clear,
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            RadialGradient(
+                colors: [Color.cyan.opacity(0.12), .clear],
+                center: .bottomTrailing,
+                startRadius: 0,
+                endRadius: 420
+            )
         }
     }
     
@@ -198,6 +225,6 @@ struct PhotoDetailView: View {
     }
 }
 
-extension String: Identifiable {
-    public var id: String { self }
+struct SelectedPhoto: Identifiable {
+    let id: String
 }

@@ -13,11 +13,15 @@ echo "Source directory: $CURRENT_DIR"
 # Pythonスクリプトの転送
 echo "Transffering Python scripts..."
 scp wifi_manager.py pi@$RASPI_HOST:/home/pi/
+scp camera_service.py pi@$RASPI_HOST:/home/pi/
+scp api_server.py pi@$RASPI_HOST:/home/pi/
 scp camera_control.py pi@$RASPI_HOST:/home/pi/
 scp shutter_trigger.py pi@$RASPI_HOST:/home/pi/
 scp light_detection_algorithm.py pi@$RASPI_HOST:/home/pi/
 scp server.py pi@$RASPI_HOST:/home/pi/
 scp camera-control.service pi@$RASPI_HOST:/home/pi/
+scp camera-service.service pi@$RASPI_HOST:/home/pi/
+scp api-server.service pi@$RASPI_HOST:/home/pi/
 
 # Webファイルの転送
 echo "Transffering Web files..."
@@ -32,6 +36,6 @@ echo "Transfer complete."
 echo "Restarting services..."
 
 # サービスの再起動
-ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=no -tt pi@$RASPI_HOST "sudo -n sh -c 'echo 1 > /run/picamera_boot_network_applied'; if [ \$? -ne 0 ]; then echo 'Skip restart: sudo -n is not permitted'; exit 0; fi; if [ -f /home/pi/camera-control.service ]; then sudo -n install -m 644 /home/pi/camera-control.service /etc/systemd/system/camera-control.service; fi; sudo -n systemctl daemon-reload; sudo systemctl restart camera-control shutter-trigger photo-server"
+ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=no -tt pi@$RASPI_HOST "sudo -n sh -c 'echo 1 > /run/picamera_boot_network_applied'; if [ \$? -ne 0 ]; then echo 'Skip restart: sudo -n is not permitted'; exit 0; fi; if [ -f /home/pi/camera-control.service ]; then sudo -n install -m 644 /home/pi/camera-control.service /etc/systemd/system/camera-control.service; fi; if [ -f /home/pi/camera-service.service ]; then sudo -n install -m 644 /home/pi/camera-service.service /etc/systemd/system/camera-service.service; fi; if [ -f /home/pi/api-server.service ]; then sudo -n install -m 644 /home/pi/api-server.service /etc/systemd/system/api-server.service; fi; sudo -n systemctl daemon-reload; sudo systemctl restart camera-service api-server camera-control shutter-trigger photo-server"
 
 echo "Update finished successfully!"

@@ -131,6 +131,11 @@ struct CaptureResponse: Codable {
     let error: String?
 }
 
+/// サニタイズ済みファイル名
+struct SafeFilename: Hashable {
+    let value: String
+}
+
 /// 設定更新のレスポンス
 struct SettingsResponse: Codable {
     let success: Bool
@@ -142,13 +147,31 @@ struct WiFiStatus: Codable {
     let mode: String?
     let ssid: String?
     let ip: String?
+    let ipAddress: String?
     let apSsid: String?
     let apPassword: String?
 
     enum CodingKeys: String, CodingKey {
         case mode, ssid, ip
+        case ipAddress = "ip_address"
         case apSsid = "ap_ssid"
         case apPassword = "ap_password"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        mode = try container.decodeIfPresent(String.self, forKey: .mode)
+        ssid = try container.decodeIfPresent(String.self, forKey: .ssid)
+        ip = try container.decodeIfPresent(String.self, forKey: .ip)
+        ipAddress = try container.decodeIfPresent(String.self, forKey: .ipAddress)
+        apSsid = try container.decodeIfPresent(String.self, forKey: .apSsid)
+        apPassword = try container.decodeIfPresent(String.self, forKey: .apPassword)
+    }
+
+    var resolvedIP: String? {
+        if let ip, !ip.isEmpty { return ip }
+        if let ipAddress, !ipAddress.isEmpty { return ipAddress }
+        return nil
     }
 }
 
@@ -208,19 +231,43 @@ enum ISOOption: String, CaseIterable, Identifiable, Hashable, Labelable {
     }
 }
 
+// MARK: - 画質選択肢
+
+enum QualityOption: Int, CaseIterable, Identifiable, Hashable, Labelable {
+    case q60 = 60
+    case q70 = 70
+    case q80 = 80
+    case q90 = 90
+    case q95 = 95
+
+    var id: String { "q\(rawValue)" }
+
+    var label: String {
+        "Q\(rawValue)"
+    }
+
+    var qualityValue: Int { rawValue }
+
+    static func from(_ value: Int) -> QualityOption {
+        return allCases.first { $0.rawValue == value } ?? .q90
+    }
+}
+
 // MARK: - シャッタースピード選択肢
 
 enum ShutterSpeedOption: String, CaseIterable, Identifiable, Hashable, Labelable {
     case auto
-    case ss1000, ss500, ss250, ss125, ss60, ss30, ss15, ss8, ss4, ss2, ss1sec, ss2sec
+    case ss400, ss250, ss125, ss60, ss30, ss15
+    case ss8, ss4, ss2
+    case ss1s, ss2s, ss3s, ss4s, ss5s, ss6s, ss7s, ss8s, ss9s, ss10s
+    case ss11s, ss12s, ss13s, ss14s, ss15s, ss16s, ss17s, ss18s, ss19s, ss20s
 
     var id: String { rawValue }
 
     var label: String {
         switch self {
         case .auto: return "Auto"
-        case .ss1000: return "1/1000"
-        case .ss500: return "1/500"
+        case .ss400: return "1/400"
         case .ss250: return "1/250"
         case .ss125: return "1/125"
         case .ss60: return "1/60"
@@ -229,16 +276,33 @@ enum ShutterSpeedOption: String, CaseIterable, Identifiable, Hashable, Labelable
         case .ss8: return "1/8"
         case .ss4: return "1/4"
         case .ss2: return "1/2"
-        case .ss1sec: return "1.0s"
-        case .ss2sec: return "2.0s"
+        case .ss1s: return "1s"
+        case .ss2s: return "2s"
+        case .ss3s: return "3s"
+        case .ss4s: return "4s"
+        case .ss5s: return "5s"
+        case .ss6s: return "6s"
+        case .ss7s: return "7s"
+        case .ss8s: return "8s"
+        case .ss9s: return "9s"
+        case .ss10s: return "10s"
+        case .ss11s: return "11s"
+        case .ss12s: return "12s"
+        case .ss13s: return "13s"
+        case .ss14s: return "14s"
+        case .ss15s: return "15s"
+        case .ss16s: return "16s"
+        case .ss17s: return "17s"
+        case .ss18s: return "18s"
+        case .ss19s: return "19s"
+        case .ss20s: return "20s"
         }
     }
 
     var microseconds: Int? {
         switch self {
         case .auto: return nil
-        case .ss1000: return 1000
-        case .ss500: return 2000
+        case .ss400: return 2500
         case .ss250: return 4000
         case .ss125: return 8000
         case .ss60: return 16666
@@ -247,8 +311,26 @@ enum ShutterSpeedOption: String, CaseIterable, Identifiable, Hashable, Labelable
         case .ss8: return 125000
         case .ss4: return 250000
         case .ss2: return 500000
-        case .ss1sec: return 1_000_000
-        case .ss2sec: return 2_000_000
+        case .ss1s: return 1_000_000
+        case .ss2s: return 2_000_000
+        case .ss3s: return 3_000_000
+        case .ss4s: return 4_000_000
+        case .ss5s: return 5_000_000
+        case .ss6s: return 6_000_000
+        case .ss7s: return 7_000_000
+        case .ss8s: return 8_000_000
+        case .ss9s: return 9_000_000
+        case .ss10s: return 10_000_000
+        case .ss11s: return 11_000_000
+        case .ss12s: return 12_000_000
+        case .ss13s: return 13_000_000
+        case .ss14s: return 14_000_000
+        case .ss15s: return 15_000_000
+        case .ss16s: return 16_000_000
+        case .ss17s: return 17_000_000
+        case .ss18s: return 18_000_000
+        case .ss19s: return 19_000_000
+        case .ss20s: return 20_000_000
         }
     }
 

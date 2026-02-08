@@ -5,9 +5,10 @@ Raspberry Pi Zero 2 W + カメラモジュールを使った**光検知自動撮
 ## 新システムの特徴
 
 - **省電力設計**: カメラは光検知時のみ起動（CLI化済み）
-- **高速反応**: 100ms間隔で光を監視、検知時に即撮影
+- **高速反応**: 500ms間隔で光を監視、検知時に即撮影（Zero 2W向け軽量化）
 - **ライブビュー不要**: 写真一覧中心のシンプルなiOSアプリ
 - **軽量API**: 写真取得とステータス確認のみの最小構成
+- **手動モード**: 光検知を停止し、アプリのボタンで撮影
 
 ## システム構成
 
@@ -18,6 +19,150 @@ Raspberry Pi Zero 2 W + カメラモジュールを使った**光検知自動撮
 ### iOS アプリ
 - タブ1: 写真ギャラリー（自動撮影された写真一覧）
 - タブ2: 設定（明るさ閾値調整、システム状態表示）
+
+### 症状: 光が当たり続けると連続撮影になる懸念
+**原因**
+明るさが閾値を超えた状態が継続すると、毎ループで撮影される可能性がありました。
+
+**解決策**
+光検知の「立ち上がり（暗→明）」のみをトリガーにし、連続撮影を抑止しました。さらにクールダウン（3秒）を入れて負荷を抑えています。
+
+### 症状: iOSアプリのビルドが失敗する
+**原因**
+新規追加した Swift ファイル（PhotoGalleryView.swift / SettingsView.swift / SimpleCameraAPI.swift）が Xcode プロジェクトに未登録でした。
+
+**解決策**
+`project.pbxproj` にファイル参照と Sources 追加を行い、ビルド成功を確認しました。
+
+**補足**
+シミュレータ用ビルドは以下のスクリプトで自動実行できます。
+```bash
+cd /Users/sugawaraichirou/Documents/アプリ/PiCameraControl
+./build_ios_simulator.sh
+```
+
+### 症状: /api/capture で撮影が失敗する（Device or resource busy）
+**原因**
+`camera-service` がカメラを占有している状態で `libcamera-still` を呼ぶとデバイスがビジーになり失敗します。
+
+**解決策**
+`/api/capture` 実行時に `camera-service` を一時停止し、撮影後に再開するよう修正しました。
+
+### 症状: 光検知が単純な閾値判定になり、旧版の高速検知と挙動が異なる
+**原因**
+閾値超過のみの判定に変更していたため、明るさの「変化量/変化率」を使う旧版ロジックが外れていました。
+
+**解決策**
+旧版と同じく変化率 + 変化量で判定し、検知間隔を 0.25 秒に戻しました。
+
+### 変更: シャッタースピード選択肢
+- **手動モード時は 1/400 まで**（通常モードは 1/250 まで）
+- **1/15〜1sの間に 1/8・1/4・1/2 を追加**
+- **1秒刻みで20秒まで追加**（1s〜20s）
+
+### 変更: 画質(quality)の制御
+アプリの **QUALITY** ピッカーから画質を選択できます（Q60〜Q95）。
+
+### 症状: ライブラリの写真が重なって見える / 光検知から撮影まで遅い
+**原因**
+多重露光 or 2in1合成が有効だと、2枚目を待って合成するため、
+撮影が遅く感じたり重なった写真になります。さらに長秒露光（1s〜20s）やタイムスタンプ、
+高品質(quality=90)は処理時間が増えます。Pi側の処理が主因です。
+
+**解決策**
+- 手動モードON時は **多重露光/2in1合成を自動OFF**
+- アプリの設定で **多重露光 / 2in1合成 / タイムスタンプ** をOFF
+- 画質(quality)を下げる（速度優先）
+- ログで遅延の実測
+```bash
+ssh pi@192.168.0.20 "grep -E 'Light change detected|Detect->Capture delay|Photo captured' /home/pi/logs/camera_service.log | tail -n 20"
+```
+
+### 症状: 写真が増えない（Refreshしても反映されない）
+**原因**
+手動モードがONだと光検知が停止するため、自動撮影が行われません。
+
+**解決策**
+- 手動モードをOFFにして光検知を再開する
+- 手動モードのままなら撮影ボタンで撮影する
+
+### 症状: 「SWITCH TO AP / CLIENT」を押しても表示が切り替わらない
+**原因**
+画面の切替パネル表示が現在モード (`isAPMode`) と直結していたため、
+トグルしても本来の切替先 (`targetAPMode`) が反映されていませんでした。
+
+**解決策**
+切替先を `targetAPMode` として分離し、パネル表示と実行先を一致させました。
+
+### 症状: APモード時のIPが家Wi-FiのIPと違う
+**原因**
+APモードは固定IPのため、家Wi-Fiとは別のネットワークになります。
+
+**解決策**
+APモード時は `192.168.4.1` を表示/使用するように統一しました。
+
+### 症状: ホワイトバランスを変更してもPiに反映されない
+**原因**
+iOSアプリのWBボタンが状態を変更するだけで、APIへの送信処理が欠落していました。
+
+**解決策**
+ボタンタップ時に `updateWhiteBalance()` を呼ぶよう修正しました。
+
+### 症状: アプリの検知閾値(DETECTION THRESHOLD)が常に30になる
+**原因**
+Pi側のAPIレスポンスに `detection_threshold` キーが無く、
+iOS側が常にデフォルト値30を使用していました。
+
+**解決策**
+`api_server.py` の `serve_settings()` で `brightness_threshold` → `detection_threshold` の
+双方向マッピングを追加しました。
+
+### 症状: 画質(quality)設定が通常写真に反映されない
+**原因**
+`camera_service.py` の `capture_photo()` で、合成やタイムスタンプ無しの通常写真は
+`switch_mode_and_capture_file()` のデフォルト品質(95)で保存されていました。
+
+**解決策**
+通常写真でもPILで再保存してquality設定を反映するよう修正しました。
+
+### 症状: 再起動するとAPモードが維持されない
+**原因**
+nmcliのHotspotは再起動後に自動起動しません。
+`wifi_manager.py` が `camera_settings.json` に `wifi_mode` を保存していましたが、
+起動時に誰も読んで復元していませんでした。
+
+**解決策**
+`api_server.py` の起動時に `camera_settings.json` の `wifi_mode` を読み取り、
+保存されたモード（ap/tethering）と現在のモードが異なる場合に自動復元するようにしました。
+`api-server.service` を `network-online.target` 待ちに変更し、Wi-Fi準備完了後に実行。
+
+### 症状: 手動撮影で `--awb shade` エラー
+**原因**
+`api_server.py` の手動撮影が `libcamera-still` に `--awb shade` を渡すが、
+一部libcameraバージョンでは未対応。
+
+**解決策**
+サポート済みAWBモードリストに無い場合は `auto` にフォールバックするよう修正。
+
+### 症状: Capture failed: AwbModeEnum.Shade が無い
+**原因**
+libcameraのバージョンによって `AwbModeEnum.Shade` が存在せず、
+ホワイトバランスが `shade` のときに例外が発生して撮影が失敗します。
+
+**解決策**
+`shade` が使えない環境では `Auto` にフォールバックするよう修正しました。
+
+### 症状: クラッシュログが確認できない
+**原因**
+camera-service の異常終了が起きていない場合、エラーログは出力されません。
+
+**解決策**
+以下の手順でログを確認し、エラーが出た場合のみ解析対象にします。
+```bash
+ssh pi@192.168.0.20 "tail -n 120 /home/pi/logs/camera_service.log"
+ssh pi@192.168.0.20 "journalctl -u camera-service -p err -n 50 --no-pager"
+```
+現時点では `ERROR/Traceback` の記録はありません。
 
 ---
 
@@ -121,6 +266,7 @@ sudo systemctl restart camera-control
 - `validateServerURL()` 関数を追加（プライベートIP/.localのみ許可）
 - `CameraAPI.init` でURL検証、無効時はデフォルト値 (`192.168.4.1`) 使用
 - 許可パターン: `192.168.x.x`, `10.x.x.x`, `172.16-31.x.x`, `127.x.x.x`, `*.local`
+- 撮影画像の取得を `POST /api/photo` に変更し、ファイル名をサニタイズしてから配信
 
 ### 検証結果
 - **iOSアプリ**: Xcodeビルド成功、シミュレータインストール完了
@@ -159,6 +305,14 @@ AP(192.168.4.1) で接続している状態で、HTTP API経由でSSID/PSKを書
 起動時のテザリング適用後に接続確認（SSID取得・IP取得）を行い、失敗した場合は自動的にAPモードへフォールバックするようにしました。これにより、接続できない場合でもAPが立ち上がってアクセス可能になります。
 
 ### APモード → 家Wi-Fi (テザリング) 切替
+#### アプリから簡単切替（推奨）
+1. iPhone を AP (PiCamera) に接続
+2. アプリの **設定タブ** 内の NETWORK セクションで **HOME WIFI SSID/PASSWORD** を入力
+3. **CONNECT HOME WIFI** を押す
+
+※ AP接続中でも家Wi-Fiへ切替できるよう `/api/wifi/write_wpa` → `/api/wifi/switch` を自動実行します。
+
+#### 手動（curl）
 ```bash
 # 0. (推奨) コード反映
 # Mac側の /Users/sugawaraichirou/Documents/アプリ/home 3 から
@@ -200,3 +354,21 @@ EOF"
 ssh pi@192.168.4.1 "sudo reboot"
 ```
 再起動後、ラズパイは家Wi-Fiに接続し、`http://raspberrypi.local:8001` でアクセス可能になります。
+
+---
+
+## ✅ 家Wi-Fiでのスマホテスト手順（次の作業）
+1. iPhoneを家Wi-Fiに接続
+2. アプリを開いて **Refresh** を押す
+3. 右上のIP設定が `192.168.0.xx` に変わることを確認
+4. 写真一覧が更新されることを確認
+5. **APに戻る場合**
+   - NETWORK セクションで `SWITCH TO AP` → `APPLY & RESTART`
+   - 数十秒後に `PiCamera` が復活することを確認
+
+### ✅ 家Wi-Fi → AP移行までの最終確認（推奨）
+1. 家Wi-Fi接続中に **SWITCH TO AP** → **APPLY & RESTART** を実行
+2. iPhone側のWi-Fi一覧に `PiCamera` が出ることを確認
+3. iPhoneを `PiCamera` に接続
+4. アプリの右上IPが `192.168.4.1` に戻ることを確認
+5. 写真一覧が再取得できることを確認

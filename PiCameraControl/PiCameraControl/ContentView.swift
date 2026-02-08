@@ -80,6 +80,7 @@ struct ContentView: View {
     // Camera Settings
     @State private var selectedISO: ISOOption = .auto
     @State private var selectedShutterSpeed: ShutterSpeedOption = .auto
+    @State private var selectedQuality: QualityOption = .q90
     @State private var selectedWhiteBalance: WhiteBalanceOption = .auto
     @State private var detectionThreshold: Double = 30
 
@@ -87,6 +88,7 @@ struct ContentView: View {
     @State private var enableMultipleExposure: Bool = false
     @State private var enable2in1Composition: Bool = false
     @State private var enableTimestamp: Bool = false
+    @State private var manualModeEnabled: Bool = false
 
     // Network
     @State private var wifiMode: String = "取得中..."
@@ -94,7 +96,11 @@ struct ContentView: View {
     @State private var wifiIP: String = "-"
     @State private var apSSIDInput: String = ""
     @State private var apPasswordInput: String = ""
+    @State private var homeSSIDInput: String = ""
+    @State private var homePasswordInput: String = ""
     @State private var isAPMode: Bool = false
+    @State private var showWiFiSwitchPanel: Bool = false
+    @State private var targetAPMode: Bool = false
 
     // Capture
     @State private var capturedImage: UIImage? = nil
@@ -107,6 +113,13 @@ struct ContentView: View {
 
     private var api: CameraAPI {
         CameraAPI(baseURL: "http://\(serverIP):8001")
+    }
+
+    private var shutterOptions: [ShutterSpeedOption] {
+        if manualModeEnabled {
+            return ShutterSpeedOption.allCases
+        }
+        return ShutterSpeedOption.allCases.filter { $0 != .ss400 }
     }
 
     // MARK: - Body
@@ -133,22 +146,28 @@ struct ContentView: View {
                                 ) { opt in
                                     updateISO(opt)
                                 }
+                                shutterPickerModule
+                            }
 
-                                pickerModule(
-                                    title: "SHUTTER", selection: $selectedShutterSpeed,
-                                    options: ShutterSpeedOption.allCases
-                                ) { opt in
-                                    updateShutterSpeed(opt)
-                                }
+                            pickerModule(
+                                title: "QUALITY", selection: $selectedQuality,
+                                options: QualityOption.allCases
+                            ) { opt in
+                                updateQuality(opt)
                             }
 
                             whiteBalanceModule
 
-                            thresholdModule
+                            if !manualModeEnabled {
+                                thresholdModule
+                            }
                         }
 
                         // Toggles
                         HStack(spacing: 16) {
+                            GlassToggle(title: "手動モード", isOn: $manualModeEnabled) {
+                                updateMonitoringEnabled(!manualModeEnabled)
+                            }
                             GlassToggle(title: "多重露光", isOn: $enableMultipleExposure) {
                                 updateToggle(multipleExposure: enableMultipleExposure)
                             }
@@ -218,6 +237,23 @@ struct ContentView: View {
                 apSSIDInput = savedAPSSID
                 apPasswordInput = savedAPPassword
                 loadAllSettings()
+            }
+        }
+    }
+
+    private func connectHomeWiFi() {
+        isSwitchingWiFi = true
+        errorMessage = nil
+        Task {
+            do {
+                try await api.writeWpaSettings(ssid: homeSSIDInput, psk: homePasswordInput)
+                try await api.switchWiFiMode(toAP: false)
+                await MainActor.run { isSwitchingWiFi = false }
+            } catch {
+                await MainActor.run {
+                    errorMessage = "Wi-Fi切替に失敗しました"
+                    isSwitchingWiFi = false
+                }
             }
         }
     }
@@ -314,7 +350,7 @@ struct ContentView: View {
                     if let labelable = opt as? Labelable {
                         Text(labelable.label).tag(opt)
                     } else {
-                        Text("\(opt)").tag(opt)
+                        Text(verbatim: String(describing: opt)).tag(opt)
                     }
                 }
             }
@@ -340,6 +376,7 @@ struct ContentView: View {
                     ForEach(WhiteBalanceOption.allCases) { option in
                         Button {
                             selectedWhiteBalance = option
+                            updateWhiteBalance(option)
                         } label: {
                             Text(option.label)
                                 .font(.caption.weight(.medium))
@@ -357,6 +394,29 @@ struct ContentView: View {
             }
         }
         .padding(16)
+        .liquidGlassStyle(radius: 20)
+    }
+
+    private var shutterPickerModule: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("SHUTTER")
+                .font(.caption2.weight(.black))
+                .foregroundColor(.secondary)
+                .padding(.leading, 4)
+
+            Picker("SHUTTER", selection: $selectedShutterSpeed) {
+                ForEach(shutterOptions, id: \.self) { opt in
+                    Text(opt.label).tag(opt)
+                }
+            }
+            .pickerStyle(.wheel)
+            .frame(height: 80)
+            .clipped()
+            .onChange(of: selectedShutterSpeed) { _, newValue in
+                updateShutterSpeed(newValue)
+            }
+        }
+        .padding(12)
         .liquidGlassStyle(radius: 20)
     }
 
@@ -442,30 +502,51 @@ struct ContentView: View {
                     .foregroundColor(.secondary)
                 Spacer()
                 Button {
-                    isAPMode.toggle()
+                    targetAPMode = !isAPMode
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        showWiFiSwitchPanel = true
+                    }
                 } label: {
                     Text(isAPMode ? "SWITCH TO CLIENT" : "SWITCH TO AP")
                         .font(.caption.weight(.bold))
                 }
             }
 
-            if isAPMode {
+            if showWiFiSwitchPanel {
                 VStack(spacing: 8) {
-                    TextField("AP SSID", text: $apSSIDInput)
-                        .textFieldStyle(GlassTextFieldStyle())
-                    SecureField("PASSWORD", text: $apPasswordInput)
-                        .textFieldStyle(GlassTextFieldStyle())
+                    if targetAPMode {
+                        TextField("AP SSID", text: $apSSIDInput)
+                            .textFieldStyle(GlassTextFieldStyle())
+                        SecureField("PASSWORD", text: $apPasswordInput)
+                            .textFieldStyle(GlassTextFieldStyle())
 
-                    Button(action: switchWiFiMode) {
-                        Text("APPLY & RESTART")
-                            .font(.system(size: 12, weight: .black))
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 12)
-                            .background(Color.blue)
-                            .foregroundColor(.white)
-                            .cornerRadius(12)
+                        Button(action: switchWiFiMode) {
+                            Text("APPLY & RESTART")
+                                .font(.system(size: 12, weight: .black))
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 12)
+                                .background(Color.blue)
+                                .foregroundColor(.white)
+                                .cornerRadius(12)
+                        }
+                        .disabled(isSwitchingWiFi)
+                    } else {
+                        TextField("HOME WIFI SSID", text: $homeSSIDInput)
+                            .textFieldStyle(GlassTextFieldStyle())
+                        SecureField("HOME WIFI PASSWORD", text: $homePasswordInput)
+                            .textFieldStyle(GlassTextFieldStyle())
+
+                        Button(action: connectHomeWiFi) {
+                            Text("CONNECT HOME WIFI")
+                                .font(.system(size: 12, weight: .black))
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 12)
+                                .background(Color.green)
+                                .foregroundColor(.white)
+                                .cornerRadius(12)
+                        }
+                        .disabled(isSwitchingWiFi || homeSSIDInput.isEmpty || homePasswordInput.isEmpty)
                     }
-                    .disabled(isSwitchingWiFi)
                 }
                 .transition(.move(edge: .top).combined(with: .opacity))
             }
@@ -496,16 +577,29 @@ struct ContentView: View {
                 await MainActor.run {
                     selectedISO = ISOOption.from(settings.iso)
                     selectedShutterSpeed = ShutterSpeedOption.from(settings.shutterSpeed)
+                    selectedQuality = QualityOption.from(settings.quality)
                     selectedWhiteBalance = WhiteBalanceOption.from(settings.whiteBalance)
                     detectionThreshold = Double(settings.detectionThreshold)
                     enableMultipleExposure = settings.enableMultipleExposure
                     enable2in1Composition = settings.enable2in1Composition
                     enableTimestamp = settings.enableTimestamp
+                    manualModeEnabled = !settings.monitoringEnabled
 
                     wifiMode = wifi.mode ?? "N/A"
                     wifiSSID = wifi.ssid ?? "Disconnected"
-                    wifiIP = wifi.ip ?? "0.0.0.0"
+                    if let resolvedIP = wifi.resolvedIP {
+                        if wifi.mode == "ap" {
+                            wifiIP = "192.168.4.1"
+                            if serverIP != "192.168.4.1" { serverIP = "192.168.4.1" }
+                        } else {
+                            wifiIP = resolvedIP
+                            if serverIP != resolvedIP { serverIP = resolvedIP }
+                        }
+                    } else {
+                        wifiIP = wifi.mode == "ap" ? "192.168.4.1" : "0.0.0.0"
+                    }
                     isAPMode = wifi.mode == "ap"
+                    showWiFiSwitchPanel = false
 
                     isLoading = false
                 }
@@ -526,12 +620,25 @@ struct ContentView: View {
         Task { try? await api.updateShutterSpeed(option.shutterValue) }
     }
 
+    private func updateQuality(_ option: QualityOption) {
+        Task { try? await api.updateQuality(option.qualityValue) }
+    }
+
     private func updateWhiteBalance(_ option: WhiteBalanceOption) {
         Task { try? await api.updateWhiteBalance(option.rawValue) }
     }
 
     private func updateThreshold(_ value: Int) {
         Task { try? await api.updateDetectionThreshold(value) }
+    }
+
+    private func updateMonitoringEnabled(_ enabled: Bool) {
+        if !enabled {
+            enableMultipleExposure = false
+            enable2in1Composition = false
+            updateToggle(multipleExposure: false, composition2in1: false)
+        }
+        Task { try? await api.updateMonitoringEnabled(enabled) }
     }
 
     private func updateToggle(
@@ -564,7 +671,7 @@ struct ContentView: View {
     }
 
     private func switchWiFiMode() {
-        if isAPMode {
+        if targetAPMode {
             savedAPSSID = apSSIDInput
             savedAPPassword = apPasswordInput
         }
@@ -572,8 +679,11 @@ struct ContentView: View {
         Task {
             do {
                 try await api.switchWiFiMode(
-                    toAP: isAPMode, ssid: apSSIDInput, password: apPasswordInput)
-                await MainActor.run { isSwitchingWiFi = false }
+                    toAP: targetAPMode, ssid: apSSIDInput, password: apPasswordInput)
+                await MainActor.run {
+                    isSwitchingWiFi = false
+                    showWiFiSwitchPanel = false
+                }
             } catch {
                 await MainActor.run { isSwitchingWiFi = false }
             }
