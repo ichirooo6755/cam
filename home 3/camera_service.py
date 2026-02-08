@@ -171,9 +171,10 @@ def capture_photo(camera, settings: dict, composition_state: dict, detected_at: 
 
     try:
         quality = settings.get('quality', 90)
+        camera.options["quality"] = quality
         capture_start = time.time()
         _apply_camera_controls(camera, settings)
-        camera.switch_mode_and_capture_file(camera.still_configuration, filepath, quality=quality)
+        camera.switch_mode_and_capture_file(camera.still_configuration, filepath)
         capture_end = time.time()
         if detected_at is not None:
             detect_delay = capture_end - detected_at

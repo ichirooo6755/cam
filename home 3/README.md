@@ -152,8 +152,12 @@ iOS側が常にデフォルト値30を使用していました。
 `camera_service.py` が撮影後にPILで再保存していたため、JPEG二重圧縮が発生し画質が劣化していました。
 
 **解決策**
-`switch_mode_and_capture_file()` に `quality` 引数を直接渡すことで、一度の圧縮で済むようにしました。
-タイムスタンプ付与時のみPIL再保存を行います。
+撮影前に `camera.options["quality"] = quality` を設定することで、picamera2内部のJPEGエンコーダが
+指定品質で直接保存します。タイムスタンプ付与時のみPIL再保存を行います。
+
+> **注意**: `switch_mode_and_capture_file()` は `quality` キーワード引数を受け付けません。
+> picamera2では `camera.options["quality"]` を通じてJPEG品質を制御します。
+> 誤って引数として渡すと `unexpected keyword argument 'quality'` エラーで撮影が全て失敗します。
 
 ### 症状: 同一秒内の連続撮影でファイルが上書きされる
 **原因**
