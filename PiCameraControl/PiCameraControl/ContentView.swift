@@ -70,6 +70,12 @@ struct GlassToggle: View {
 
 struct ContentView: View {
 
+    private enum SyncState: Equatable {
+        case idle
+        case syncing(String)
+        case success(String)
+    }
+
     // MARK: - State
     @AppStorage("serverIP") private var serverIP: String = "192.168.4.1"
     @AppStorage("apSSID") private var savedAPSSID: String = "PiCamera"
@@ -109,6 +115,9 @@ struct ContentView: View {
     @State private var isCapturing: Bool = false
     @State private var isSwitchingWiFi: Bool = false
     @State private var errorMessage: String? = nil
+    @State private var syncState: SyncState = .idle
+    @State private var isApplyingRemoteSettings: Bool = false
+    @State private var showResetTemporaryConfirm: Bool = false
 
     @Environment(\.colorScheme) var colorScheme
 
@@ -138,14 +147,7 @@ struct ContentView: View {
                         // Image Display
                         previewArea
 
-                        if let errorMessage {
-                            Text(errorMessage)
-                                .font(.caption.weight(.medium))
-                                .foregroundColor(.primary)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(14)
-                                .liquidGlassStyle(radius: 20)
-                        }
+                        syncBanner
 
                         // Camera Controls
                         VStack(spacing: 24) {
@@ -195,6 +197,30 @@ struct ContentView: View {
                             }
                         }
 
+                        Button {
+                            showResetTemporaryConfirm = true
+                        } label: {
+                            HStack(spacing: 10) {
+                                Image(systemName: "arrow.uturn.backward")
+                                    .font(.caption.weight(.bold))
+                                Text("一時変更をリセット")
+                                    .font(.caption.weight(.bold))
+                                Spacer()
+                            }
+                            .padding(14)
+                            .foregroundColor(.blue)
+                        }
+                        .liquidGlassStyle(radius: 20)
+                        .disabled(isLoading || isCapturing)
+                        .alert("一時変更をリセットしますか？", isPresented: $showResetTemporaryConfirm) {
+                            Button("リセット", role: .destructive) {
+                                resetTemporarySettings()
+                            }
+                            Button("キャンセル", role: .cancel) {}
+                        } message: {
+                            Text("ISO/シャッター/WB/画質/閾値などの一時変更を元に戻します")
+                        }
+
                         // Capture Button
                         captureSection
                             .sensoryFeedback(.impact(flexibility: .rigid), trigger: isCapturing)
@@ -205,6 +231,42 @@ struct ContentView: View {
                         Spacer(minLength: 80)
                     }
                     .padding(20)
+                }
+
+                if let message = errorMessage {
+                    VStack(spacing: 0) {
+                        HStack(alignment: .top, spacing: 12) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundColor(.orange)
+
+                            ScrollView {
+                                Text(message)
+                                    .font(.caption.weight(.medium))
+                                    .foregroundColor(.primary)
+                                    .multilineTextAlignment(.leading)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                            .frame(maxHeight: 120)
+
+                            Button {
+                                withAnimation(.easeInOut(duration: 0.15)) {
+                                    errorMessage = nil
+                                }
+                            } label: {
+                                Image(systemName: "xmark.circle.fill")
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                        .padding(14)
+                        .liquidGlassStyle(radius: 20)
+                        .padding(.horizontal, 20)
+                        .padding(.top, 12)
+
+                        Spacer(minLength: 0)
+                    }
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .zIndex(1)
                 }
             }
             .navigationTitle("PiCamera Pro")
@@ -604,21 +666,13 @@ struct ContentView: View {
     private func loadAllSettings() {
         isLoading = true
         errorMessage = nil
+        syncState = .idle
         Task {
             do {
                 let settings = try await api.fetchSettings()
                 let wifi = try await api.fetchWiFiStatus()
                 await MainActor.run {
-                    selectedCameraMode = CameraModeOption.from(settings.cameraMode)
-                    selectedISO = ISOOption.from(settings.iso)
-                    selectedShutterSpeed = ShutterSpeedOption.from(settings.shutterSpeed)
-                    selectedQuality = QualityOption.from(settings.quality)
-                    selectedWhiteBalance = WhiteBalanceOption.from(settings.whiteBalance)
-                    detectionThreshold = Double(settings.detectionThreshold)
-                    enableMultipleExposure = settings.enableMultipleExposure
-                    enable2in1Composition = settings.enable2in1Composition
-                    enableTimestamp = settings.enableTimestamp
-                    manualModeEnabled = !settings.monitoringEnabled
+                    applyRemoteSettings(settings)
 
                     wifiMode = wifi.mode ?? "N/A"
                     wifiSSID = wifi.ssid ?? "Disconnected"
@@ -647,71 +701,210 @@ struct ContentView: View {
         }
     }
 
-    private func updateISO(_ option: ISOOption) {
-        Task { try? await api.updateISO(option.isoValue) }
+    private func applyRemoteSettings(_ settings: CameraSettings) {
+        isApplyingRemoteSettings = true
+
+        selectedCameraMode = CameraModeOption.from(settings.cameraMode)
+        selectedISO = ISOOption.from(settings.iso)
+        selectedShutterSpeed = ShutterSpeedOption.from(settings.shutterSpeed)
+        selectedQuality = QualityOption.from(settings.quality)
+        selectedWhiteBalance = WhiteBalanceOption.from(settings.whiteBalance)
+        detectionThreshold = Double(settings.detectionThreshold)
+        enableMultipleExposure = settings.enableMultipleExposure
+        enable2in1Composition = settings.enable2in1Composition
+        enableTimestamp = settings.enableTimestamp
+        manualModeEnabled = !settings.monitoringEnabled
+
+        DispatchQueue.main.async {
+            isApplyingRemoteSettings = false
+        }
     }
 
-    private func updateShutterSpeed(_ option: ShutterSpeedOption) {
-        Task { try? await api.updateShutterSpeed(option.shutterValue) }
-    }
+    private func performSettingUpdate(
+        label: String,
+        validate: ((CameraSettings) -> Bool)? = nil,
+        update: @escaping (CameraAPI) async throws -> Void
+    ) {
+        guard !isApplyingRemoteSettings else { return }
 
-    private func updateQuality(_ option: QualityOption) {
-        Task { try? await api.updateQuality(option.qualityValue) }
-    }
+        syncState = .syncing(label)
+        errorMessage = nil
+        let apiClient = api
 
-    private func updateCameraMode(_ option: CameraModeOption) {
         Task {
             do {
-                try await api.updateCameraMode(option)
-                loadAllSettings()
+                try await update(apiClient)
+                let settings = try await apiClient.fetchSettings()
+                await MainActor.run {
+                    applyRemoteSettings(settings)
+                    if validate?(settings) ?? true {
+                        let message = "\(label)を反映しました"
+                        syncState = .success(message)
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+                            if syncState == .success(message) {
+                                syncState = .idle
+                            }
+                        }
+                    } else {
+                        syncState = .idle
+                        errorMessage = "\(label)が反映されませんでした"
+                    }
+                }
             } catch {
                 await MainActor.run {
-                    errorMessage = "MODEの適用に失敗しました"
+                    syncState = .idle
+                    errorMessage = error.localizedDescription
+                }
+
+                do {
+                    let settings = try await apiClient.fetchSettings()
+                    await MainActor.run {
+                        applyRemoteSettings(settings)
+                    }
+                } catch {
                 }
             }
         }
     }
 
+    private func updateISO(_ option: ISOOption) {
+        performSettingUpdate(
+            label: "ISO",
+            validate: { $0.iso == option.isoValue }
+        ) { api in
+            try await api.updateISO(option.isoValue)
+        }
+    }
+
+    private func updateShutterSpeed(_ option: ShutterSpeedOption) {
+        performSettingUpdate(
+            label: "シャッター",
+            validate: { $0.shutterSpeed == option.shutterValue }
+        ) { api in
+            try await api.updateShutterSpeed(option.shutterValue)
+        }
+    }
+
+    private func updateQuality(_ option: QualityOption) {
+        performSettingUpdate(
+            label: "画質",
+            validate: { $0.quality == option.qualityValue }
+        ) { api in
+            try await api.updateQuality(option.qualityValue)
+        }
+    }
+
+    private func updateCameraMode(_ option: CameraModeOption) {
+        performSettingUpdate(
+            label: "モード",
+            validate: { $0.cameraMode == option.rawValue }
+        ) { api in
+            try await api.updateCameraMode(option)
+        }
+    }
+
     private func updateWhiteBalance(_ option: WhiteBalanceOption) {
-        Task { try? await api.updateWhiteBalance(option.rawValue) }
+        performSettingUpdate(
+            label: "WB",
+            validate: { $0.whiteBalance == option.rawValue }
+        ) { api in
+            try await api.updateWhiteBalance(option.rawValue)
+        }
     }
 
     private func updateThreshold(_ value: Int) {
-        Task { try? await api.updateDetectionThreshold(value) }
+        performSettingUpdate(
+            label: "閾値",
+            validate: { $0.detectionThreshold == value }
+        ) { api in
+            try await api.updateDetectionThreshold(value)
+        }
     }
 
     private func updateMonitoringEnabled(_ enabled: Bool) {
+        guard !isApplyingRemoteSettings else { return }
+
         if !enabled {
             enableMultipleExposure = false
             enable2in1Composition = false
-            updateToggle(multipleExposure: false, composition2in1: false)
+            performSettingUpdate(
+                label: "手動モード",
+                validate: {
+                    !$0.monitoringEnabled && !$0.enableMultipleExposure && !$0.enable2in1Composition
+                }
+            ) { api in
+                try await api.updateSettings([
+                    "monitoring_enabled": enabled,
+                    "enable_multiple_exposure": false,
+                    "enable_2in1_composition": false,
+                ], temporary: true)
+            }
+            return
         }
-        Task { try? await api.updateMonitoringEnabled(enabled) }
+
+        performSettingUpdate(
+            label: "手動モード",
+            validate: { $0.monitoringEnabled == enabled }
+        ) { api in
+            try await api.updateMonitoringEnabled(enabled)
+        }
     }
 
     private func updateToggle(
         multipleExposure: Bool? = nil, composition2in1: Bool? = nil, timestamp: Bool? = nil
     ) {
-        Task {
-            try? await api.updateToggleSettings(
-                multipleExposure: multipleExposure, composition2in1: composition2in1,
-                timestamp: timestamp)
+        let label: String = {
+            if multipleExposure != nil { return "多重露光" }
+            if composition2in1 != nil { return "2-in-1" }
+            if timestamp != nil { return "日時刻印" }
+            return "設定"
+        }()
+
+        performSettingUpdate(
+            label: label,
+            validate: { settings in
+                if let multipleExposure, settings.enableMultipleExposure != multipleExposure {
+                    return false
+                }
+                if let composition2in1, settings.enable2in1Composition != composition2in1 {
+                    return false
+                }
+                if let timestamp, settings.enableTimestamp != timestamp {
+                    return false
+                }
+                return true
+            }
+        ) { api in
+            try await api.updateToggleSettings(
+                multipleExposure: multipleExposure,
+                composition2in1: composition2in1,
+                timestamp: timestamp
+            )
+        }
+    }
+
+    private func resetTemporarySettings() {
+        performSettingUpdate(label: "一時変更リセット") { api in
+            try await api.resetTemporarySettings()
         }
     }
 
     private func capturePhoto() {
+        errorMessage = nil
+        syncState = .idle
         isCapturing = true
+        let apiClient = api
         Task {
             do {
-                let filename = try await api.capture()
-                let image = try await api.downloadImage(filename: filename)
+                let filename = try await apiClient.capture()
+                let image = try await apiClient.downloadImage(filename: filename)
                 await MainActor.run {
                     capturedImage = image
                     isCapturing = false
                 }
             } catch {
                 await MainActor.run {
-                    errorMessage = "Capture Failed"
+                    errorMessage = error.localizedDescription
                     isCapturing = false
                 }
             }
@@ -744,6 +937,35 @@ struct ContentView: View {
                 isSwitchingWiFi = false
                 showWiFiSwitchPanel = false
             }
+        }
+    }
+
+    @ViewBuilder
+    private var syncBanner: some View {
+        switch syncState {
+        case .idle:
+            EmptyView()
+        case .syncing(let label):
+            HStack(spacing: 10) {
+                ProgressView()
+                Text("\(label)を適用中...")
+                    .font(.caption.weight(.medium))
+                    .foregroundColor(.secondary)
+                Spacer()
+            }
+            .padding(14)
+            .liquidGlassStyle(radius: 20)
+        case .success(let message):
+            HStack(spacing: 10) {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundColor(.green)
+                Text(message)
+                    .font(.caption.weight(.medium))
+                    .foregroundColor(.secondary)
+                Spacer()
+            }
+            .padding(14)
+            .liquidGlassStyle(radius: 20)
         }
     }
 }

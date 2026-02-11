@@ -14,6 +14,8 @@ struct CameraSettings: Codable {
     var monitoringEnabled: Bool
     var detectionThreshold: Int
     var detectionInterval: Double
+    var checkInterval: Double
+    var captureCooldown: Double
     var enableMultipleExposure: Bool
     var enable2in1Composition: Bool
     var enableTimestamp: Bool
@@ -27,6 +29,8 @@ struct CameraSettings: Codable {
         case monitoringEnabled = "monitoring_enabled"
         case detectionThreshold = "detection_threshold"
         case detectionInterval = "detection_interval"
+        case checkInterval = "check_interval"
+        case captureCooldown = "capture_cooldown"
         case enableMultipleExposure = "enable_multiple_exposure"
         case enable2in1Composition = "enable_2in1_composition"
         case enableTimestamp = "enable_timestamp"
@@ -49,6 +53,10 @@ struct CameraSettings: Codable {
             try container.decodeIfPresent(Int.self, forKey: .detectionThreshold) ?? 30
         detectionInterval =
             try container.decodeIfPresent(Double.self, forKey: .detectionInterval) ?? 1.0
+        checkInterval =
+            try container.decodeIfPresent(Double.self, forKey: .checkInterval) ?? 0.25
+        captureCooldown =
+            try container.decodeIfPresent(Double.self, forKey: .captureCooldown) ?? 0.25
         enableMultipleExposure =
             try container.decodeIfPresent(Bool.self, forKey: .enableMultipleExposure) ?? false
         enable2in1Composition =
@@ -264,6 +272,7 @@ enum QualityOption: Int, CaseIterable, Identifiable, Hashable, Labelable {
     case q80 = 80
     case q90 = 90
     case q95 = 95
+    case q100 = 100
 
     var id: String { "q\(rawValue)" }
 

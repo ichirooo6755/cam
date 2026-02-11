@@ -1,11 +1,20 @@
 import SwiftUI
 
+#if canImport(UIKit)
+    import UIKit
+#endif
+
 struct PhotoGalleryView: View {
     @AppStorage("serverIP") private var serverIP: String = "192.168.4.1"
     
     @State private var photos: [String] = []
     @State private var isLoading = false
     @State private var selectedPhoto: SelectedPhoto?
+    @State private var isSelectionMode: Bool = false
+    @State private var selectedFilenames: Set<String> = []
+    @State private var actionMessage: String?
+    @State private var showActionAlert: Bool = false
+    @State private var showDeleteConfirmation: Bool = false
     
     private var api: SimpleCameraAPI {
         SimpleCameraAPI(baseURL: "http://\(serverIP):8001")
@@ -34,6 +43,20 @@ struct PhotoGalleryView: View {
             .navigationTitle("ギャラリー")
             .navigationBarTitleDisplayMode(.large)
             .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    if !photos.isEmpty {
+                        Button {
+                            withAnimation(.easeInOut(duration: 0.15)) {
+                                isSelectionMode.toggle()
+                                if !isSelectionMode {
+                                    selectedFilenames.removeAll()
+                                }
+                            }
+                        } label: {
+                            Text(isSelectionMode ? "完了" : "選択")
+                        }
+                    }
+                }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button {
                         loadPhotos()
@@ -47,7 +70,34 @@ struct PhotoGalleryView: View {
                 loadPhotos()
             }
             .sheet(item: $selectedPhoto) { selection in
-                PhotoDetailView(filename: selection.id, serverIP: serverIP)
+                PhotoDetailView(
+                    filename: selection.id,
+                    serverIP: serverIP,
+                    onDeleted: { deletedFilename in
+                        photos.removeAll { $0 == deletedFilename }
+                        selectedFilenames.remove(deletedFilename)
+                    }
+                )
+            }
+            .alert("確認", isPresented: $showDeleteConfirmation) {
+                Button("削除", role: .destructive) {
+                    deleteSelectedPhotos()
+                }
+                Button("キャンセル", role: .cancel) {}
+            } message: {
+                Text("選択した\(selectedFilenames.count)枚を削除しますか？")
+            }
+            .alert("結果", isPresented: $showActionAlert) {
+                Button("OK") {
+                    actionMessage = nil
+                }
+            } message: {
+                Text(actionMessage ?? "")
+            }
+            .safeAreaInset(edge: .bottom) {
+                if isSelectionMode {
+                    selectionActionBar
+                }
             }
         }
     }
@@ -76,18 +126,68 @@ struct PhotoGalleryView: View {
                 GridItem(.adaptive(minimum: 150), spacing: 12)
             ], spacing: 12) {
                 ForEach(photos, id: \.self) { filename in
-                    PhotoThumbnail(filename: filename, serverIP: serverIP)
-                        .frame(minHeight: 150, maxHeight: 150)
-                        .clipped()
-                        .clipShape(RoundedRectangle(cornerRadius: 12))
-                        .liquidGlassStyle(radius: 16)
-                        .onTapGesture {
+                    ZStack(alignment: .topTrailing) {
+                        PhotoThumbnail(filename: filename, serverIP: serverIP)
+                            .frame(minHeight: 150, maxHeight: 150)
+                            .clipped()
+                            .clipShape(RoundedRectangle(cornerRadius: 12))
+                            .liquidGlassStyle(radius: 16)
+
+                        if isSelectionMode {
+                            let isSelected = selectedFilenames.contains(filename)
+                            Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                                .font(.system(size: 18, weight: .bold))
+                                .foregroundColor(isSelected ? .blue : .white.opacity(0.85))
+                                .padding(6)
+                                .background(.ultraThinMaterial)
+                                .clipShape(Circle())
+                                .padding(10)
+                        }
+                    }
+                    .contentShape(RoundedRectangle(cornerRadius: 12))
+                    .onTapGesture {
+                        if isSelectionMode {
+                            toggleSelection(filename)
+                        } else {
                             selectedPhoto = SelectedPhoto(id: filename)
                         }
+                    }
                 }
             }
             .padding()
         }
+    }
+
+    private var selectionActionBar: some View {
+        VStack(spacing: 10) {
+            Divider().opacity(0.2)
+            HStack(spacing: 12) {
+                Text("選択: \(selectedFilenames.count)")
+                    .font(.caption.weight(.semibold))
+                    .foregroundColor(.secondary)
+
+                Spacer()
+
+                Button {
+                    saveSelectedPhotosToLibrary()
+                } label: {
+                    Label("保存", systemImage: "square.and.arrow.down")
+                        .font(.caption.weight(.bold))
+                }
+                .disabled(selectedFilenames.isEmpty || isLoading)
+
+                Button(role: .destructive) {
+                    showDeleteConfirmation = true
+                } label: {
+                    Label("削除", systemImage: "trash")
+                        .font(.caption.weight(.bold))
+                }
+                .disabled(selectedFilenames.isEmpty || isLoading)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+        }
+        .background(.ultraThinMaterial)
     }
 
     private var backgroundGradient: some View {
@@ -123,6 +223,78 @@ struct PhotoGalleryView: View {
             } catch {
                 await MainActor.run {
                     isLoading = false
+                }
+            }
+        }
+    }
+
+    private func toggleSelection(_ filename: String) {
+        if selectedFilenames.contains(filename) {
+            selectedFilenames.remove(filename)
+        } else {
+            selectedFilenames.insert(filename)
+        }
+    }
+
+    private func saveSelectedPhotosToLibrary() {
+        #if canImport(UIKit)
+            let targets = Array(selectedFilenames)
+            guard !targets.isEmpty else { return }
+            isLoading = true
+
+            Task {
+                var saved = 0
+                var failed = 0
+
+                for filename in targets {
+                    do {
+                        let image = try await api.downloadPhoto(filename: filename)
+                        await MainActor.run {
+                            UIImageWriteToSavedPhotosAlbum(image, nil, nil, nil)
+                            saved += 1
+                        }
+                    } catch {
+                        failed += 1
+                    }
+                }
+
+                await MainActor.run {
+                    isLoading = false
+                    actionMessage = failed == 0
+                        ? "\(saved)枚を保存しました"
+                        : "保存: \(saved)枚 / 失敗: \(failed)枚"
+                    showActionAlert = true
+                }
+            }
+        #endif
+    }
+
+    private func deleteSelectedPhotos() {
+        let targets = Array(selectedFilenames)
+        guard !targets.isEmpty else { return }
+        isLoading = true
+
+        Task {
+            do {
+                let result = try await api.deletePhotos(filenames: targets)
+                await MainActor.run {
+                    isLoading = false
+
+                    photos.removeAll { result.deleted.contains($0) }
+                    selectedFilenames.subtract(result.deleted)
+
+                    if result.success {
+                        actionMessage = "削除しました: \(result.deleted.count)枚"
+                    } else {
+                        actionMessage = "削除できない項目があります\n削除: \(result.deleted.count) / 不正: \(result.invalid.count) / エラー: \(result.errors.count)"
+                    }
+                    showActionAlert = true
+                }
+            } catch {
+                await MainActor.run {
+                    isLoading = false
+                    actionMessage = error.localizedDescription
+                    showActionAlert = true
                 }
             }
         }
@@ -169,10 +341,16 @@ struct PhotoThumbnail: View {
 struct PhotoDetailView: View {
     let filename: String
     let serverIP: String
+    let onDeleted: (String) -> Void
     
     @Environment(\.dismiss) var dismiss
     @State private var image: UIImage?
     @State private var isLoading = true
+    @State private var showDeleteConfirmation: Bool = false
+    @State private var actionMessage: String?
+    @State private var showActionAlert: Bool = false
+    @State private var isDeleting: Bool = false
+    @State private var showEditor: Bool = false
     
     var body: some View {
         NavigationView {
@@ -198,10 +376,26 @@ struct PhotoDetailView: View {
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     if let image = image {
-                        Button {
-                            UIImageWriteToSavedPhotosAlbum(image, nil, nil, nil)
-                        } label: {
-                            Image(systemName: "square.and.arrow.down")
+                        HStack(spacing: 14) {
+                            Button {
+                                UIImageWriteToSavedPhotosAlbum(image, nil, nil, nil)
+                            } label: {
+                                Image(systemName: "square.and.arrow.down")
+                            }
+
+                            Button {
+                                showEditor = true
+                            } label: {
+                                Image(systemName: "slider.horizontal.3")
+                            }
+                            .disabled(isDeleting)
+
+                            Button(role: .destructive) {
+                                showDeleteConfirmation = true
+                            } label: {
+                                Image(systemName: "trash")
+                            }
+                            .disabled(isDeleting)
                         }
                     }
                 }
@@ -209,6 +403,28 @@ struct PhotoDetailView: View {
         }
         .task {
             await loadImage()
+        }
+        .fullScreenCover(isPresented: $showEditor) {
+            if let image = image {
+                PhotoEditorView(originalImage: image)
+            } else {
+                ProgressView()
+            }
+        }
+        .alert("確認", isPresented: $showDeleteConfirmation) {
+            Button("削除", role: .destructive) {
+                deletePhoto()
+            }
+            Button("キャンセル", role: .cancel) {}
+        } message: {
+            Text("この写真を削除しますか？")
+        }
+        .alert("結果", isPresented: $showActionAlert) {
+            Button("OK") {
+                actionMessage = nil
+            }
+        } message: {
+            Text(actionMessage ?? "")
         }
     }
     
@@ -223,6 +439,34 @@ struct PhotoDetailView: View {
         } catch {
             await MainActor.run {
                 isLoading = false
+            }
+        }
+    }
+
+    private func deletePhoto() {
+        isDeleting = true
+        let api = SimpleCameraAPI(baseURL: "http://\(serverIP):8001")
+        Task {
+            do {
+                let result = try await api.deletePhotos(filenames: [filename])
+                await MainActor.run {
+                    isDeleting = false
+                    if result.deleted.contains(filename) {
+                        onDeleted(filename)
+                        dismiss()
+                    } else {
+                        actionMessage = result.success
+                            ? "削除対象が見つかりませんでした"
+                            : "削除に失敗しました"
+                        showActionAlert = true
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    isDeleting = false
+                    actionMessage = error.localizedDescription
+                    showActionAlert = true
+                }
             }
         }
     }

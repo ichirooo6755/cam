@@ -40,10 +40,11 @@ logger = logging.getLogger(__name__)
 
 PHOTOS_DIR = '/home/pi/photos'
 SETTINGS_FILE = '/home/pi/camera_settings.json'
+SESSION_OVERRIDES_FILE = '/home/pi/camera_session_overrides.json'
 BRIGHTNESS_THRESHOLD = 30
 CHECK_INTERVAL = 0.25  # 250ms間隔でチェック（旧版の挙動に合わせる）
 CAPTURE_COOLDOWN = 0.25  # 最短撮影間隔
-SETTINGS_RELOAD_INTERVAL = 5.0
+SETTINGS_RELOAD_INTERVAL = 1.0
 MIN_CHANGE_AMOUNT = 5
 
 DEFAULT_SETTINGS = {
@@ -51,9 +52,12 @@ DEFAULT_SETTINGS = {
     'brightness_threshold': 30,
     'detection_interval': CHECK_INTERVAL,
     'check_interval': CHECK_INTERVAL,
+    'capture_cooldown': CAPTURE_COOLDOWN,
     'iso': 'auto',
     'shutter_speed': 'auto',
     'white_balance': 'auto',
+    'width': 1920,
+    'height': 1080,
     'enable_multiple_exposure': False,
     'enable_2in1_composition': False,
     'enable_timestamp': False,
@@ -87,6 +91,15 @@ def load_settings() -> dict:
                 settings.update(json.load(f))
     except Exception as e:
         logger.warning(f"Failed to load settings: {e}")
+
+    try:
+        if os.path.exists(SESSION_OVERRIDES_FILE):
+            with open(SESSION_OVERRIDES_FILE, 'r', encoding='utf-8') as f:
+                overrides = json.load(f)
+            if isinstance(overrides, dict):
+                settings.update(overrides)
+    except Exception as e:
+        logger.warning(f"Failed to load session overrides: {e}")
     return settings
 
 def _add_timestamp(image: Image.Image, timestamp: str) -> Image.Image:
@@ -230,19 +243,15 @@ def capture_photo(camera, settings: dict, composition_state: dict, detected_at: 
 
 def main():
     logger.info("Starting light detection camera service...")
-    
-    # カメラ初期化（低解像度センサーモード）
-    camera = Picamera2()
-    
-    # 設定：メイン撮影用 + 低解像度センサー用（Zero 2W軽量化）
-    config = camera.create_still_configuration(
-        main={"size": (1920, 1080)},
-        lores={"size": (160, 120)},  # 明るさ検知用（負荷軽減）
-    )
-    camera.configure(config)
-    camera.start()
-    
-    logger.info("Camera initialized in low-power mode")
+
+    try:
+        if os.path.exists(SESSION_OVERRIDES_FILE):
+            os.remove(SESSION_OVERRIDES_FILE)
+    except Exception as e:
+        logger.warning(f"Failed to clear session overrides on boot: {e}")
+
+    camera = None
+    current_main_size = None
     
     last_capture_time = 0
     last_settings_load = 0
@@ -251,6 +260,7 @@ def main():
     last_brightness = None
     detection_interval = CHECK_INTERVAL
     check_interval = CHECK_INTERVAL
+    capture_cooldown = CAPTURE_COOLDOWN
     composition_state = {'last_frame': None, 'last_frame_path': None}
     
     try:
@@ -258,7 +268,7 @@ def main():
             current_time = time.time()
             
             # クールダウン中はスキップ
-            if current_time - last_capture_time < CAPTURE_COOLDOWN:
+            if current_time - last_capture_time < capture_cooldown:
                 time.sleep(check_interval)
                 continue
             
@@ -272,9 +282,72 @@ def main():
                     check_interval = CHECK_INTERVAL
                 if check_interval <= 0:
                     check_interval = CHECK_INTERVAL
+
+                try:
+                    capture_cooldown = float(settings.get('capture_cooldown', CAPTURE_COOLDOWN))
+                except (TypeError, ValueError):
+                    capture_cooldown = CAPTURE_COOLDOWN
+                if capture_cooldown < 0:
+                    capture_cooldown = 0
+
+                monitoring_enabled = bool(settings.get('monitoring_enabled', True))
+                try:
+                    width = int(settings.get('width', 1920))
+                    height = int(settings.get('height', 1080))
+                    if width <= 0 or height <= 0:
+                        raise ValueError('invalid size')
+                except Exception:
+                    width = 1920
+                    height = 1080
+
+                desired_size = (width, height)
+
+                if not monitoring_enabled:
+                    if camera is not None:
+                        try:
+                            camera.stop()
+                        except Exception:
+                            pass
+                        try:
+                            camera.close()
+                        except Exception:
+                            pass
+                        camera = None
+                        current_main_size = None
+                        last_brightness = None
+                        composition_state = {'last_frame': None, 'last_frame_path': None}
+                else:
+                    if camera is None or current_main_size != desired_size:
+                        if camera is not None:
+                            try:
+                                camera.stop()
+                            except Exception:
+                                pass
+                            try:
+                                camera.close()
+                            except Exception:
+                                pass
+                            camera = None
+
+                        cam = Picamera2()
+                        config = cam.create_still_configuration(
+                            main={"size": desired_size},
+                            lores={"size": (160, 120)},
+                        )
+                        cam.configure(config)
+                        cam.start()
+                        camera = cam
+                        current_main_size = desired_size
+                        last_brightness = None
+                        composition_state = {'last_frame': None, 'last_frame_path': None}
+
                 last_settings_load = current_time
 
             if not settings.get('monitoring_enabled', True):
+                time.sleep(check_interval)
+                continue
+
+            if camera is None:
                 time.sleep(check_interval)
                 continue
 
@@ -319,8 +392,9 @@ def main():
     except KeyboardInterrupt:
         logger.info("Service stopped by user")
     finally:
-        camera.stop()
-        camera.close()
+        if camera is not None:
+            camera.stop()
+            camera.close()
 
 if __name__ == '__main__':
     main()

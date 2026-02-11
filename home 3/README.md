@@ -18,6 +18,8 @@ Raspberry Pi Zero 2 W + カメラモジュールを使った**光検知自動撮
 
 ### iOS アプリ
 - タブ1: 写真ギャラリー（自動撮影された写真一覧）
+  - 単体表示: 保存 / 削除 / 編集（フォトエディタ）
+  - 選択モード: 複数選択→一括保存 / 一括削除
 - タブ2: 設定（明るさ閾値調整、システム状態表示）
 
 ## デプロイ（Mac → Raspberry Pi）
@@ -46,10 +48,62 @@ bash ./update.sh 192.168.4.1
 
 ### 症状: iOSアプリのビルドが失敗する
 **原因**
-新規追加した Swift ファイル（PhotoGalleryView.swift / SettingsView.swift / SimpleCameraAPI.swift）が Xcode プロジェクトに未登録でした。
+新規追加した Swift ファイル（PhotoGalleryView.swift / SettingsView.swift / SimpleCameraAPI.swift / PhotoEditorView.swift）が Xcode プロジェクトに未登録でした。
 
 **解決策**
 `project.pbxproj` にファイル参照と Sources 追加を行い、ビルド成功を確認しました。
+
+### 症状: xcodebuild で "Unable to find a device matching the provided destination specifier" が出てビルドできない
+**原因**
+指定した Simulator（例: `name=iPhone 15`）がローカル環境に存在しないため。
+
+**解決策**
+以下のどちらかで回避できます。
+- `xcodebuild -list` で利用可能な destination を確認して指定
+- 汎用指定（推奨）: `-destination 'generic/platform=iOS Simulator'`
+
+### 症状: PhotoEditorView.swift のビルドが失敗する（radialGradient の radius 型エラー）
+**原因**
+`CIFilter.radialGradient()` の `radius0/radius1` が `Float` 型なのに対し、`CGFloat` を代入していました。
+
+**解決策**
+`Float(...)` へ明示キャストして型を揃えました。
+
+### 追加: iOSフォトギャラリーの複数選択（まとめて保存 / 削除）
+- 「選択」→写真を複数タップ→下部バーから **保存** / **削除** を実行
+- 保存は iOS の写真アプリへ書き込み、削除は Pi の写真削除API（`/api/photos/delete`）を呼びます
+
+### 追加: iOSフォトエディタ（Lightroom風）
+写真の単体表示画面で **編集アイコン**（スライダー）を押すと編集画面を開けます。
+
+できること:
+- 露出 / コントラスト / 彩度
+- ハイライト / シャドウ
+- 色温度 / モノクロ
+- トリミング（スライダーで範囲調整）
+- ラジアルマスク（簡易・局所露出）
+- リセット
+- 編集プリセットの保存 / 適用
+- 書き出し（写真アプリへ保存）
+
+注意:
+- 編集は非破壊で、Pi上の元画像ファイルは変更しません（書き出しはiOS側に新規保存です）
+
+### 追加: 写真削除API（/api/photos/delete）
+iOSアプリの単体削除 / 一括削除はこのAPIを使用します。
+
+```bash
+curl -X POST "http://192.168.4.1:8001/api/photos/delete" \
+  -H "Content-Type: application/json" \
+  -d '{"filenames":["photo_20260101_000000_000000.jpg","photo_20260101_000000_000001.jpg"]}'
+```
+
+### 症状: iOSアプリの赤い撮影ボタンを押すとレイアウトが崩れる / 画面からはみ出る
+**原因**
+撮影失敗時のエラーメッセージが長い場合、設定画面のScrollView内にそのまま表示していたため、コンテンツが押し出されて表示が崩れていました。
+
+**解決策**
+エラー表示を画面上部のオーバーレイバナーに変更し、表示高さを制限した上で閉じるボタンを追加しました。これにより長いエラーでも画面レイアウトが崩れません。
 
 ### 症状: /api/capture で撮影が失敗する（Device or resource busy）
 **原因**
@@ -71,15 +125,15 @@ bash ./update.sh 192.168.4.1
 - **1秒刻みで20秒まで追加**（1s〜20s）
 
 ### 変更: 画質(quality)の制御
-アプリの **QUALITY** ピッカーから画質を選択できます（Q60〜Q95）。
+アプリの **QUALITY** ピッカーから画質を選択できます（Q60〜Q100）。
 
 ### 変更: カメラ4モード（REACTION / QUALITY / STANDARD / BATTERY）
 Pi側は `camera_mode` を設定として保持し、モードに応じて以下を自動適用します。
 
-- **REACTION**: `quality=80`, `detection_interval=0.25`, `check_interval=0.25`（合成/タイムスタンプは自動OFF）
-- **QUALITY**: `quality=95`, `detection_interval=1.0`, `check_interval=0.25`
-- **STANDARD**: `quality=90`, `detection_interval=0.25`, `check_interval=0.25`
-- **BATTERY**: `quality=85`, `detection_interval=2.0`, `check_interval=1.0`（合成/タイムスタンプは自動OFF）
+- **REACTION**: `quality=80`, `size=1280x720`, `detection_interval=0.1`, `check_interval=0.1`, `capture_cooldown=0.1`（合成/タイムスタンプは自動OFF）
+- **QUALITY**: `quality=100`, `size=4056x3040`, `detection_interval=1.0`, `check_interval=0.25`, `capture_cooldown=0.25`
+- **STANDARD**: `quality=90`, `size=1920x1080`, `detection_interval=0.25`, `check_interval=0.25`, `capture_cooldown=0.25`
+- **BATTERY**: `quality=90`, `size=1920x1080`, `detection_interval=2.0`, `check_interval=1.0`, `capture_cooldown=0.0`, `monitoring_enabled=false`（合成/タイムスタンプは自動OFF）
 
 設定方法:
 - iOSアプリの **MODE** ピッカーから選択
@@ -89,6 +143,38 @@ curl -X POST "http://192.168.4.1:8001/api/settings" \
   -H "Content-Type: application/json" \
   -d '{"camera_mode":"reaction"}'
 ```
+
+### 追加: 一時設定（temporary / reset_temporary）
+iOSアプリからの設定変更のうち、ISO/シャッター/WB/画質/閾値/各種トグル等は **「一時変更」** として送信できます。
+一時変更は永続設定（`camera_settings.json`）を書き換えず、セッション用の上書きファイルへ保存されます。
+
+- 永続設定: `/home/pi/camera_settings.json`
+- 一時上書き: `/home/pi/camera_session_overrides.json`
+
+挙動:
+- `temporary=true` のリクエストは一時上書きファイルに保存され、`/api/settings` 取得時および `camera-service` の自動撮影に **上書き適用** されます
+- `camera_mode` は一時変更できません（`temporary=true` のときは無視されます）
+- `camera_mode` を変更すると、一時上書きは自動的にクリアされます
+- `reset_temporary=true` で一時上書きをリセットできます
+- `camera-service` 起動時にも一時上書きファイルは削除され、再起動でリセットされます
+
+API例:
+```bash
+BASE="http://192.168.4.1:8001"
+
+# 一時変更（例: ISO と 画質）
+curl -sS -X POST "$BASE/api/settings" \
+  -H "Content-Type: application/json" \
+  -d '{"iso":200,"quality":80,"temporary":true}'
+
+# 一時変更をリセット
+curl -sS -X POST "$BASE/api/settings" \
+  -H "Content-Type: application/json" \
+  -d '{"reset_temporary":true}'
+```
+
+iOSアプリ:
+- 設定画面の「一時変更をリセット」ボタンで `reset_temporary` を呼びます
 
 ### 症状: ライブラリの写真が重なって見える / 光検知から撮影まで遅い
 **原因**

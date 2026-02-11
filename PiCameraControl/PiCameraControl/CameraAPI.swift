@@ -113,7 +113,11 @@ actor CameraAPI {
     // MARK: - 設定更新
 
     /// 設定を更新（汎用）
-    func updateSettings(_ settings: [String: Any]) async throws {
+    func updateSettings(
+        _ settings: [String: Any],
+        temporary: Bool = false,
+        resetTemporary: Bool = false
+    ) async throws {
         guard let url = URL(string: "\(baseURL)/api/settings") else {
             throw CameraAPIError.invalidURL
         }
@@ -140,6 +144,14 @@ actor CameraAPI {
             }
         }
 
+        if temporary {
+            jsonDict["temporary"] = true
+        }
+
+        if resetTemporary {
+            jsonDict["reset_temporary"] = true
+        }
+
         request.httpBody = try JSONSerialization.data(withJSONObject: jsonDict)
 
         let (data, response) = try await session.data(for: request)
@@ -157,28 +169,40 @@ actor CameraAPI {
     }
 
     /// ISO感度を更新
-    func updateISO(_ iso: ISOValue) async throws {
-        try await updateSettings(["iso": iso])
+    func updateISO(_ iso: ISOValue, temporary: Bool = true) async throws {
+        try await updateSettings(["iso": iso], temporary: temporary)
     }
 
     /// シャッタースピードを更新
-    func updateShutterSpeed(_ shutterSpeed: ShutterSpeedValue) async throws {
-        try await updateSettings(["shutter_speed": shutterSpeed])
+    func updateShutterSpeed(_ shutterSpeed: ShutterSpeedValue, temporary: Bool = true) async throws {
+        try await updateSettings(["shutter_speed": shutterSpeed], temporary: temporary)
     }
 
     /// ホワイトバランスを更新
-    func updateWhiteBalance(_ wb: String) async throws {
-        try await updateSettings(["white_balance": wb])
+    func updateWhiteBalance(_ wb: String, temporary: Bool = true) async throws {
+        try await updateSettings(["white_balance": wb], temporary: temporary)
     }
 
     /// 検知閾値を更新
-    func updateDetectionThreshold(_ threshold: Int) async throws {
-        try await updateSettings(["detection_threshold": threshold])
+    func updateDetectionThreshold(_ threshold: Int, temporary: Bool = true) async throws {
+        try await updateSettings(["detection_threshold": threshold], temporary: temporary)
     }
 
     /// 画質を更新
-    func updateQuality(_ quality: Int) async throws {
-        try await updateSettings(["quality": quality])
+    func updateQuality(_ quality: Int, temporary: Bool = true) async throws {
+        try await updateSettings(["quality": quality], temporary: temporary)
+    }
+
+    func updateDetectionInterval(_ interval: Double, temporary: Bool = true) async throws {
+        try await updateSettings(["detection_interval": interval], temporary: temporary)
+    }
+
+    func updateCheckInterval(_ interval: Double, temporary: Bool = true) async throws {
+        try await updateSettings(["check_interval": interval], temporary: temporary)
+    }
+
+    func updateCaptureCooldown(_ cooldown: Double, temporary: Bool = true) async throws {
+        try await updateSettings(["capture_cooldown": cooldown], temporary: temporary)
     }
 
     func updateCameraMode(_ mode: CameraModeOption) async throws {
@@ -186,19 +210,26 @@ actor CameraAPI {
     }
 
     /// 光検知の有効/無効を更新
-    func updateMonitoringEnabled(_ enabled: Bool) async throws {
-        try await updateSettings(["monitoring_enabled": enabled])
+    func updateMonitoringEnabled(_ enabled: Bool, temporary: Bool = true) async throws {
+        try await updateSettings(["monitoring_enabled": enabled], temporary: temporary)
     }
 
     /// トグル設定を更新
     func updateToggleSettings(
-        multipleExposure: Bool? = nil, composition2in1: Bool? = nil, timestamp: Bool? = nil
+        multipleExposure: Bool? = nil,
+        composition2in1: Bool? = nil,
+        timestamp: Bool? = nil,
+        temporary: Bool = true
     ) async throws {
         var settings: [String: Any] = [:]
         if let me = multipleExposure { settings["enable_multiple_exposure"] = me }
         if let c2 = composition2in1 { settings["enable_2in1_composition"] = c2 }
         if let ts = timestamp { settings["enable_timestamp"] = ts }
-        try await updateSettings(settings)
+        try await updateSettings(settings, temporary: temporary)
+    }
+
+    func resetTemporarySettings() async throws {
+        try await updateSettings([:], resetTemporary: true)
     }
 
     // MARK: - 撮影
@@ -216,13 +247,23 @@ actor CameraAPI {
 
         let (data, response) = try await session.data(for: request)
 
-        guard let httpResponse = response as? HTTPURLResponse,
-            httpResponse.statusCode == 200
-        else {
+        guard let httpResponse = response as? HTTPURLResponse else {
             throw CameraAPIError.serverError
         }
 
-        let result = try JSONDecoder().decode(CaptureResponse.self, from: data)
+        let decoder = JSONDecoder()
+        let decodedResult = try? decoder.decode(CaptureResponse.self, from: data)
+
+        if httpResponse.statusCode != 200 {
+            if let decodedResult, let error = decodedResult.error {
+                throw CameraAPIError.captureFailed(error)
+            }
+            throw CameraAPIError.serverError
+        }
+
+        guard let result = decodedResult else {
+            throw CameraAPIError.serverError
+        }
 
         guard result.success, let filename = result.filename else {
             throw CameraAPIError.captureFailed(result.error ?? "Unknown error")

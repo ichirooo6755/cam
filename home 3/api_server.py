@@ -10,6 +10,7 @@ import logging
 import subprocess
 import time
 import threading
+import re
 
 import wifi_manager
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -20,6 +21,9 @@ logger = logging.getLogger(__name__)
 
 PHOTOS_DIR = '/home/pi/photos'
 SETTINGS_FILE = '/home/pi/camera_settings.json'
+SESSION_OVERRIDES_FILE = '/home/pi/camera_session_overrides.json'
+SAFE_FILENAME_PATTERN = re.compile(r'^[A-Za-z0-9._-]+$')
+ALLOWED_PHOTO_EXTENSIONS = ('.jpg', '.jpeg', '.png')
 DEFAULT_SETTINGS = {
     'camera_mode': 'standard',
     'brightness_threshold': 30,
@@ -43,26 +47,42 @@ DEFAULT_SETTINGS = {
 CAMERA_MODE_PRESETS = {
     'reaction': {
         'quality': 80,
-        'detection_interval': 0.25,
-        'check_interval': 0.25,
+        'width': 1280,
+        'height': 720,
+        'detection_interval': 0.1,
+        'check_interval': 0.1,
+        'capture_cooldown': 0.1,
+        'monitoring_enabled': True,
         'enable_multiple_exposure': False,
         'enable_2in1_composition': False,
         'enable_timestamp': False,
     },
     'quality': {
-        'quality': 95,
+        'quality': 100,
+        'width': 4056,
+        'height': 3040,
         'detection_interval': 1.0,
         'check_interval': 0.25,
+        'capture_cooldown': 0.25,
+        'monitoring_enabled': True,
     },
     'standard': {
         'quality': 90,
+        'width': 1920,
+        'height': 1080,
         'detection_interval': 0.25,
         'check_interval': 0.25,
+        'capture_cooldown': 0.25,
+        'monitoring_enabled': True,
     },
     'battery': {
-        'quality': 85,
+        'quality': 90,
+        'width': 1920,
+        'height': 1080,
         'detection_interval': 2.0,
         'check_interval': 1.0,
+        'capture_cooldown': 0.0,
+        'monitoring_enabled': False,
         'enable_multiple_exposure': False,
         'enable_2in1_composition': False,
         'enable_timestamp': False,
@@ -99,6 +119,8 @@ class APIHandler(BaseHTTPRequestHandler):
             self.update_settings()
         elif parsed.path == '/api/photo':
             self.serve_photo_request()
+        elif parsed.path == '/api/photos/delete':
+            self.delete_photos()
         elif parsed.path == '/api/capture':
             self.capture_photo()
         elif parsed.path == '/api/wifi/write_wpa':
@@ -211,6 +233,80 @@ class APIHandler(BaseHTTPRequestHandler):
             logger.error(f"Error serving photo (POST): {e}")
             self.send_error(500)
     
+    def delete_photos(self):
+        try:
+            content_length = int(self.headers.get('Content-Length', 0))
+            body = self.rfile.read(content_length).decode()
+            data = json.loads(body) if body else {}
+
+            filenames = []
+            if isinstance(data.get('filenames'), list):
+                filenames = data.get('filenames')
+            elif isinstance(data.get('filename'), str):
+                filenames = [data.get('filename')]
+
+            if not filenames:
+                self.send_response(400)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({'success': False, 'error': 'filename(s) required'}).encode())
+                return
+
+            deleted = []
+            not_found = []
+            invalid = []
+            errors = []
+
+            for name in filenames:
+                if not isinstance(name, str):
+                    invalid.append(str(name))
+                    continue
+
+                safe_name = os.path.basename(name)
+                if safe_name != name:
+                    invalid.append(name)
+                    continue
+
+                lower = safe_name.lower()
+                if not lower.endswith(ALLOWED_PHOTO_EXTENSIONS):
+                    invalid.append(name)
+                    continue
+
+                if SAFE_FILENAME_PATTERN.match(safe_name) is None:
+                    invalid.append(name)
+                    continue
+
+                filepath = os.path.join(PHOTOS_DIR, safe_name)
+                if not os.path.exists(filepath):
+                    not_found.append(safe_name)
+                    continue
+
+                try:
+                    os.remove(filepath)
+                    deleted.append(safe_name)
+                except Exception as e:
+                    errors.append({'filename': safe_name, 'error': str(e)})
+
+            success = len(invalid) == 0 and len(errors) == 0
+
+            self.send_response(200 if success else 400)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            self.wfile.write(
+                json.dumps({
+                    'success': success,
+                    'deleted': deleted,
+                    'not_found': not_found,
+                    'invalid': invalid,
+                    'errors': errors,
+                }).encode())
+        except Exception as e:
+            logger.error(f"Error deleting photos: {e}")
+            self.send_response(500)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({'success': False, 'error': str(e)}).encode())
+    
     def serve_status(self):
         """システム状態を返す"""
         try:
@@ -222,6 +318,15 @@ class APIHandler(BaseHTTPRequestHandler):
             if os.path.exists(SETTINGS_FILE):
                 with open(SETTINGS_FILE, 'r') as f:
                     settings.update(json.load(f))
+
+            if os.path.exists(SESSION_OVERRIDES_FILE):
+                try:
+                    with open(SESSION_OVERRIDES_FILE, 'r') as f:
+                        overrides = json.load(f)
+                    if isinstance(overrides, dict):
+                        settings.update(overrides)
+                except Exception as e:
+                    logger.warning(f"Failed to load session overrides: {e}")
 
             if 'detection_threshold' in settings and 'brightness_threshold' not in settings:
                 settings['brightness_threshold'] = settings['detection_threshold']
@@ -248,6 +353,15 @@ class APIHandler(BaseHTTPRequestHandler):
                 with open(SETTINGS_FILE, 'r') as f:
                     settings.update(json.load(f))
 
+            if os.path.exists(SESSION_OVERRIDES_FILE):
+                try:
+                    with open(SESSION_OVERRIDES_FILE, 'r') as f:
+                        overrides = json.load(f)
+                    if isinstance(overrides, dict):
+                        settings.update(overrides)
+                except Exception as e:
+                    logger.warning(f"Failed to load session overrides: {e}")
+
             if 'detection_threshold' in settings and 'brightness_threshold' not in settings:
                 settings['brightness_threshold'] = settings['detection_threshold']
             if 'brightness_threshold' in settings and 'detection_threshold' not in settings:
@@ -267,6 +381,16 @@ class APIHandler(BaseHTTPRequestHandler):
             content_length = int(self.headers.get('Content-Length', 0))
             body = self.rfile.read(content_length).decode()
             new_settings = json.loads(body)
+
+            is_temporary = bool(new_settings.pop('temporary', False))
+            reset_temporary = bool(new_settings.pop('reset_temporary', False))
+
+            if reset_temporary:
+                try:
+                    if os.path.exists(SESSION_OVERRIDES_FILE):
+                        os.remove(SESSION_OVERRIDES_FILE)
+                except Exception as e:
+                    logger.warning(f"Failed to reset session overrides: {e}")
             
             settings = DEFAULT_SETTINGS.copy()
             if os.path.exists(SETTINGS_FILE):
@@ -278,6 +402,31 @@ class APIHandler(BaseHTTPRequestHandler):
             if 'brightness_threshold' in new_settings and 'detection_threshold' not in new_settings:
                 new_settings['detection_threshold'] = new_settings['brightness_threshold']
 
+            if is_temporary:
+                new_settings.pop('camera_mode', None)
+
+                overrides = {}
+                if os.path.exists(SESSION_OVERRIDES_FILE):
+                    try:
+                        with open(SESSION_OVERRIDES_FILE, 'r') as f:
+                            overrides = json.load(f) or {}
+                    except Exception:
+                        overrides = {}
+
+                if not isinstance(overrides, dict):
+                    overrides = {}
+
+                overrides.update(new_settings)
+
+                with open(SESSION_OVERRIDES_FILE, 'w') as f:
+                    json.dump(overrides, f, indent=2)
+
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({'success': True}).encode())
+                return
+
             camera_mode = new_settings.get('camera_mode')
             if camera_mode is not None:
                 preset = CAMERA_MODE_PRESETS.get(camera_mode)
@@ -285,6 +434,12 @@ class APIHandler(BaseHTTPRequestHandler):
                     new_settings.pop('camera_mode', None)
                 else:
                     new_settings.update(preset)
+
+                    try:
+                        if os.path.exists(SESSION_OVERRIDES_FILE):
+                            os.remove(SESSION_OVERRIDES_FILE)
+                    except Exception as e:
+                        logger.warning(f"Failed to clear session overrides on mode change: {e}")
             
             settings.update(new_settings)
             
@@ -430,34 +585,57 @@ class APIHandler(BaseHTTPRequestHandler):
                 with open(SETTINGS_FILE, 'r') as f:
                     settings.update(json.load(f))
 
-            stop_result = subprocess.run(
-                ['sudo', '-n', 'systemctl', 'stop', 'camera-service'],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            if stop_result.returncode != 0:
-                response = {
-                    'success': False,
-                    'error': 'failed to stop camera-service (sudo required)'
-                }
-                self.send_response(500)
-                self.send_header('Content-Type', 'application/json')
-                self.end_headers()
-                self.wfile.write(json.dumps(response).encode())
-                return
+            if os.path.exists(SESSION_OVERRIDES_FILE):
+                try:
+                    with open(SESSION_OVERRIDES_FILE, 'r') as f:
+                        overrides = json.load(f)
+                    if isinstance(overrides, dict):
+                        settings.update(overrides)
+                except Exception as e:
+                    logger.warning(f"Failed to load session overrides (capture): {e}")
 
-            service_stopped = True
-            for _ in range(10):
-                status = subprocess.run(
-                    ['systemctl', 'is-active', 'camera-service'],
+            monitoring_enabled = bool(settings.get('monitoring_enabled', True))
+
+            width = settings.get('width', 1920)
+            height = settings.get('height', 1080)
+            try:
+                width = int(width)
+                height = int(height)
+                if width <= 0 or height <= 0:
+                    raise ValueError('invalid size')
+            except Exception:
+                width = 1920
+                height = 1080
+
+            if monitoring_enabled:
+                stop_result = subprocess.run(
+                    ['sudo', '-n', 'systemctl', 'stop', 'camera-service'],
                     capture_output=True,
                     text=True,
                     check=False,
                 )
-                if status.stdout.strip() in ('inactive', 'failed', 'deactivating'):
-                    break
-                time.sleep(0.3)
+                if stop_result.returncode != 0:
+                    response = {
+                        'success': False,
+                        'error': 'failed to stop camera-service (sudo required)'
+                    }
+                    self.send_response(500)
+                    self.send_header('Content-Type', 'application/json')
+                    self.end_headers()
+                    self.wfile.write(json.dumps(response).encode())
+                    return
+
+                service_stopped = True
+                for _ in range(10):
+                    status = subprocess.run(
+                        ['systemctl', 'is-active', 'camera-service'],
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                    )
+                    if status.stdout.strip() in ('inactive', 'failed', 'deactivating'):
+                        break
+                    time.sleep(0.3)
 
             timestamp = f"{time.time():.6f}"
             filename = f"manual_{timestamp}.jpg"
@@ -466,8 +644,8 @@ class APIHandler(BaseHTTPRequestHandler):
             cmd = [
                 'libcamera-still',
                 '-o', photo_path,
-                '--width', '1920',
-                '--height', '1080',
+                '--width', str(width),
+                '--height', str(height),
                 '--quality', str(settings.get('quality', 90)),
                 '--timeout', '1000',
                 '--nopreview'
@@ -566,6 +744,12 @@ def restore_wifi_mode_on_boot():
 
 def main():
     os.makedirs(PHOTOS_DIR, exist_ok=True)
+
+    try:
+        if os.path.exists(SESSION_OVERRIDES_FILE):
+            os.remove(SESSION_OVERRIDES_FILE)
+    except Exception as e:
+        logger.warning(f"Failed to clear session overrides on boot: {e}")
 
     restore_wifi_mode_on_boot()
     

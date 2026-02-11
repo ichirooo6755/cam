@@ -82,6 +82,39 @@ actor SimpleCameraAPI {
         
         return image
     }
+
+    func deletePhotos(filenames: [String]) async throws -> DeletePhotosResponse {
+        let safeFilenames = filenames.compactMap { sanitizeFilename($0) }
+        guard !safeFilenames.isEmpty else {
+            throw APIError.invalidFilename
+        }
+
+        guard let url = URL(string: "\(baseURL)/api/photos/delete") else {
+            throw APIError.invalidURL
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["filenames": safeFilenames])
+
+        let (data, response) = try await session.data(for: request)
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw APIError.serverError
+        }
+
+        let decoder = JSONDecoder()
+        guard let decoded = try? decoder.decode(DeletePhotosResponse.self, from: data) else {
+            throw APIError.serverError
+        }
+
+        if httpResponse.statusCode == 200 || httpResponse.statusCode == 400 {
+            return decoded
+        }
+
+        throw APIError.serverError
+    }
     
     /// システム状態を取得
     func fetchStatus() async throws -> SystemStatus {
@@ -140,6 +173,27 @@ struct SystemStatus: Codable {
 
 struct SimpleResponse: Codable {
     let success: Bool
+}
+
+struct DeletePhotosResponse: Codable {
+    let success: Bool
+    let deleted: [String]
+    let notFound: [String]
+    let invalid: [String]
+    let errors: [DeletePhotoError]
+
+    enum CodingKeys: String, CodingKey {
+        case success
+        case deleted
+        case notFound = "not_found"
+        case invalid
+        case errors
+    }
+}
+
+struct DeletePhotoError: Codable {
+    let filename: String
+    let error: String
 }
 
 enum APIError: LocalizedError {

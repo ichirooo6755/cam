@@ -12,6 +12,7 @@
 		E0000001000000000000000E /* CameraAPI.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0000001000000000000000F /* CameraAPI.swift */; };
 		E00000010000000000000010 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = E00000010000000000000011 /* Models.swift */; };
 		E00000010000000000000024 /* PhotoGalleryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E00000010000000000000025 /* PhotoGalleryView.swift */; };
+		E0000001000000000000002A /* PhotoEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0000001000000000000002B /* PhotoEditorView.swift */; };
 		E00000010000000000000026 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E00000010000000000000027 /* SettingsView.swift */; };
 		E00000010000000000000028 /* SimpleCameraAPI.swift in Sources */ = {isa = PBXBuildFile; fileRef = E00000010000000000000029 /* SimpleCameraAPI.swift */; };
 		E00000010000000000000012 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = E00000010000000000000013 /* Assets.xcassets */; };
@@ -23,6 +24,7 @@
 		E0000001000000000000000F /* CameraAPI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraAPI.swift; sourceTree = "<group>"; };
 		E00000010000000000000011 /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
 		E00000010000000000000025 /* PhotoGalleryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoGalleryView.swift; sourceTree = "<group>"; };
+		E0000001000000000000002B /* PhotoEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoEditorView.swift; sourceTree = "<group>"; };
 		E00000010000000000000027 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		E00000010000000000000029 /* SimpleCameraAPI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimpleCameraAPI.swift; sourceTree = "<group>"; };
 		E00000010000000000000013 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -48,6 +50,7 @@
 				E0000001000000000000000F /* CameraAPI.swift */,
 				E00000010000000000000011 /* Models.swift */,
 				E00000010000000000000025 /* PhotoGalleryView.swift */,
+				E0000001000000000000002B /* PhotoEditorView.swift */,
 				E00000010000000000000027 /* SettingsView.swift */,
 				E00000010000000000000029 /* SimpleCameraAPI.swift */,
 				E00000010000000000000013 /* Assets.xcassets */,
@@ -146,6 +149,7 @@
 				E0000001000000000000000E /* CameraAPI.swift in Sources */,
 				E00000010000000000000010 /* Models.swift in Sources */,
 				E00000010000000000000024 /* PhotoGalleryView.swift in Sources */,
+				E0000001000000000000002A /* PhotoEditorView.swift in Sources */,
 				E00000010000000000000026 /* SettingsView.swift in Sources */,
 				E00000010000000000000028 /* SimpleCameraAPI.swift in Sources */,
 			);
