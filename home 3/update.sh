@@ -31,19 +31,8 @@ echo "Transffering Python scripts..."
 scp "${SSH_OPTS[@]}" wifi_manager.py pi@$RASPI_HOST:/home/pi/
 scp "${SSH_OPTS[@]}" camera_service.py pi@$RASPI_HOST:/home/pi/
 scp "${SSH_OPTS[@]}" api_server.py pi@$RASPI_HOST:/home/pi/
-scp "${SSH_OPTS[@]}" camera_control.py pi@$RASPI_HOST:/home/pi/
-scp "${SSH_OPTS[@]}" shutter_trigger.py pi@$RASPI_HOST:/home/pi/
-scp "${SSH_OPTS[@]}" light_detection_algorithm.py pi@$RASPI_HOST:/home/pi/
-scp "${SSH_OPTS[@]}" server.py pi@$RASPI_HOST:/home/pi/
-scp "${SSH_OPTS[@]}" camera-control.service pi@$RASPI_HOST:/home/pi/
 scp "${SSH_OPTS[@]}" camera-service.service pi@$RASPI_HOST:/home/pi/
 scp "${SSH_OPTS[@]}" api-server.service pi@$RASPI_HOST:/home/pi/
-
-# Webファイルの転送
-echo "Transffering Web files..."
-scp "${SSH_OPTS[@]}" index.html pi@$RASPI_HOST:/home/pi/
-scp "${SSH_OPTS[@]}" gallery.html pi@$RASPI_HOST:/home/pi/
-scp "${SSH_OPTS[@]}" style.css pi@$RASPI_HOST:/home/pi/
 
 # READMEの転送（オプション）
 scp "${SSH_OPTS[@]}" README.md pi@$RASPI_HOST:/home/pi/
@@ -52,6 +41,6 @@ echo "Transfer complete."
 echo "Restarting services..."
 
 # サービスの再起動
-ssh "${SSH_OPTS[@]}" -tt pi@$RASPI_HOST "sudo -n sh -c 'echo 1 > /run/picamera_boot_network_applied'; if [ \$? -ne 0 ]; then echo 'Skip restart: sudo -n is not permitted'; exit 0; fi; if [ -f /home/pi/camera-service.service ]; then sudo -n install -m 644 /home/pi/camera-service.service /etc/systemd/system/camera-service.service; fi; if [ -f /home/pi/api-server.service ]; then sudo -n install -m 644 /home/pi/api-server.service /etc/systemd/system/api-server.service; fi; sudo -n systemctl daemon-reload; sudo -n systemctl stop camera-control 2>/dev/null; sudo -n systemctl disable camera-control 2>/dev/null; sudo systemctl restart camera-service api-server"
+ssh "${SSH_OPTS[@]}" -tt pi@$RASPI_HOST "sudo -n sh -c 'echo 1 > /run/picamera_boot_network_applied'; if [ \$? -ne 0 ]; then echo 'Skip restart: sudo -n is not permitted'; exit 0; fi; sudo -n systemctl stop camera-control 2>/dev/null; sudo -n systemctl disable camera-control 2>/dev/null; sudo -n systemctl stop shutter-trigger 2>/dev/null; sudo -n systemctl disable shutter-trigger 2>/dev/null; sudo -n systemctl stop photo-server 2>/dev/null; sudo -n systemctl disable photo-server 2>/dev/null; sudo -n rm -f /etc/systemd/system/camera-control.service /etc/systemd/system/shutter-trigger.service /etc/systemd/system/photo-server.service 2>/dev/null || true; sudo -n rm -f /home/pi/camera_control.py /home/pi/shutter_trigger.py /home/pi/light_detection_algorithm.py /home/pi/server.py /home/pi/index.html /home/pi/gallery.html /home/pi/style.css 2>/dev/null || true; if [ -f /home/pi/camera-service.service ]; then sudo -n install -m 644 /home/pi/camera-service.service /etc/systemd/system/camera-service.service; fi; if [ -f /home/pi/api-server.service ]; then sudo -n install -m 644 /home/pi/api-server.service /etc/systemd/system/api-server.service; fi; sudo -n systemctl daemon-reload; sudo -n systemctl enable camera-service api-server 2>/dev/null || true; sudo -n systemctl restart camera-service api-server"
 
 echo "Update finished successfully!"

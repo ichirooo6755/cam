@@ -288,6 +288,18 @@ def _run_wpa_cli(args, iface=None, timeout=20):
     sudo_res = _run(sudo_cmd, timeout=timeout)
     return sudo_res
 
+def _run_wpa_cli_readonly(args, iface=None, timeout=10):
+    iface = iface or _detect_wifi_interface()
+    ctrl_dir = _detect_wpa_ctrl_dir()
+
+    base_cmd = ['wpa_cli', '-p', ctrl_dir, '-i', iface] + list(args)
+    res = _run(base_cmd, timeout=timeout)
+    if res['returncode'] == 0 and res['stdout'] and 'FAIL' not in res['stdout']:
+        return res
+
+    sudo_cmd = ['sudo', '-n'] + base_cmd
+    return _run(sudo_cmd, timeout=timeout)
+
 def configure_wpa_supplicant(ssid, psk):
     valid, message = _validate_wifi_credentials(ssid, psk)
     if not valid:
@@ -306,25 +318,29 @@ def check_tethering_connection(timeout=15):
     テザリングモードで実際に接続できているか確認
     Returns: True if connected, False otherwise
     """
-    import time
     start_time = time.time()
+    iface = _detect_wifi_interface()
     
     while time.time() - start_time < timeout:
         try:
-            # SSIDが取得できるか確認
-            result = subprocess.run(
-                ['iwgetid', '-r'],
-                capture_output=True, text=True, timeout=5
-            )
-            if result.returncode == 0 and result.stdout.strip():
-                ssid = result.stdout.strip()
-                logger.info(f"Connected to SSID: {ssid}")
-                
-                # IPアドレスが取得できているか確認（APの192.168.4.x以外）
-                ip = _get_primary_ip()
-                if ip and not ip.startswith('192.168.4.') and not ip.startswith('10.42.0.'):
-                    logger.info(f"Tethering connection confirmed: IP={ip}")
-                    return True
+            status = _run_wpa_cli(['status'], iface=iface, timeout=10)
+            if status['returncode'] == 0 and status['stdout']:
+                fields = {}
+                for line in status['stdout'].splitlines():
+                    if '=' not in line:
+                        continue
+                    key, value = line.split('=', 1)
+                    fields[key.strip()] = value.strip()
+
+                ssid = fields.get('ssid')
+                state = fields.get('wpa_state')
+                if state == 'COMPLETED' and ssid:
+                    logger.info(f"Connected to SSID: {ssid}")
+
+                    ip = _get_primary_ip()
+                    if ip and not ip.startswith('192.168.4.') and not ip.startswith('10.42.0.'):
+                        logger.info(f"Tethering connection confirmed: IP={ip}")
+                        return True
         except Exception as e:
             logger.debug(f"Connection check error: {e}")
         
@@ -379,20 +395,23 @@ def get_wifi_status():
             status['ip_address'] = ips[0]
             status['ip'] = ips[0]
         
-        # 接続中のSSIDを取得
-        result = subprocess.run(
-            ['iwgetid', '-r'],
-            capture_output=True, text=True
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            status['ssid'] = result.stdout.strip()
-        elif mode == 'ap':
-            # APモードの場合は保存されているSSIDを返す
+        if mode == 'ap':
             ap_settings = get_saved_ap_settings()
             status['ssid'] = ap_settings.get('ssid', 'PiCamera')
-            # APモード時は固定IPが取れないケースに備えて既定値を返す
             status['ip'] = status['ip'] or AP_IP
             status['ip_address'] = status['ip_address'] or AP_IP
+        else:
+            wpa_status = _run_wpa_cli_readonly(['status'], timeout=10)
+            if wpa_status['returncode'] == 0 and wpa_status['stdout']:
+                fields = {}
+                for line in wpa_status['stdout'].splitlines():
+                    if '=' not in line:
+                        continue
+                    key, value = line.split('=', 1)
+                    fields[key.strip()] = value.strip()
+
+                if fields.get('wpa_state') == 'COMPLETED':
+                    status['ssid'] = fields.get('ssid')
                 
     except Exception as e:
         logger.error(f"Failed to get Wi-Fi status: {e}")
@@ -425,6 +444,8 @@ def switch_to_ap_mode(ssid='PiCamera', password='picamera123'):
 
         _run(['sudo', '-n', 'systemctl', 'stop', 'hostapd'])
         _run(['sudo', '-n', 'systemctl', 'stop', 'dnsmasq'])
+        _run(['sudo', '-n', 'systemctl', 'stop', 'dhcpcd'])
+        time.sleep(1)
 
         ok, nm_err = _ensure_networkmanager_running()
         if not ok:
@@ -531,6 +552,19 @@ def switch_to_tethering_mode():
 
         _run(['sudo', '-n', 'dhcpcd', '-n', iface])
         time.sleep(2)
+
+        connected = check_tethering_connection(timeout=30)
+        if not connected:
+            ap_settings = get_saved_ap_settings()
+            fallback = switch_to_ap_mode(ap_settings.get('ssid'), ap_settings.get('password'))
+            ip = fallback.get('ip') or fallback.get('ip_address')
+            return {
+                'success': False,
+                'message': 'テザリング接続に失敗したためAPモードに戻しました',
+                'fallback': fallback,
+                'ip': ip,
+                'ip_address': ip,
+            }
 
         _save_wifi_settings('tethering', None, None)
         ip = _get_primary_ip()

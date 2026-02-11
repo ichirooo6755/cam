@@ -22,6 +22,13 @@ sudo systemctl stop camera-control 2>/dev/null || true
 sudo systemctl stop shutter-trigger 2>/dev/null || true
 sudo systemctl stop photo-server 2>/dev/null || true
 
+# 古いサービスを無効化＆ユニット/旧ファイルを削除（存在する場合）
+sudo systemctl disable camera-control 2>/dev/null || true
+sudo systemctl disable shutter-trigger 2>/dev/null || true
+sudo systemctl disable photo-server 2>/dev/null || true
+sudo rm -f /etc/systemd/system/camera-control.service /etc/systemd/system/shutter-trigger.service /etc/systemd/system/photo-server.service 2>/dev/null || true
+rm -f /home/pi/camera_control.py /home/pi/shutter_trigger.py /home/pi/light_detection_algorithm.py /home/pi/server.py /home/pi/index.html /home/pi/gallery.html /home/pi/style.css 2>/dev/null || true
+
 # 新しいサービスをインストール
 sudo cp /home/pi/camera-service.service /etc/systemd/system/
 sudo cp /home/pi/api-server.service /etc/systemd/system/
