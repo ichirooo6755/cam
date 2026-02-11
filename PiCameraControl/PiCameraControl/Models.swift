@@ -2,6 +2,7 @@ import Foundation
 
 /// カメラ設定のデータモデル（全設定）
 struct CameraSettings: Codable {
+    var cameraMode: String
     var iso: ISOValue
     var shutterSpeed: ShutterSpeedValue
     var whiteBalance: String
@@ -18,6 +19,7 @@ struct CameraSettings: Codable {
     var enableTimestamp: Bool
 
     enum CodingKeys: String, CodingKey {
+        case cameraMode = "camera_mode"
         case iso
         case shutterSpeed = "shutter_speed"
         case whiteBalance = "white_balance"
@@ -32,6 +34,7 @@ struct CameraSettings: Codable {
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        cameraMode = try container.decodeIfPresent(String.self, forKey: .cameraMode) ?? "standard"
         iso = try container.decode(ISOValue.self, forKey: .iso)
         shutterSpeed = try container.decode(ShutterSpeedValue.self, forKey: .shutterSpeed)
         whiteBalance = try container.decodeIfPresent(String.self, forKey: .whiteBalance) ?? "auto"
@@ -185,6 +188,28 @@ struct WiFiSwitchResponse: Codable {
 
 protocol Labelable {
     var label: String { get }
+}
+
+enum CameraModeOption: String, CaseIterable, Identifiable, Hashable, Labelable {
+    case reaction
+    case quality
+    case standard
+    case battery
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .reaction: return "REACTION"
+        case .quality: return "QUALITY"
+        case .standard: return "STANDARD"
+        case .battery: return "BATTERY"
+        }
+    }
+
+    static func from(_ value: String) -> CameraModeOption {
+        return allCases.first { $0.rawValue == value } ?? .standard
+    }
 }
 
 // MARK: - ISO選択肢

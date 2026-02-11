@@ -51,6 +51,45 @@ def has_nmcli():
     """Check if nmcli is available"""
     return shutil.which('nmcli') is not None
 
+def _is_networkmanager_running():
+    if not has_nmcli():
+        return False
+
+    try:
+        res = _run(['systemctl', 'is-active', 'NetworkManager'], timeout=10)
+        if res['stdout'].strip() == 'active':
+            return True
+    except Exception:
+        pass
+
+    try:
+        res = _run(['nmcli', 'general', 'status'], timeout=10)
+        if res['returncode'] == 0 and res['stdout']:
+            return True
+    except Exception:
+        pass
+
+    return False
+
+def _ensure_networkmanager_running(timeout=15):
+    if not has_nmcli():
+        return False, 'nmcli (NetworkManager) が見つかりません'
+
+    if _is_networkmanager_running():
+        return True, None
+
+    start_res = _run(['sudo', '-n', 'systemctl', 'start', 'NetworkManager'], timeout=20)
+    if start_res['returncode'] != 0:
+        return False, f"NetworkManager start failed: {start_res['stderr'] or start_res['stdout']}"
+
+    start_time = time.time()
+    while time.time() - start_time < timeout:
+        if _is_networkmanager_running():
+            return True, None
+        time.sleep(1)
+
+    return False, 'NetworkManager が起動しませんでした'
+
 def _detect_wifi_interface():
     try:
         res = _run(['iw', 'dev'])
@@ -299,7 +338,7 @@ def get_current_mode():
     現在のWi-Fiモードを取得する
     Returns: 'ap' or 'tethering'
     """
-    if has_nmcli():
+    if _is_networkmanager_running():
         try:
             result = subprocess.run(
                 ['nmcli', '-t', '-f', 'NAME,TYPE', 'connection', 'show', '--active'],
@@ -380,41 +419,59 @@ def switch_to_ap_mode(ssid='PiCamera', password='picamera123'):
         password = password or saved.get('password', _get_default_ap_password())
 
         logger.info(f"Switching to AP mode with nmcli: SSID={ssid}")
-        
+
         if len(password) < 8:
             return {'success': False, 'message': 'パスワードは8文字以上必要です'}
-        
+
+        _run(['sudo', '-n', 'systemctl', 'stop', 'hostapd'])
+        _run(['sudo', '-n', 'systemctl', 'stop', 'dnsmasq'])
+
+        ok, nm_err = _ensure_networkmanager_running()
+        if not ok:
+            return {'success': False, 'message': f'Hotspot起動に失敗: {nm_err}'}
+
+        iface = _detect_wifi_interface()
+
         # Safe teardown with delays
-        subprocess.run(['sudo', 'nmcli', 'connection', 'down', 'Hotspot'], capture_output=True)
+        _run(['sudo', '-n', 'nmcli', 'connection', 'down', 'Hotspot'])
         time.sleep(2)
-        subprocess.run(['sudo', 'nmcli', 'connection', 'delete', 'Hotspot'], capture_output=True)
+        _run(['sudo', '-n', 'nmcli', 'connection', 'delete', 'Hotspot'])
         time.sleep(2)
-        
-        result = subprocess.run(
-            ['sudo', 'nmcli', 'device', 'wifi', 'hotspot', 
-             'ssid', ssid, 
+
+        result = _run(
+            ['sudo', '-n', 'nmcli', 'device', 'wifi', 'hotspot',
+             'ifname', iface,
+             'ssid', ssid,
              'password', password],
-            capture_output=True, text=True
+            timeout=40,
         )
-        
-        if result.returncode != 0:
-            return {'success': False, 'message': f'Hotspot起動に失敗: {result.stderr}'}
-        
+
+        if result['returncode'] != 0:
+            return {'success': False, 'message': f"Hotspot起動に失敗: {result['stderr'] or result['stdout']}"}
+
+        # APのIPを固定化（失敗しても継続）
+        _run(['sudo', '-n', 'nmcli', 'connection', 'modify', 'Hotspot', 'ipv4.method', 'shared'])
+        _run(['sudo', '-n', 'nmcli', 'connection', 'modify', 'Hotspot', 'ipv4.addresses', f'{AP_IP}/24'])
+        _run(['sudo', '-n', 'nmcli', 'connection', 'down', 'Hotspot'])
+        time.sleep(1)
+        _run(['sudo', '-n', 'nmcli', 'connection', 'up', 'Hotspot'])
+        time.sleep(2)
+
         # 設定を保存
         _save_wifi_settings('ap', ssid, password)
 
         # 現在のIPを取得（失敗時は既定値）
-        ip_result = subprocess.run(['hostname', '-I'], capture_output=True, text=True)
-        current_ip = ip_result.stdout.strip().split()[0] if ip_result.stdout.strip() else AP_IP
-        
+        current_ip = _get_primary_ip() or AP_IP
+        if not (current_ip.startswith('192.168.4.') or current_ip.startswith('10.42.0.')):
+            current_ip = AP_IP
+
         logger.info("Successfully switched to AP mode")
         return {
-            'success': True, 
+            'success': True,
             'message': f'APモードに切り替えました。スマホで「{ssid}」に接続してください。',
             'ip': current_ip,
-            'ip_address': current_ip
+            'ip_address': current_ip,
         }
-        
     except Exception as e:
         logger.error(f"AP mode switch failed: {e}")
         return {'success': False, 'message': str(e)}
@@ -428,58 +485,63 @@ def switch_to_tethering_mode():
     # 引数がないので、UI側で入力させるのが理想だが、今のAPIは引数なし。
     # 実際は update_wifi_settings API経由で wpa_supplicant を書き換えるフローが必要。
     
-    if has_nmcli():
+    if _is_networkmanager_running():
         try:
-            logger.info("Switching to tethering mode (nmcli)")
-            subprocess.run(['sudo', 'nmcli', 'connection', 'down', 'Hotspot'], capture_output=True)
+            logger.info("Switching to tethering mode: teardown hotspot (nmcli)")
+            _run(['sudo', '-n', 'nmcli', 'connection', 'down', 'Hotspot'])
             time.sleep(2)
-            subprocess.run(['sudo', 'nmcli', 'connection', 'delete', 'Hotspot'], capture_output=True)
+            _run(['sudo', '-n', 'nmcli', 'connection', 'delete', 'Hotspot'])
+            time.sleep(1)
+            _run(['sudo', '-n', 'systemctl', 'stop', 'NetworkManager'])
             time.sleep(2)
-            subprocess.run(['sudo', 'nmcli', 'device', 'wifi', 'rescan'], capture_output=True)
-            time.sleep(2)
-            # 自動接続
-            subprocess.run(['sudo', 'nmcli', 'device', 'connect', 'wlan0'], capture_output=True)
-            
-            _save_wifi_settings('tethering', None, None)
-            return {'success': True, 'message': 'テザリングモードに切り替えました。'}
         except Exception as e:
-            return {'success': False, 'message': str(e)}
-    
-    else:
-        # Legacy: wpa_supplicant mode
-        # すでにwpa_supplicant.confが適切なら、単にインターフェース再起動
-        try:
-            logger.info("Switching to tethering mode (legacy)")
-            iface = _detect_wifi_interface()
-            _run(['sudo', '-n', 'systemctl', 'stop', 'hostapd'])
-            _run(['sudo', '-n', 'systemctl', 'stop', 'dnsmasq'])
+            logger.warning(f"nmcli teardown failed (continue legacy): {e}")
 
+    # Legacy: wpa_supplicant/dhcpcd mode
+    # すでにwpa_supplicant.confが適切なら、単にインターフェース再起動
+    try:
+        logger.info("Switching to tethering mode (legacy)")
+        iface = _detect_wifi_interface()
+        _run(['sudo', '-n', 'systemctl', 'start', 'dhcpcd'])
+        _run(['sudo', '-n', 'systemctl', 'start', 'wpa_supplicant'])
+        _run(['sudo', '-n', 'systemctl', 'stop', 'hostapd'])
+        _run(['sudo', '-n', 'systemctl', 'stop', 'dnsmasq'])
+
+        reconfigure = _run_wpa_cli(['reconfigure'], iface=iface)
+        if reconfigure['returncode'] != 0 or 'FAIL' in reconfigure['stdout']:
+            _run(['sudo', '-n', 'systemctl', 'restart', f'wpa_supplicant@{iface}'])
+            time.sleep(2)
             reconfigure = _run_wpa_cli(['reconfigure'], iface=iface)
-            if reconfigure['returncode'] != 0 or 'FAIL' in reconfigure['stdout']:
-                _run(['sudo', '-n', 'systemctl', 'restart', f'wpa_supplicant@{iface}'])
-                time.sleep(2)
-                reconfigure = _run_wpa_cli(['reconfigure'], iface=iface)
 
-            if reconfigure['returncode'] != 0 or 'FAIL' in reconfigure['stdout']:
-                return {
-                    'success': False,
-                    'message': f"wpa_cli reconfigure failed: {reconfigure['stderr'] or reconfigure['stdout']}",
-                }
+        if reconfigure['returncode'] != 0 or 'FAIL' in reconfigure['stdout']:
+            return {
+                'success': False,
+                'message': f"wpa_cli reconfigure failed: {reconfigure['stderr'] or reconfigure['stdout']}",
+            }
 
-            time.sleep(3)
+        time.sleep(3)
 
-            reconnect = _run_wpa_cli(['reconnect'], iface=iface)
-            if reconnect['returncode'] != 0 or 'FAIL' in reconnect['stdout']:
-                return {
-                    'success': False,
-                    'message': f"wpa_cli reconnect failed: {reconnect['stderr'] or reconnect['stdout']}",
-                }
-            time.sleep(2)
-            
-            _save_wifi_settings('tethering', None, None)
-            return {'success': True, 'message': '設定を再読み込みしました (Legacy mode)'}
-        except Exception as e:
-            return {'success': False, 'message': str(e)}
+        reconnect = _run_wpa_cli(['reconnect'], iface=iface)
+        if reconnect['returncode'] != 0 or 'FAIL' in reconnect['stdout']:
+            return {
+                'success': False,
+                'message': f"wpa_cli reconnect failed: {reconnect['stderr'] or reconnect['stdout']}",
+            }
+        time.sleep(2)
+
+        _run(['sudo', '-n', 'dhcpcd', '-n', iface])
+        time.sleep(2)
+
+        _save_wifi_settings('tethering', None, None)
+        ip = _get_primary_ip()
+        return {
+            'success': True,
+            'message': '設定を再読み込みしました (Legacy mode)',
+            'ip': ip,
+            'ip_address': ip,
+        }
+    except Exception as e:
+        return {'success': False, 'message': str(e)}
 
 def _save_wifi_settings(mode, ssid, password):
     """Wi-Fi設定を保存"""

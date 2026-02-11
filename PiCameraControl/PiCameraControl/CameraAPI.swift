@@ -181,6 +181,10 @@ actor CameraAPI {
         try await updateSettings(["quality": quality])
     }
 
+    func updateCameraMode(_ mode: CameraModeOption) async throws {
+        try await updateSettings(["camera_mode": mode.rawValue])
+    }
+
     /// 光検知の有効/無効を更新
     func updateMonitoringEnabled(_ enabled: Bool) async throws {
         try await updateSettings(["monitoring_enabled": enabled])

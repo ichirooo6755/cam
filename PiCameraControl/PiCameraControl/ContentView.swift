@@ -78,6 +78,7 @@ struct ContentView: View {
     @State private var isEditingIP: Bool = false
 
     // Camera Settings
+    @State private var selectedCameraMode: CameraModeOption = .standard
     @State private var selectedISO: ISOOption = .auto
     @State private var selectedShutterSpeed: ShutterSpeedOption = .auto
     @State private var selectedQuality: QualityOption = .q90
@@ -137,8 +138,23 @@ struct ContentView: View {
                         // Image Display
                         previewArea
 
+                        if let errorMessage {
+                            Text(errorMessage)
+                                .font(.caption.weight(.medium))
+                                .foregroundColor(.primary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(14)
+                                .liquidGlassStyle(radius: 20)
+                        }
+
                         // Camera Controls
                         VStack(spacing: 24) {
+                            pickerModule(
+                                title: "MODE", selection: $selectedCameraMode,
+                                options: CameraModeOption.allCases
+                            ) { opt in
+                                updateCameraMode(opt)
+                            }
                             HStack(spacing: 16) {
                                 pickerModule(
                                     title: "ISO", selection: $selectedISO,
@@ -242,18 +258,34 @@ struct ContentView: View {
     }
 
     private func connectHomeWiFi() {
+        if homePasswordInput.count < 8 {
+            errorMessage = "HOME WIFI PASSWORD は8文字以上必要です"
+            return
+        }
         isSwitchingWiFi = true
         errorMessage = nil
+        let apiClient = api
         Task {
             do {
-                try await api.writeWpaSettings(ssid: homeSSIDInput, psk: homePasswordInput)
-                try await api.switchWiFiMode(toAP: false)
-                await MainActor.run { isSwitchingWiFi = false }
+                try await apiClient.writeWpaSettings(ssid: homeSSIDInput, psk: homePasswordInput)
             } catch {
                 await MainActor.run {
-                    errorMessage = "Wi-Fi切替に失敗しました"
+                    errorMessage = "家Wi-Fi設定の書き込みに失敗しました"
                     isSwitchingWiFi = false
                 }
+                return
+            }
+
+            do {
+                try await apiClient.switchWiFiMode(toAP: false)
+            } catch {
+            }
+
+            await MainActor.run {
+                serverIP = "raspberrypi.local"
+                errorMessage = "テザリング切替を開始しました。家Wi-Fiへ接続し直してRefreshしてください。"
+                isSwitchingWiFi = false
+                showWiFiSwitchPanel = false
             }
         }
     }
@@ -577,6 +609,7 @@ struct ContentView: View {
                 let settings = try await api.fetchSettings()
                 let wifi = try await api.fetchWiFiStatus()
                 await MainActor.run {
+                    selectedCameraMode = CameraModeOption.from(settings.cameraMode)
                     selectedISO = ISOOption.from(settings.iso)
                     selectedShutterSpeed = ShutterSpeedOption.from(settings.shutterSpeed)
                     selectedQuality = QualityOption.from(settings.quality)
@@ -624,6 +657,19 @@ struct ContentView: View {
 
     private func updateQuality(_ option: QualityOption) {
         Task { try? await api.updateQuality(option.qualityValue) }
+    }
+
+    private func updateCameraMode(_ option: CameraModeOption) {
+        Task {
+            do {
+                try await api.updateCameraMode(option)
+                loadAllSettings()
+            } catch {
+                await MainActor.run {
+                    errorMessage = "MODEの適用に失敗しました"
+                }
+            }
+        }
     }
 
     private func updateWhiteBalance(_ option: WhiteBalanceOption) {
@@ -677,17 +723,26 @@ struct ContentView: View {
             savedAPSSID = apSSIDInput
             savedAPPassword = apPasswordInput
         }
+
+        if targetAPMode && apPasswordInput.count < 8 {
+            errorMessage = "PASSWORD は8文字以上必要です"
+            return
+        }
         isSwitchingWiFi = true
+        errorMessage = nil
+        let apiClient = api
         Task {
             do {
-                try await api.switchWiFiMode(
+                try await apiClient.switchWiFiMode(
                     toAP: targetAPMode, ssid: apSSIDInput, password: apPasswordInput)
-                await MainActor.run {
-                    isSwitchingWiFi = false
-                    showWiFiSwitchPanel = false
-                }
             } catch {
-                await MainActor.run { isSwitchingWiFi = false }
+            }
+
+            await MainActor.run {
+                serverIP = "192.168.4.1"
+                errorMessage = "AP切替を開始しました。Wi-Fi設定で\"\(apSSIDInput)\"へ接続し直してRefreshしてください。"
+                isSwitchingWiFi = false
+                showWiFiSwitchPanel = false
             }
         }
     }

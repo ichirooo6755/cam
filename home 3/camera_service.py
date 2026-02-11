@@ -47,7 +47,10 @@ SETTINGS_RELOAD_INTERVAL = 5.0
 MIN_CHANGE_AMOUNT = 5
 
 DEFAULT_SETTINGS = {
+    'camera_mode': 'standard',
     'brightness_threshold': 30,
+    'detection_interval': CHECK_INTERVAL,
+    'check_interval': CHECK_INTERVAL,
     'iso': 'auto',
     'shutter_speed': 'auto',
     'white_balance': 'auto',
@@ -247,6 +250,7 @@ def main():
     settings = DEFAULT_SETTINGS.copy()
     last_brightness = None
     detection_interval = CHECK_INTERVAL
+    check_interval = CHECK_INTERVAL
     composition_state = {'last_frame': None, 'last_frame_path': None}
     
     try:
@@ -255,17 +259,23 @@ def main():
             
             # クールダウン中はスキップ
             if current_time - last_capture_time < CAPTURE_COOLDOWN:
-                time.sleep(CHECK_INTERVAL)
+                time.sleep(check_interval)
                 continue
             
             if current_time - last_settings_load > SETTINGS_RELOAD_INTERVAL:
                 settings = load_settings()
                 threshold = int(settings.get('brightness_threshold', BRIGHTNESS_THRESHOLD))
                 detection_interval = float(settings.get('detection_interval', CHECK_INTERVAL))
+                try:
+                    check_interval = float(settings.get('check_interval', CHECK_INTERVAL))
+                except (TypeError, ValueError):
+                    check_interval = CHECK_INTERVAL
+                if check_interval <= 0:
+                    check_interval = CHECK_INTERVAL
                 last_settings_load = current_time
 
             if not settings.get('monitoring_enabled', True):
-                time.sleep(CHECK_INTERVAL)
+                time.sleep(check_interval)
                 continue
 
             # 明るさチェック
@@ -274,7 +284,7 @@ def main():
 
                 if last_brightness is None:
                     last_brightness = brightness
-                    time.sleep(CHECK_INTERVAL)
+                    time.sleep(check_interval)
                     continue
 
                 prev_brightness = last_brightness
@@ -282,7 +292,7 @@ def main():
                 last_brightness = brightness
 
                 if change_amount < 0:
-                    time.sleep(CHECK_INTERVAL)
+                    time.sleep(check_interval)
                     continue
 
                 if prev_brightness > 0:
@@ -304,7 +314,7 @@ def main():
             except Exception as e:
                 logger.error(f"Detection error: {e}")
             
-            time.sleep(CHECK_INTERVAL)
+            time.sleep(check_interval)
             
     except KeyboardInterrupt:
         logger.info("Service stopped by user")

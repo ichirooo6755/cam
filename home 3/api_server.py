@@ -9,6 +9,7 @@ import json
 import logging
 import subprocess
 import time
+import threading
 
 import wifi_manager
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -20,9 +21,11 @@ logger = logging.getLogger(__name__)
 PHOTOS_DIR = '/home/pi/photos'
 SETTINGS_FILE = '/home/pi/camera_settings.json'
 DEFAULT_SETTINGS = {
+    'camera_mode': 'standard',
     'brightness_threshold': 30,
     'detection_threshold': 30,
     'detection_interval': 0.25,
+    'check_interval': 0.25,
     'iso': 'auto',
     'shutter_speed': 'auto',
     'white_balance': 'auto',
@@ -35,6 +38,35 @@ DEFAULT_SETTINGS = {
     'enable_timestamp': False,
     'monitoring_enabled': True,
     'quality': 90,
+}
+
+CAMERA_MODE_PRESETS = {
+    'reaction': {
+        'quality': 80,
+        'detection_interval': 0.25,
+        'check_interval': 0.25,
+        'enable_multiple_exposure': False,
+        'enable_2in1_composition': False,
+        'enable_timestamp': False,
+    },
+    'quality': {
+        'quality': 95,
+        'detection_interval': 1.0,
+        'check_interval': 0.25,
+    },
+    'standard': {
+        'quality': 90,
+        'detection_interval': 0.25,
+        'check_interval': 0.25,
+    },
+    'battery': {
+        'quality': 85,
+        'detection_interval': 2.0,
+        'check_interval': 1.0,
+        'enable_multiple_exposure': False,
+        'enable_2in1_composition': False,
+        'enable_timestamp': False,
+    },
 }
 
 class ReusableHTTPServer(HTTPServer):
@@ -245,6 +277,14 @@ class APIHandler(BaseHTTPRequestHandler):
                 new_settings['brightness_threshold'] = new_settings['detection_threshold']
             if 'brightness_threshold' in new_settings and 'detection_threshold' not in new_settings:
                 new_settings['detection_threshold'] = new_settings['brightness_threshold']
+
+            camera_mode = new_settings.get('camera_mode')
+            if camera_mode is not None:
+                preset = CAMERA_MODE_PRESETS.get(camera_mode)
+                if preset is None:
+                    new_settings.pop('camera_mode', None)
+                else:
+                    new_settings.update(preset)
             
             settings.update(new_settings)
             
@@ -296,22 +336,84 @@ class APIHandler(BaseHTTPRequestHandler):
             mode = data.get('mode')
 
             if mode == 'ap':
-                ssid = data.get('ssid')
-                password = data.get('password')
-                result = wifi_manager.switch_to_ap_mode(ssid, password)
-                if result.get('success'):
-                    self._save_wifi_mode('ap', ap_ssid=ssid, ap_password=password)
-            elif mode == 'tethering':
-                result = wifi_manager.switch_to_tethering_mode()
-                if result.get('success'):
-                    self._save_wifi_mode('tethering')
-            else:
-                result = {'success': False, 'message': 'Unknown mode'}
+                saved = wifi_manager.get_saved_ap_settings()
+                ssid = data.get('ssid') or saved.get('ssid')
+                password = data.get('password') or saved.get('password')
 
-            self.send_response(200 if result.get('success') else 500)
+                if not ssid or not password:
+                    result = {'success': False, 'message': 'ssid/password required'}
+                    self.send_response(400)
+                    self.send_header('Content-Type', 'application/json')
+                    self.end_headers()
+                    self.wfile.write(json.dumps(result).encode())
+                    self.wfile.flush()
+                    return
+
+                if len(password) < 8:
+                    result = {'success': False, 'message': 'パスワードは8文字以上必要です'}
+                    self.send_response(400)
+                    self.send_header('Content-Type', 'application/json')
+                    self.end_headers()
+                    self.wfile.write(json.dumps(result).encode())
+                    self.wfile.flush()
+                    return
+
+                result = {
+                    'success': True,
+                    'message': f'APモード切替を開始しました。スマホで「{ssid}」に接続してください。',
+                    'ip': '192.168.4.1',
+                    'ip_address': '192.168.4.1',
+                }
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps(result).encode())
+                self.wfile.flush()
+
+                def worker():
+                    try:
+                        time.sleep(0.7)
+                        sw = wifi_manager.switch_to_ap_mode(ssid, password)
+                        logger.info(f"Wi-Fi switch (ap) result: {sw}")
+                        if sw.get('success'):
+                            self._save_wifi_mode('ap', ap_ssid=ssid, ap_password=password)
+                    except Exception as e:
+                        logger.error(f"Wi-Fi switch (ap) background error: {e}")
+
+                threading.Thread(target=worker, daemon=True).start()
+                return
+
+            if mode == 'tethering':
+                result = {
+                    'success': True,
+                    'message': 'テザリング切替を開始しました。Wi-Fiを切り替えた後、raspberrypi.local で再接続してください。',
+                    'host': 'raspberrypi.local',
+                }
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps(result).encode())
+                self.wfile.flush()
+
+                def worker():
+                    try:
+                        time.sleep(0.7)
+                        sw = wifi_manager.switch_to_tethering_mode()
+                        logger.info(f"Wi-Fi switch (tethering) result: {sw}")
+                        if sw.get('success'):
+                            self._save_wifi_mode('tethering')
+                    except Exception as e:
+                        logger.error(f"Wi-Fi switch (tethering) background error: {e}")
+
+                threading.Thread(target=worker, daemon=True).start()
+                return
+
+            result = {'success': False, 'message': 'Unknown mode'}
+            self.send_response(400)
             self.send_header('Content-Type', 'application/json')
             self.end_headers()
             self.wfile.write(json.dumps(result).encode())
+            self.wfile.flush()
         except Exception as e:
             logger.error(f"Wi-Fi switch error: {e}")
             self.send_response(500)
