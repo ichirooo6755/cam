@@ -124,6 +124,9 @@ def _apply_camera_controls(camera: Picamera2, settings: dict) -> None:
     shutter_value = settings.get('shutter_speed', 'auto')
     wb_value = settings.get('white_balance', 'auto')
 
+    manual_exposure = iso_value != 'auto' or shutter_value != 'auto'
+    controls['AeEnable'] = not manual_exposure
+
     if iso_value != 'auto':
         try:
             controls['AnalogueGain'] = max(1.0, int(iso_value) / 100.0)
