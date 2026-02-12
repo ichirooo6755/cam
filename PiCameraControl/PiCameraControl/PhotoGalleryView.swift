@@ -395,7 +395,7 @@ struct PhotoThumbnail: View {
 
         do {
             let api = SimpleCameraAPI(baseURL: "http://\(serverIP):8001")
-            let loaded = try await api.downloadPhoto(filename: filename)
+            let loaded = try await api.downloadPhoto(filename: filename, thumbnail: true, maxDimension: 300)
             let thumb = downsample(loaded, maxDimension: 300)
             ThumbnailCache.shared.setImage(thumb, forKey: filename)
             await MainActor.run {

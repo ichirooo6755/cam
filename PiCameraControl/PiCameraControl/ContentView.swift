@@ -106,7 +106,6 @@ struct ContentView: View {
     @State private var homeSSIDInput: String = ""
     @State private var homePasswordInput: String = ""
     @State private var isAPMode: Bool = false
-    @State private var showWiFiSwitchPanel: Bool = false
     @State private var targetAPMode: Bool = false
 
     // Capture
@@ -341,13 +340,17 @@ struct ContentView: View {
             do {
                 try await apiClient.switchWiFiMode(toAP: false)
             } catch {
+                await MainActor.run {
+                    errorMessage = "家Wi-Fiへの切替開始に失敗しました。SSID/パスワードを確認してください。"
+                    isSwitchingWiFi = false
+                }
+                return
             }
 
             await MainActor.run {
                 serverIP = "raspberrypi.local"
                 errorMessage = "テザリング切替を開始しました。家Wi-Fiへ接続し直してRefreshしてください。"
                 isSwitchingWiFi = false
-                showWiFiSwitchPanel = false
             }
         }
     }
@@ -591,60 +594,77 @@ struct ContentView: View {
                     .cornerRadius(6)
             }
 
-            HStack {
-                Label(wifiIP, systemImage: "network")
-                    .font(.caption.weight(.medium))
-                    .monospacedDigit()
-                    .foregroundColor(.secondary)
-                Spacer()
-                Button {
-                    targetAPMode = !isAPMode
-                    withAnimation(.easeInOut(duration: 0.2)) {
-                        showWiFiSwitchPanel = true
-                    }
-                } label: {
-                    Text(isAPMode ? "SWITCH TO CLIENT" : "SWITCH TO AP")
-                        .font(.caption.weight(.bold))
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Label(wifiIP, systemImage: "network")
+                        .font(.caption.weight(.medium))
+                        .monospacedDigit()
+                        .foregroundColor(.secondary)
+                    Spacer()
                 }
-            }
 
-            if showWiFiSwitchPanel {
-                VStack(spacing: 8) {
-                    if targetAPMode {
-                        TextField("AP SSID", text: $apSSIDInput)
-                            .textFieldStyle(GlassTextFieldStyle())
-                        SecureField("PASSWORD", text: $apPasswordInput)
-                            .textFieldStyle(GlassTextFieldStyle())
+                Picker("切替先", selection: $targetAPMode) {
+                    Text("AP").tag(true)
+                    Text("家Wi-Fi").tag(false)
+                }
+                .pickerStyle(.segmented)
+                .disabled(isSwitchingWiFi)
 
-                        Button(action: switchWiFiMode) {
-                            Text("APPLY & RESTART")
-                                .font(.system(size: 12, weight: .black))
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 12)
-                                .background(Color.blue)
-                                .foregroundColor(.white)
-                                .cornerRadius(12)
-                        }
+                if targetAPMode {
+                    TextField("AP SSID", text: $apSSIDInput)
+                        .textFieldStyle(GlassTextFieldStyle())
                         .disabled(isSwitchingWiFi)
-                    } else {
-                        TextField("HOME WIFI SSID", text: $homeSSIDInput)
-                            .textFieldStyle(GlassTextFieldStyle())
-                        SecureField("HOME WIFI PASSWORD", text: $homePasswordInput)
-                            .textFieldStyle(GlassTextFieldStyle())
+                    SecureField("AP PASSWORD", text: $apPasswordInput)
+                        .textFieldStyle(GlassTextFieldStyle())
+                        .disabled(isSwitchingWiFi)
 
-                        Button(action: connectHomeWiFi) {
-                            Text("CONNECT HOME WIFI")
-                                .font(.system(size: 12, weight: .black))
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 12)
-                                .background(Color.green)
-                                .foregroundColor(.white)
-                                .cornerRadius(12)
-                        }
-                        .disabled(isSwitchingWiFi || homeSSIDInput.isEmpty || homePasswordInput.isEmpty)
+                    Button(action: switchWiFiMode) {
+                        Text(isAPMode ? "AP設定を適用" : "APへ切り替え開始")
+                            .font(.system(size: 12, weight: .black))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                            .background(Color.blue)
+                            .foregroundColor(.white)
+                            .cornerRadius(12)
                     }
+                    .disabled(isSwitchingWiFi)
+
+                    Text("実行後、iPhoneのWi-Fi設定で \"\(apSSIDInput)\" に接続し直してから、アプリでRefreshしてください。")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                } else {
+                    TextField("家Wi-Fi SSID", text: $homeSSIDInput)
+                        .textFieldStyle(GlassTextFieldStyle())
+                        .disabled(isSwitchingWiFi)
+                    SecureField("家Wi-Fi PASSWORD", text: $homePasswordInput)
+                        .textFieldStyle(GlassTextFieldStyle())
+                        .disabled(isSwitchingWiFi)
+
+                    Button(action: connectHomeWiFi) {
+                        Text(isAPMode ? "家Wi-Fiへ切り替え開始" : "家Wi-Fi設定を適用")
+                            .font(.system(size: 12, weight: .black))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                            .background(Color.green)
+                            .foregroundColor(.white)
+                            .cornerRadius(12)
+                    }
+                    .disabled(isSwitchingWiFi || homeSSIDInput.isEmpty || homePasswordInput.isEmpty)
+
+                    Text("実行後、iPhoneを家Wi-Fiへ接続し直してから、アプリでRefreshしてください。（\"raspberrypi.local\" で再接続します）")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
                 }
-                .transition(.move(edge: .top).combined(with: .opacity))
+
+                if isSwitchingWiFi {
+                    HStack(spacing: 8) {
+                        ProgressView()
+                        Text("切替処理中... Wi-Fi接続が切れたら案内に従って再接続してください")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    .padding(.top, 4)
+                }
             }
         }
         .padding(20)
@@ -688,7 +708,7 @@ struct ContentView: View {
                         wifiIP = wifi.mode == "ap" ? "192.168.4.1" : "0.0.0.0"
                     }
                     isAPMode = wifi.mode == "ap"
-                    showWiFiSwitchPanel = false
+                    targetAPMode = isAPMode
 
                     isLoading = false
                 }
@@ -929,13 +949,17 @@ struct ContentView: View {
                 try await apiClient.switchWiFiMode(
                     toAP: targetAPMode, ssid: apSSIDInput, password: apPasswordInput)
             } catch {
+                await MainActor.run {
+                    errorMessage = "AP切替の開始に失敗しました。接続先とパスワードを確認してください。"
+                    isSwitchingWiFi = false
+                }
+                return
             }
 
             await MainActor.run {
                 serverIP = "192.168.4.1"
                 errorMessage = "AP切替を開始しました。Wi-Fi設定で\"\(apSSIDInput)\"へ接続し直してRefreshしてください。"
                 isSwitchingWiFi = false
-                showWiFiSwitchPanel = false
             }
         }
     }

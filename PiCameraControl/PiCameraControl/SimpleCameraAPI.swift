@@ -55,7 +55,7 @@ actor SimpleCameraAPI {
     }
     
     /// 写真をダウンロード
-    func downloadPhoto(filename: String) async throws -> UIImage {
+    func downloadPhoto(filename: String, thumbnail: Bool = false, maxDimension: Int = 300) async throws -> UIImage {
         guard let safeFilename = sanitizeFilename(filename) else {
             throw APIError.invalidFilename
         }
@@ -67,7 +67,12 @@ actor SimpleCameraAPI {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONSerialization.data(withJSONObject: ["filename": safeFilename])
+        var body: [String: Any] = ["filename": safeFilename]
+        if thumbnail {
+            body["thumbnail"] = true
+            body["max_dim"] = maxDimension
+        }
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
         let (data, response) = try await session.data(for: request)
         

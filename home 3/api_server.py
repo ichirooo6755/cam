@@ -8,11 +8,17 @@ import os
 import json
 import logging
 import subprocess
+import shutil
+import glob
 import time
 import threading
 import re
 
 import wifi_manager
+try:
+    from PIL import Image
+except ImportError:
+    Image = None
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse
 
@@ -20,6 +26,9 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 PHOTOS_DIR = '/home/pi/photos'
+THUMBNAIL_DIR = os.path.join(PHOTOS_DIR, '_thumbs')
+THUMBNAIL_MAX_DIM_DEFAULT = 300
+THUMBNAIL_QUALITY = 75
 SETTINGS_FILE = '/home/pi/camera_settings.json'
 SESSION_OVERRIDES_FILE = '/home/pi/camera_session_overrides.json'
 SAFE_FILENAME_PATTERN = re.compile(r'^[A-Za-z0-9._-]+$')
@@ -88,6 +97,32 @@ CAMERA_MODE_PRESETS = {
         'enable_timestamp': False,
     },
 }
+
+def _thumbnail_path(filename, max_dim):
+    base, _ext = os.path.splitext(filename)
+    return os.path.join(THUMBNAIL_DIR, f"{base}_w{max_dim}.jpg")
+
+def _ensure_thumbnail(filepath, max_dim):
+    if Image is None:
+        return None
+
+    try:
+        os.makedirs(THUMBNAIL_DIR, exist_ok=True)
+        thumb_path = _thumbnail_path(os.path.basename(filepath), max_dim)
+        if os.path.exists(thumb_path):
+            if os.path.getmtime(thumb_path) >= os.path.getmtime(filepath):
+                return thumb_path
+
+        resample = Image.Resampling.LANCZOS if hasattr(Image, 'Resampling') else Image.LANCZOS
+        with Image.open(filepath) as img:
+            img.thumbnail((max_dim, max_dim), resample=resample)
+            if img.mode in ('RGBA', 'P'):
+                img = img.convert('RGB')
+            img.save(thumb_path, format='JPEG', quality=THUMBNAIL_QUALITY, optimize=True)
+        return thumb_path
+    except Exception as e:
+        logger.warning(f"Thumbnail generation failed: {e}")
+        return None
 
 class ReusableHTTPServer(HTTPServer):
     allow_reuse_address = True
@@ -207,6 +242,12 @@ class APIHandler(BaseHTTPRequestHandler):
             data = json.loads(body) if body else {}
 
             filename = data.get('filename', '')
+            thumbnail = bool(data.get('thumbnail', False))
+            try:
+                max_dim = int(data.get('max_dim', THUMBNAIL_MAX_DIM_DEFAULT))
+            except (TypeError, ValueError):
+                max_dim = THUMBNAIL_MAX_DIM_DEFAULT
+            max_dim = max(120, min(max_dim, 1024))
             safe_name = os.path.basename(filename)
             if safe_name != filename:
                 self.send_error(400)
@@ -220,15 +261,20 @@ class APIHandler(BaseHTTPRequestHandler):
                 self.send_error(404)
                 return
 
-            with open(filepath, 'rb') as f:
-                content = f.read()
-
+            content_path = filepath
             content_type = 'image/png' if safe_name.lower().endswith('.png') else 'image/jpeg'
+            if thumbnail:
+                thumb_path = _ensure_thumbnail(filepath, max_dim)
+                if thumb_path:
+                    content_path = thumb_path
+                    content_type = 'image/jpeg'
+
             self.send_response(200)
             self.send_header('Content-Type', content_type)
-            self.send_header('Content-Length', len(content))
+            self.send_header('Content-Length', os.path.getsize(content_path))
             self.end_headers()
-            self.wfile.write(content)
+            with open(content_path, 'rb') as f:
+                shutil.copyfileobj(f, self.wfile)
         except Exception as e:
             logger.error(f"Error serving photo (POST): {e}")
             self.send_error(500)
@@ -284,6 +330,13 @@ class APIHandler(BaseHTTPRequestHandler):
                 try:
                     os.remove(filepath)
                     deleted.append(safe_name)
+                    base, _ext = os.path.splitext(safe_name)
+                    thumb_pattern = os.path.join(THUMBNAIL_DIR, f"{base}_w*.jpg")
+                    for thumb in glob.glob(thumb_pattern):
+                        try:
+                            os.remove(thumb)
+                        except Exception as e:
+                            logger.warning(f"Failed to remove thumbnail {thumb}: {e}")
                 except Exception as e:
                     errors.append({'filename': safe_name, 'error': str(e)})
 
