@@ -135,10 +135,43 @@ enum ShutterSpeedValue: Codable, Equatable {
     }
 }
 
+struct PhotoMetadata: Codable, Equatable {
+    let timestamp: String?
+    let manualMode: String?
+    let appliedMode: String?
+    let meta: String?
+    let iso: ISOValue?
+    let shutterSpeed: ShutterSpeedValue?
+    let whiteBalance: String?
+    let quality: Int?
+    let width: Int?
+    let height: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case timestamp
+        case manualMode = "manual_mode"
+        case appliedMode = "applied_mode"
+        case meta
+        case iso
+        case shutterSpeed = "shutter_speed"
+        case whiteBalance = "white_balance"
+        case quality
+        case width
+        case height
+    }
+}
+
+struct PhotoMetadataResponse: Codable {
+    let success: Bool
+    let metadata: PhotoMetadata?
+    let error: String?
+}
+
 /// 撮影結果のレスポンス
 struct CaptureResponse: Codable {
     let success: Bool
     let filename: String?
+    let metadata: PhotoMetadata?
     let error: String?
 }
 

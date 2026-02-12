@@ -36,16 +36,49 @@ def _get_default_ap_password():
 def _get_primary_ip():
     """Return primary IP address string if available"""
     try:
+        iface = _detect_wifi_interface()
+        ips = _get_ipv4_addrs_for_interface(iface)
+        if ips:
+            return ips[0]
+    except Exception:
+        pass
+    try:
         result = subprocess.run(
             ['hostname', '-I'],
             capture_output=True, text=True
         )
         ips = result.stdout.strip().split()
-        if ips:
-            return ips[0]
+        for ip in ips:
+            if ip and not ip.startswith('127.'):
+                return ip
     except Exception:
         pass
     return None
+
+def _get_ipv4_addrs_for_interface(iface):
+    try:
+        result = subprocess.run(
+            ['ip', '-4', 'addr', 'show', 'dev', iface],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0 or not result.stdout:
+            return []
+
+        ips = []
+        for line in result.stdout.splitlines():
+            line = line.strip()
+            if not line.startswith('inet '):
+                continue
+            parts = line.split()
+            if len(parts) < 2:
+                continue
+            ip = parts[1].split('/', 1)[0].strip()
+            if ip and not ip.startswith('127.'):
+                ips.append(ip)
+        return ips
+    except Exception:
+        return []
 
 def has_nmcli():
     """Check if nmcli is available"""
@@ -206,7 +239,7 @@ def _derive_psk_hex(ssid, psk):
     )
     return binascii.hexlify(derived).decode('ascii')
 
-def _write_wpa_supplicant_conf(ssid, psk):
+def _write_wpa_supplicant_conf(ssid, psk, restart_services=True):
     valid, message = _validate_wifi_credentials(ssid, psk)
     if not valid:
         return {
@@ -246,16 +279,25 @@ def _write_wpa_supplicant_conf(ssid, psk):
     _run(['sudo', '-n', 'chmod', '600', WPA_SUPPLICANT_CONF])
 
     iface = _detect_wifi_interface()
-    _run(['sudo', '-n', 'systemctl', 'stop', 'hostapd'])
-    _run(['sudo', '-n', 'systemctl', 'stop', 'dnsmasq'])
-    _run(['sudo', '-n', 'systemctl', 'restart', f'wpa_supplicant@{iface}'])
-    _run(['sudo', '-n', 'systemctl', 'restart', 'wpa_supplicant'])
-    time.sleep(2)
-    _run(['sudo', '-n', 'dhcpcd', '-n', iface])
+    if restart_services:
+        _run(['sudo', '-n', 'systemctl', 'stop', 'hostapd'])
+        _run(['sudo', '-n', 'systemctl', 'stop', 'dnsmasq'])
+        _run(['sudo', '-n', 'systemctl', 'restart', f'wpa_supplicant@{iface}'])
+        _run(['sudo', '-n', 'systemctl', 'restart', 'wpa_supplicant'])
+        time.sleep(2)
+        _run(['sudo', '-n', 'dhcpcd', '-n', iface])
+
+        return {
+            'success': True,
+            'message': 'wpa_supplicant.conf を更新しました（ファイル書き換えフォールバック）',
+            'iface': iface,
+            'country': country,
+            'psk_derived': True,
+        }
 
     return {
         'success': True,
-        'message': 'wpa_supplicant.conf を更新しました（ファイル書き換えフォールバック）',
+        'message': 'wpa_supplicant.conf を更新しました（適用はテザリング切替時）',
         'iface': iface,
         'country': country,
         'psk_derived': True,
@@ -306,7 +348,7 @@ def configure_wpa_supplicant(ssid, psk):
         return {'success': False, 'message': message}
 
     try:
-        return _write_wpa_supplicant_conf(ssid, psk)
+        return _write_wpa_supplicant_conf(ssid, psk, restart_services=False)
     except subprocess.TimeoutExpired:
         return {'success': False, 'message': 'wpa_supplicant update timed out'}
     except Exception as e:
@@ -337,8 +379,16 @@ def check_tethering_connection(timeout=15):
                 if state == 'COMPLETED' and ssid:
                     logger.info(f"Connected to SSID: {ssid}")
 
-                    ip = _get_primary_ip()
-                    if ip and not ip.startswith('192.168.4.') and not ip.startswith('10.42.0.'):
+                    ip_candidates = []
+                    for ip in _get_ipv4_addrs_for_interface(iface):
+                        if not ip or ip.startswith('127.') or ip.startswith('169.254.'):
+                            continue
+                        if ip.startswith('192.168.4.') or ip.startswith('10.42.0.'):
+                            continue
+                        ip_candidates.append(ip)
+
+                    if ip_candidates:
+                        ip = ip_candidates[0]
                         logger.info(f"Tethering connection confirmed: IP={ip}")
                         return True
         except Exception as e:
@@ -385,15 +435,10 @@ def get_wifi_status():
     }
     
     try:
-        # IPアドレスを取得
-        result = subprocess.run(
-            ['hostname', '-I'],
-            capture_output=True, text=True
-        )
-        ips = result.stdout.strip().split()
-        if ips:
-            status['ip_address'] = ips[0]
-            status['ip'] = ips[0]
+        ip = _get_primary_ip()
+        if ip:
+            status['ip_address'] = ip
+            status['ip'] = ip
         
         if mode == 'ap':
             ap_settings = get_saved_ap_settings()
@@ -417,6 +462,41 @@ def get_wifi_status():
         logger.error(f"Failed to get Wi-Fi status: {e}")
     
     return status
+
+def ensure_ap_persistence():
+    if not has_nmcli():
+        return {'success': False, 'message': 'nmcli not available'}
+
+    ok, nm_err = _ensure_networkmanager_running()
+    if not ok:
+        return {'success': False, 'message': nm_err}
+
+    _run(['sudo', '-n', 'systemctl', 'enable', 'NetworkManager'])
+    _run(['sudo', '-n', 'systemctl', 'stop', 'dhcpcd'])
+    _run(['sudo', '-n', 'systemctl', 'disable', 'dhcpcd'])
+
+    _run(['sudo', '-n', 'nmcli', 'networking', 'on'])
+    _run(['sudo', '-n', 'nmcli', 'radio', 'wifi', 'on'])
+
+    iface = _detect_wifi_interface()
+    _run(['sudo', '-n', 'iw', 'dev', iface, 'set', 'power_save', 'off'])
+
+    _run(['sudo', '-n', 'nmcli', 'connection', 'modify', 'Hotspot', 'connection.autoconnect', 'yes'])
+    _run(['sudo', '-n', 'nmcli', 'connection', 'modify', 'Hotspot', '802-11-wireless.powersave', '2'])
+    _run(['sudo', '-n', 'nmcli', 'connection', 'modify', 'Hotspot', '802-11-wireless.band', 'bg'])
+    _run(['sudo', '-n', 'nmcli', 'connection', 'modify', 'Hotspot', '802-11-wireless.channel', '6'])
+    _run(['sudo', '-n', 'nmcli', 'connection', 'modify', 'Hotspot', 'ipv4.method', 'shared'])
+    _run(['sudo', '-n', 'nmcli', 'connection', 'modify', 'Hotspot', 'ipv4.addresses', f'{AP_IP}/24'])
+
+    active = _run(['nmcli', '-t', '-f', 'NAME,TYPE', 'connection', 'show', '--active'], timeout=15)
+    if active['returncode'] != 0 or not any('Hotspot:' in line for line in active['stdout'].splitlines()):
+        up = _run(['sudo', '-n', 'nmcli', 'connection', 'up', 'Hotspot'], timeout=40)
+        if up['returncode'] != 0:
+            saved = get_saved_ap_settings()
+            return switch_to_ap_mode(saved.get('ssid'), saved.get('password'))
+
+    _run(['sudo', '-n', 'iw', 'dev', iface, 'set', 'power_save', 'off'])
+    return {'success': True}
 
 def switch_to_ap_mode(ssid='PiCamera', password='picamera123'):
     """
@@ -445,13 +525,20 @@ def switch_to_ap_mode(ssid='PiCamera', password='picamera123'):
         _run(['sudo', '-n', 'systemctl', 'stop', 'hostapd'])
         _run(['sudo', '-n', 'systemctl', 'stop', 'dnsmasq'])
         _run(['sudo', '-n', 'systemctl', 'stop', 'dhcpcd'])
+        _run(['sudo', '-n', 'systemctl', 'disable', 'dhcpcd'])
         time.sleep(1)
 
+        _run(['sudo', '-n', 'systemctl', 'enable', 'NetworkManager'])
         ok, nm_err = _ensure_networkmanager_running()
         if not ok:
             return {'success': False, 'message': f'Hotspot起動に失敗: {nm_err}'}
 
+        _run(['sudo', '-n', 'nmcli', 'networking', 'on'])
+        _run(['sudo', '-n', 'nmcli', 'radio', 'wifi', 'on'])
+
         iface = _detect_wifi_interface()
+
+        _run(['sudo', '-n', 'iw', 'dev', iface, 'set', 'power_save', 'off'])
 
         # Safe teardown with delays
         _run(['sudo', '-n', 'nmcli', 'connection', 'down', 'Hotspot'])
@@ -470,6 +557,11 @@ def switch_to_ap_mode(ssid='PiCamera', password='picamera123'):
         if result['returncode'] != 0:
             return {'success': False, 'message': f"Hotspot起動に失敗: {result['stderr'] or result['stdout']}"}
 
+        _run(['sudo', '-n', 'nmcli', 'connection', 'modify', 'Hotspot', 'connection.autoconnect', 'yes'])
+        _run(['sudo', '-n', 'nmcli', 'connection', 'modify', 'Hotspot', '802-11-wireless.powersave', '2'])
+        _run(['sudo', '-n', 'nmcli', 'connection', 'modify', 'Hotspot', '802-11-wireless.band', 'bg'])
+        _run(['sudo', '-n', 'nmcli', 'connection', 'modify', 'Hotspot', '802-11-wireless.channel', '6'])
+
         # APのIPを固定化（失敗しても継続）
         _run(['sudo', '-n', 'nmcli', 'connection', 'modify', 'Hotspot', 'ipv4.method', 'shared'])
         _run(['sudo', '-n', 'nmcli', 'connection', 'modify', 'Hotspot', 'ipv4.addresses', f'{AP_IP}/24'])
@@ -477,6 +569,8 @@ def switch_to_ap_mode(ssid='PiCamera', password='picamera123'):
         time.sleep(1)
         _run(['sudo', '-n', 'nmcli', 'connection', 'up', 'Hotspot'])
         time.sleep(2)
+
+        _run(['sudo', '-n', 'iw', 'dev', iface, 'set', 'power_save', 'off'])
 
         # 設定を保存
         _save_wifi_settings('ap', ssid, password)
@@ -513,20 +607,36 @@ def switch_to_tethering_mode():
             time.sleep(2)
             _run(['sudo', '-n', 'nmcli', 'connection', 'delete', 'Hotspot'])
             time.sleep(1)
-            _run(['sudo', '-n', 'systemctl', 'stop', 'NetworkManager'])
-            time.sleep(2)
         except Exception as e:
             logger.warning(f"nmcli teardown failed (continue legacy): {e}")
+
+    _run(['sudo', '-n', 'systemctl', 'stop', 'NetworkManager'])
+    _run(['sudo', '-n', 'systemctl', 'disable', 'NetworkManager'])
+    time.sleep(2)
 
     # Legacy: wpa_supplicant/dhcpcd mode
     # すでにwpa_supplicant.confが適切なら、単にインターフェース再起動
     try:
         logger.info("Switching to tethering mode (legacy)")
         iface = _detect_wifi_interface()
-        _run(['sudo', '-n', 'systemctl', 'start', 'dhcpcd'])
-        _run(['sudo', '-n', 'systemctl', 'start', 'wpa_supplicant'])
         _run(['sudo', '-n', 'systemctl', 'stop', 'hostapd'])
         _run(['sudo', '-n', 'systemctl', 'stop', 'dnsmasq'])
+
+        _run(['sudo', '-n', 'ip', 'addr', 'flush', 'dev', iface])
+        _run(['sudo', '-n', 'ip', 'link', 'set', iface, 'down'])
+        time.sleep(1)
+        _run(['sudo', '-n', 'ip', 'link', 'set', iface, 'up'])
+        time.sleep(1)
+        _run(['sudo', '-n', 'iw', 'dev', iface, 'set', 'power_save', 'off'])
+
+        _run(['sudo', '-n', 'systemctl', 'enable', 'dhcpcd'])
+        _run(['sudo', '-n', 'systemctl', 'restart', 'dhcpcd'])
+
+        _run(['sudo', '-n', 'systemctl', 'stop', 'wpa_supplicant'])
+        wpa_restart = _run(['sudo', '-n', 'systemctl', 'restart', f'wpa_supplicant@{iface}'])
+        if wpa_restart['returncode'] != 0:
+            _run(['sudo', '-n', 'systemctl', 'restart', 'wpa_supplicant'])
+        time.sleep(2)
 
         reconfigure = _run_wpa_cli(['reconfigure'], iface=iface)
         if reconfigure['returncode'] != 0 or 'FAIL' in reconfigure['stdout']:

@@ -10,6 +10,12 @@ Raspberry Pi Zero 2 W + カメラモジュールを使った**光検知自動撮
 - **軽量API**: 写真取得とステータス確認のみの最小構成
 - **手動モード**: 光検知を停止し、アプリのボタンで撮影
 
+## 要件・条件（ユーザー指定 / 優先）
+
+- Wi-Fi復旧は **APが接続できていても継続** し、再発防止（自動復帰）まで完了させる
+- テザリング（家Wi-Fi）に失敗した場合は **自動でAPへ復帰** して復旧できること
+- 再起動後も Wi-Fiモード設定が維持され、必要なら起動時に自動復元されること
+
 ## システム構成
 
 ### Raspberry Pi側
@@ -104,6 +110,20 @@ curl -X POST "http://192.168.4.1:8001/api/photos/delete" \
 
 **解決策**
 エラー表示を画面上部のオーバーレイバナーに変更し、表示高さを制限した上で閉じるボタンを追加しました。これにより長いエラーでも画面レイアウトが崩れません。
+
+### 症状: iOSアプリのビルドが失敗する（LAST CAPTURE の META 表示）
+**原因**
+`ContentView.swift` の `Text("META: ...")` の文字列内で **余分な括弧** が入っており、Swift の構文エラーになっていました。
+
+**解決策**
+余分な括弧を削除し、`Text("META: \( ... )")` の形に修正しました。
+
+### 症状: ギャラリーの写真詳細で画像が表示されない場合がある（メタ取得失敗時）
+**原因**
+画像取得とメタデータ取得を同じ `do/catch` で扱っていたため、メタデータ取得が失敗すると画像も表示されない可能性がありました。
+
+**解決策**
+画像は先に表示し、メタデータ取得は失敗しても無視（後追いで反映）するように変更しました。
 
 ### 症状: /api/capture で撮影が失敗する（Device or resource busy）
 **原因**
@@ -268,14 +288,62 @@ iOS側が常にデフォルト値30を使用していました。
 
 ### 症状: 再起動するとAPモードが維持されない
 **原因**
-2つの問題がありました：
+複数の要因が重なりました：
 1. Wi-Fiモード切替時に `wifi_mode` が `camera_settings.json` に保存されていなかった
 2. 起動時に保存されたモードを読んで復元するロジックが無かった
+3. NetworkManagerの `Hotspot` が `autoconnect=no` のままだと、再起動後にホットスポットが自動復帰しないことがある
+4. `api-server.service` が `network-online.target` 待ちだと、ネットワーク確立が詰まった状態でAPIサーバー起動が遅れ、復元処理が走りにくい
+5. `NetworkManager` が `disable` のまま、`dhcpcd` が `enable` の構成だと、AP起動の前提（NetworkManager常駐）が崩れたり、インターフェース管理が競合して不安定になる
 
 **解決策**
 1. `api_server.py` の `switch_wifi_mode()` で切替成功時に `wifi_mode`, `ap_ssid`, `ap_password` を `camera_settings.json` に保存
 2. `api_server.py` 起動時に `restore_wifi_mode_on_boot()` で保存モードと現在モードを比較し、異なれば自動復元
-3. `api-server.service` を `network-online.target` 待ちに変更し、Wi-Fi準備完了後に実行
+3. `wifi_manager.py` のAP切替で `nmcli networking on` / `nmcli radio wifi on` / `Hotspot autoconnect=yes` / 省電力OFF を明示設定
+4. `api-server.service` は `network.target` 待ちにして、Wi-Fi復元処理を確実に起動させる（ネットワークが未確立でも復旧処理が走る）
+5. APモードでは `NetworkManager` を `enable`、`dhcpcd` を `disable` に固定し、テザリング（レガシー）では逆にする
+
+### 症状: APが突然出ない / 起動が不安定（EXT4 recovery required）
+**原因**
+起動ログに `EXT4-fs (mmcblk0p2): INFO: recovery required on readonly filesystem` が出ている場合、
+電源断/低電圧/不適切なシャットダウン等でファイルシステムのジャーナル回復が走っています。
+この状態が続くと設定ファイルの読み書き・サービス起動などが不安定になり、Wi-Fi/AP復旧にも悪影響が出ます。
+
+**解決策**
+- 5V/2A以上の安定電源（ケーブル含む）を使用
+- 可能な限り `sudo shutdown -h now` を実施（強制電源断を避ける）
+- 症状が継続する場合は、SDカードのチェック/交換、もしくは再イメージを検討
+
+### 症状: 起動ログに `brcmfmac ... clm_blob failed (-2)` が出る
+**原因**
+`/lib/firmware/brcm/brcmfmac43436s-sdio.clm_blob` を要求するが、実体が `brcmfmac43436-sdio.clm_blob` のみで
+ファイル名が一致していません（-2 = ファイル無し）。その結果
+`device may have limited channels available` になり、APのチャンネル選択が制限される可能性があります。
+
+**解決策**
+ファイル名の差を吸収するため、シンボリックリンクを作成します（次回起動から反映）。
+```bash
+ssh pi@192.168.4.1 "sudo ln -sf /lib/firmware/brcm/brcmfmac43436-sdio.clm_blob /lib/firmware/brcm/brcmfmac43436s-sdio.clm_blob"
+```
+
+### 症状: 起動ログに `cfg80211: loaded regulatory.db is malformed or signature is missing/invalid` が出る
+**原因**
+regulatory database の署名検証まわりの互換性で警告が出ることがあります。
+即致命的でない場合もありますが、チャンネル制限や初期化の不安定化と関連する可能性があります。
+
+**解決策**
+- 現状は `cfg80211.ieee80211_regdom=JP`（kernel cmdline）で国コード指定して運用
+- 改善が必要なら `wireless-regdb` / OS更新で改善することがあります
+
+### 症状: `nmcli` では powersave disable なのに `iw` の PowerSave が ON のままになる
+**原因**
+NetworkManagerの接続プロファイル設定（`802-11-wireless.powersave=2`）と、ドライバの `iw` power_save が
+別系統で、起動直後は `iw` がONのまま残ることがあります。
+
+**解決策**
+`wifi_manager.py` で
+- `nmcli connection modify Hotspot 802-11-wireless.powersave 2`
+- `iw dev wlan0 set power_save off`
+を併用して確実にOFFにします。
 
 ### 症状: 画質(quality)設定を変えても写真がぼやける / 劣化する
 **原因**
@@ -421,8 +489,73 @@ curl -X POST "http://raspberrypi.local:8001/api/wifi/switch" \
 
 数十秒後に `PiCamera` が復活するので、iPhone を `PiCamera` に接続し直して `192.168.4.1` へ戻ります。
 
+### write_wpa がタイムアウトする場合（APモード中）
+- **症状**
+  - `curl` が応答なし（タイムアウト）になる
+  - 直後に `PiCamera` のAPが一時的に消える
+- **原因**
+  - `wpa_supplicant.conf` 更新処理で `wpa_supplicant/dhcpcd` を再起動してしまい、`NetworkManager` の Hotspot と競合してAPが落ちる
+- **対策**
+  - APモード（`NetworkManager` 稼働中）は **ファイル更新のみ** 実施し、サービス再起動は **テザリング切替時** に行う
+
+### 症状: テザリング切替後に接続が不安定 / APへフォールバックしてしまう
+**原因**
+- APモード時のIP（`192.168.4.x` / `10.42.0.x`）がインターフェースに残ったままになり、テザリング接続チェックが失敗扱いになることがある
+- `wpa_supplicant` の制御ソケット状態が不安定なまま `wpa_cli reconfigure/reconnect` を実行し、`FAIL` になることがある
+- 切替直後に Wi‑Fi の power save が有効だとリンクが不安定になることがある
+
+**解決策**
+- テザリング切替時に Wi‑Fi インターフェース（例: `wlan0`）のIPv4を flush してから link down/up → DHCP 再要求
+- `wpa_supplicant@<iface>` を優先して restart（失敗時は `wpa_supplicant` を restart）し、制御ソケットを作り直す
+- テザリング切替でも `iw dev <iface> set power_save off` を実行
+- IP取得は `hostname -I` の先頭ではなく、Wi‑Fi インターフェースのIPv4を優先して判定/表示する
+
 ---
 
+## 作業ログ
+
+- 2026-02-12 16:02 JST
+  - `wifi_manager.py`: AP切替時に `nmcli networking on` / `nmcli radio wifi on` / `Hotspot autoconnect=yes` / `powersave` 無効化を追加
+  - `api_server.py`: 起動時に saved_mode=tethering でも未接続なら再接続を試行し、失敗時はAPへフォールバック
+  - `api-server.service`: `network-online.target` 依存をやめ、`network.target` に変更
+  - ログ確認: `journalctl` / `systemctl status` / `nmcli` で Hotspot 設定（autoconnect=no）と EXT4 recovery を確認
+
+- 2026-02-12 16:55 JST
+  - `wifi_manager.py`: `ensure_ap_persistence()` を追加し、APモード時に Hotspot の永続設定適用（autoconnect/省電力OFF/IP固定/Hotspot up）を実施
+  - `api_server.py`: 起動時 saved_mode=ap の場合でも `ensure_ap_persistence()` を呼び、再起動後のAP復帰性を強化
+  - `api_server.py`: `BrokenPipeError` / `ConnectionResetError` を握りつぶし、クライアント切断でAPIが500にならないよう修正
+  - 再デプロイ: `home 3/update.sh 192.168.4.1` 実行
+
+- 2026-02-12 18:25 JST
+  - `wifi_manager.py`: APモードでは `NetworkManager enable` / `dhcpcd disable`、テザリングでは逆にしてAP自動復帰性を強化
+  - 再デプロイ: `home 3/update.sh 192.168.4.1` 実行
+
+- 2026-02-12 19:19 JST
+  - `wifi_manager.py`: Hotspot を `2.4GHz(bg)+ch6` に固定し、`iw power_save off` を併用してAP安定性を改善
+  - 再デプロイ: `home 3/update.sh 192.168.4.1` 実行
+
+- 2026-02-12 19:45 JST
+  - Pi側: `/lib/firmware/brcm/brcmfmac43436s-sdio.clm_blob` の不足をシンボリックリンクで補完（次回起動から反映）
+
+- 2026-02-12
+  - `wifi_manager.py`: `/api/wifi/write_wpa` は **サービス再起動せずファイル更新のみ**（AP切断・HTTPタイムアウト回避、適用はテザリング切替時）
+  - `update.sh`: 実行ディレクトリ依存を解消（スクリプト配置ディレクトリを基準に転送）
+  - デプロイ: `home 3/update.sh <PiのIP>`（未実施/接続先確認中）
+
+- 2026-02-12
+  - `api_server.py`: `/api/photo/meta` を追加（写真のJSON sidecarメタデータ取得）
+  - `api_server.py`: 写真削除時に `.json` メタも削除
+  - iOS: 手動撮影UIでキーボードを閉じる＋直近撮影メタ（LAST CAPTURE）表示
+  - iOS: ギャラリーの写真詳細でMETADATA表示（`/api/photo/meta` から取得）
+  - iOS: `LAST CAPTURE` の META 表示の構文エラーを修正
+  - iOS: 写真詳細はメタ取得に失敗しても画像を先に表示（メタは取得できた場合のみ表示）
+
+- 2026-02-12
+  - `wifi_manager.py`: テザリング切替の安定化（インターフェースIPv4 flush / link down-up / `wpa_supplicant@<iface>` restart / power save off / IP取得をWi‑Fiインターフェース優先へ）
+  - `README.md`: テザリング切替の不安定（症状/原因/解決策）を追記
+
+---
+ 
 ## ✅ カメラ4モード 統合テスト（API）
 
 ```bash
@@ -481,6 +614,19 @@ curl -sS -X POST "$BASE/api/capture" \
 **保存ファイル**
 - 画像: `manual_<timestamp>_<mode>_<meta>.jpg`（metaは安全化して付与）
 - メタ: 同名 `.json` を保存（ISO/SS/WB/quality/size など）
+
+**メタデータ取得API（写真単体）**
+```bash
+BASE="http://192.168.4.1:8001"
+
+curl -sS -X POST "$BASE/api/photo/meta" \
+  -H 'Content-Type: application/json' \
+  -d '{"filename":"manual_XXXXXXXXXX.jpg"}'
+```
+
+**iOSアプリでの表示**
+- ギャラリーの写真詳細画面で下部にMETADATAを表示
+- 設定画面の手動撮影後に「LAST CAPTURE」で直近の撮影メタを表示
 
 ---
 

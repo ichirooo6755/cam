@@ -428,6 +428,7 @@ struct PhotoDetailView: View {
     @Environment(\.dismiss) var dismiss
     @State private var image: UIImage?
     @State private var isLoading = true
+    @State private var metadata: PhotoMetadata?
     @State private var showDeleteConfirmation: Bool = false
     @State private var actionMessage: String?
     @State private var showActionAlert: Bool = false
@@ -446,6 +447,44 @@ struct PhotoDetailView: View {
                 } else if isLoading {
                     ProgressView()
                         .tint(.white)
+                }
+
+                if let metadata {
+                    VStack {
+                        Spacer()
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("METADATA")
+                                .font(.caption2.weight(.black))
+                                .foregroundColor(.white.opacity(0.85))
+
+                            HStack(alignment: .top, spacing: 16) {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("MODE: \((metadata.appliedMode ?? metadata.manualMode ?? "-").uppercased())")
+                                    Text("ISO: \(metadata.iso?.displayString ?? "-")")
+                                    Text("SS: \(metadata.shutterSpeed?.displayString ?? "-")")
+                                }
+                                .monospacedDigit()
+
+                                Spacer()
+
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("WB: \((metadata.whiteBalance ?? "-").uppercased())")
+                                    Text("Q: \(metadata.quality.map(String.init) ?? "-")")
+                                    Text("META: \(metadata.meta?.isEmpty == false ? metadata.meta! : "-")")
+                                }
+                                .monospacedDigit()
+                            }
+                            .font(.caption.weight(.medium))
+                            .foregroundColor(.white.opacity(0.8))
+                        }
+                        .padding(14)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color.black.opacity(0.55))
+                        .clipShape(RoundedRectangle(cornerRadius: 18))
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, 16)
+                    }
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
             }
             .navigationTitle(filename)
@@ -517,6 +556,15 @@ struct PhotoDetailView: View {
             await MainActor.run {
                 image = loadedImage
                 isLoading = false
+            }
+
+            do {
+                let loadedMetadata = try await api.fetchPhotoMetadata(filename: filename)
+                await MainActor.run {
+                    metadata = loadedMetadata
+                }
+            } catch {
+                return
             }
         } catch {
             await MainActor.run {

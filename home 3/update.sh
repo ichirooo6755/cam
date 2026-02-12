@@ -23,8 +23,9 @@ echo "Using Raspberry Pi: $RASPI_HOST"
 echo "Starting file transfer..."
 
 # 現在のディレクトリを取得
-CURRENT_DIR=$(pwd)
+CURRENT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 echo "Source directory: $CURRENT_DIR"
+cd "$CURRENT_DIR"
 
 # Pythonスクリプトの転送
 echo "Transffering Python scripts..."

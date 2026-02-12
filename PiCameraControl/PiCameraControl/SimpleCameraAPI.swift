@@ -88,6 +88,35 @@ actor SimpleCameraAPI {
         return image
     }
 
+    func fetchPhotoMetadata(filename: String) async throws -> PhotoMetadata? {
+        guard let safeFilename = sanitizeFilename(filename) else {
+            throw APIError.invalidFilename
+        }
+
+        guard let url = URL(string: "\(baseURL)/api/photo/meta") else {
+            throw APIError.invalidURL
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["filename": safeFilename])
+
+        let (data, response) = try await session.data(for: request)
+
+        guard let httpResponse = response as? HTTPURLResponse,
+            httpResponse.statusCode == 200
+        else {
+            throw APIError.serverError
+        }
+
+        let decoded = try JSONDecoder().decode(PhotoMetadataResponse.self, from: data)
+        if !decoded.success {
+            return nil
+        }
+        return decoded.metadata
+    }
+
     func deletePhotos(filenames: [String]) async throws -> DeletePhotosResponse {
         let safeFilenames = filenames.compactMap { sanitizeFilename($0) }
         guard !safeFilenames.isEmpty else {

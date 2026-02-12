@@ -234,8 +234,9 @@ actor CameraAPI {
 
     // MARK: - 撮影
 
-    /// 撮影を実行し、ファイル名を返す
-    func capture(manualMode: ManualCaptureMode = .current, meta: String? = nil) async throws -> SafeFilename {
+    func captureWithMetadata(manualMode: ManualCaptureMode = .current, meta: String? = nil) async throws
+        -> (SafeFilename, PhotoMetadata?)
+    {
         guard let url = URL(string: "\(baseURL)/api/capture") else {
             throw CameraAPIError.invalidURL
         }
@@ -280,7 +281,13 @@ actor CameraAPI {
             throw CameraAPIError.invalidFilename
         }
 
-        return safeFilename
+        return (safeFilename, result.metadata)
+    }
+
+    /// 撮影を実行し、ファイル名を返す
+    func capture(manualMode: ManualCaptureMode = .current, meta: String? = nil) async throws -> SafeFilename {
+        let (filename, _metadata) = try await captureWithMetadata(manualMode: manualMode, meta: meta)
+        return filename
     }
 
     // MARK: - 画像ダウンロード

@@ -119,6 +119,9 @@ struct ContentView: View {
     @State private var showResetTemporaryConfirm: Bool = false
     @State private var manualCaptureMode: ManualCaptureMode = .current
     @State private var manualCaptureMeta: String = ""
+    @State private var lastCaptureMetadata: PhotoMetadata? = nil
+
+    @FocusState private var isManualMetaFocused: Bool
 
     @Environment(\.colorScheme) var colorScheme
 
@@ -387,10 +390,10 @@ struct ContentView: View {
             if let image = capturedImage {
                 Image(uiImage: image)
                     .resizable()
-                    .scaledToFill()
+                    .scaledToFit()
                     .frame(maxWidth: .infinity)
                     .frame(height: 300)
-                    .clipped()
+                    .background(Color.black.opacity(0.12))
                     .clipShape(RoundedRectangle(cornerRadius: 30))
                     .overlay(
                         RoundedRectangle(cornerRadius: 30)
@@ -562,6 +565,11 @@ struct ContentView: View {
                         .padding(.leading, 4)
                     TextField("例: test01 / lensA", text: $manualCaptureMeta)
                         .textFieldStyle(GlassTextFieldStyle())
+                        .focused($isManualMetaFocused)
+                        .submitLabel(.done)
+                        .onSubmit {
+                            isManualMetaFocused = false
+                        }
                 }
             }
 
@@ -585,6 +593,11 @@ struct ContentView: View {
                         .frame(width: 70, height: 70)
                         .shadow(color: .red.opacity(0.3), radius: 15, x: 0, y: 0)
 
+                    Image(systemName: "camera.fill")
+                        .font(.system(size: 22, weight: .heavy))
+                        .foregroundColor(.white)
+                        .opacity(isCapturing ? 0 : 1)
+
                     if isCapturing {
                         ProgressView()
                             .tint(.white)
@@ -594,10 +607,41 @@ struct ContentView: View {
             .disabled(isCapturing)
             .padding(.vertical, 6)
 
-            Text("CURRENTは今の設定を使用。MODE指定時は手動撮影だけ一時的にプリセットを適用します。")
+            Text("赤いボタンで手動撮影します。CURRENTは今の設定を使用。MODE指定時は手動撮影だけ一時的にプリセットを適用します。")
                 .font(.caption)
                 .foregroundColor(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
+
+            if let metadata = lastCaptureMetadata {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("LAST CAPTURE")
+                        .font(.caption2.weight(.black))
+                        .foregroundColor(.secondary)
+
+                    HStack(alignment: .top, spacing: 16) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("MODE: \((metadata.appliedMode ?? metadata.manualMode ?? "-").uppercased())")
+                            Text("ISO: \(metadata.iso?.displayString ?? "-")")
+                            Text("SS: \(metadata.shutterSpeed?.displayString ?? "-")")
+                        }
+                        .monospacedDigit()
+
+                        Spacer()
+
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("WB: \((metadata.whiteBalance ?? "-").uppercased())")
+                            Text("Q: \(metadata.quality.map(String.init) ?? "-")")
+                            Text("META: \(metadata.meta?.isEmpty == false ? metadata.meta! : "-")")
+                        }
+                        .monospacedDigit()
+                    }
+                    .font(.caption2.weight(.medium))
+                    .foregroundColor(.secondary)
+                }
+                .padding(12)
+                .background(Color.primary.opacity(0.05))
+                .cornerRadius(14)
+            }
         }
         .padding(16)
         .liquidGlassStyle(radius: 20)
@@ -939,18 +983,24 @@ struct ContentView: View {
     }
 
     private func capturePhoto() {
+        isManualMetaFocused = false
         errorMessage = nil
         syncState = .idle
         isCapturing = true
+        lastCaptureMetadata = nil
         let apiClient = api
         let mode = manualCaptureMode
         let meta = manualCaptureMeta
         Task {
             do {
-                let filename = try await apiClient.capture(manualMode: mode, meta: meta)
+                let (filename, metadata) = try await apiClient.captureWithMetadata(
+                    manualMode: mode,
+                    meta: meta
+                )
                 let image = try await apiClient.downloadImage(filename: filename)
                 await MainActor.run {
                     capturedImage = image
+                    lastCaptureMetadata = metadata
                     isCapturing = false
                 }
             } catch {

@@ -163,6 +163,8 @@ class APIHandler(BaseHTTPRequestHandler):
             self.update_settings()
         elif parsed.path == '/api/photo':
             self.serve_photo_request()
+        elif parsed.path == '/api/photo/meta':
+            self.serve_photo_metadata()
         elif parsed.path == '/api/photos/delete':
             self.delete_photos()
         elif parsed.path == '/api/capture':
@@ -200,7 +202,10 @@ class APIHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header('Content-Type', 'application/json')
         self.end_headers()
-        self.wfile.write(json.dumps(status).encode())
+        try:
+            self.wfile.write(json.dumps(status).encode())
+        except (BrokenPipeError, ConnectionResetError):
+            return
 
     def serve_root(self):
         """簡易ステータスページ"""
@@ -287,6 +292,68 @@ class APIHandler(BaseHTTPRequestHandler):
         except Exception as e:
             logger.error(f"Error serving photo (POST): {e}")
             self.send_error(500)
+
+    def serve_photo_metadata(self):
+        """写真のメタデータ(JSON sidecar)を返す"""
+        try:
+            content_length = int(self.headers.get('Content-Length', 0))
+            body = self.rfile.read(content_length).decode() if content_length > 0 else ''
+
+            try:
+                data = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                self.send_response(400)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({'success': False, 'error': 'Invalid JSON'}).encode())
+                return
+
+            filename = data.get('filename', '')
+            safe_name = os.path.basename(filename)
+            if safe_name != filename:
+                self.send_response(400)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({'success': False, 'error': 'Invalid filename'}).encode())
+                return
+
+            lower = safe_name.lower()
+            if not lower.endswith(ALLOWED_PHOTO_EXTENSIONS):
+                self.send_response(400)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({'success': False, 'error': 'Invalid filename'}).encode())
+                return
+
+            if SAFE_FILENAME_PATTERN.match(safe_name) is None:
+                self.send_response(400)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({'success': False, 'error': 'Invalid filename'}).encode())
+                return
+
+            base, _ext = os.path.splitext(safe_name)
+            meta_path = os.path.join(PHOTOS_DIR, f"{base}.json")
+            if not os.path.exists(meta_path):
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({'success': False, 'error': 'Metadata not found'}).encode())
+                return
+
+            with open(meta_path, 'r', encoding='utf-8') as f:
+                metadata = json.load(f)
+
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({'success': True, 'metadata': metadata}).encode())
+        except Exception as e:
+            logger.error(f"Error serving photo metadata: {e}")
+            self.send_response(500)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({'success': False, 'error': str(e)}).encode())
     
     def delete_photos(self):
         try:
@@ -340,6 +407,12 @@ class APIHandler(BaseHTTPRequestHandler):
                     os.remove(filepath)
                     deleted.append(safe_name)
                     base, _ext = os.path.splitext(safe_name)
+                    meta_path = os.path.join(PHOTOS_DIR, f"{base}.json")
+                    if os.path.exists(meta_path):
+                        try:
+                            os.remove(meta_path)
+                        except Exception as e:
+                            logger.warning(f"Failed to remove metadata {meta_path}: {e}")
                     thumb_pattern = os.path.join(THUMBNAIL_DIR, f"{base}_w*.jpg")
                     for thumb in glob.glob(thumb_pattern):
                         try:
@@ -402,7 +475,12 @@ class APIHandler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header('Content-Type', 'application/json')
             self.end_headers()
-            self.wfile.write(json.dumps(status).encode())
+            try:
+                self.wfile.write(json.dumps(status).encode())
+            except (BrokenPipeError, ConnectionResetError):
+                return
+        except (BrokenPipeError, ConnectionResetError):
+            return
         except Exception as e:
             logger.error(f"Error getting status: {e}")
             self.send_error(500)
@@ -432,7 +510,12 @@ class APIHandler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header('Content-Type', 'application/json')
             self.end_headers()
-            self.wfile.write(json.dumps(settings).encode())
+            try:
+                self.wfile.write(json.dumps(settings).encode())
+            except (BrokenPipeError, ConnectionResetError):
+                return
+        except (BrokenPipeError, ConnectionResetError):
+            return
         except Exception as e:
             logger.error(f"Error getting settings: {e}")
             self.send_error(500)
@@ -851,12 +934,36 @@ def restore_wifi_mode_on_boot():
             logger.info(f"Restoring AP mode: SSID={ap_ssid}")
             result = wifi_manager.switch_to_ap_mode(ap_ssid, ap_password)
             logger.info(f"AP restore result: {result}")
-        elif saved_mode == 'tethering' and current_mode == 'ap':
+            return
+
+        if saved_mode == 'ap' and current_mode == 'ap':
+            try:
+                persistence = wifi_manager.ensure_ap_persistence()
+                logger.info(f"AP persistence ensure result: {persistence}")
+            except Exception as e:
+                logger.warning(f"AP persistence ensure failed: {e}")
+            return
+
+        if saved_mode == 'tethering' and current_mode != 'ap':
+            connected = False
+            try:
+                connected = wifi_manager.check_tethering_connection(timeout=20)
+            except Exception as e:
+                logger.warning(f"Boot tethering check failed: {e}")
+
+            if not connected:
+                logger.warning("Boot: saved tethering but not connected. Try reconnect (fallback to AP if fails).")
+                result = wifi_manager.switch_to_tethering_mode()
+                logger.info(f"Tethering boot reconnect result: {result}")
+                return
+
+        if saved_mode == 'tethering' and current_mode == 'ap':
             logger.info("Restoring tethering mode")
             result = wifi_manager.switch_to_tethering_mode()
             logger.info(f"Tethering restore result: {result}")
-        else:
-            logger.info(f"Wi-Fi mode already correct: {current_mode}")
+            return
+
+        logger.info(f"Wi-Fi mode already correct: {current_mode}")
     except Exception as e:
         logger.error(f"Failed to restore Wi-Fi mode: {e}")
 
