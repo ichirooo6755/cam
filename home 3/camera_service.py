@@ -190,7 +190,11 @@ def capture_photo(camera, settings: dict, composition_state: dict, detected_at: 
         camera.options["quality"] = quality
         capture_start = time.time()
         _apply_camera_controls(camera, settings)
-        camera.switch_mode_and_capture_file(camera.still_configuration, filepath)
+        try:
+            camera.capture_file(filepath)
+        except Exception as capture_error:
+            logger.warning(f"capture_file failed, fallback to switch_mode: {capture_error}")
+            camera.switch_mode_and_capture_file(camera.still_configuration, filepath)
         capture_end = time.time()
         if detected_at is not None:
             detect_delay = capture_end - detected_at
