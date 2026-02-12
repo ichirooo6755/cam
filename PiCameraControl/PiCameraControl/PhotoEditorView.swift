@@ -245,7 +245,7 @@ struct PhotoEditorView: View {
                     ProgressView()
                         .scaleEffect(1.2)
                         .padding(22)
-                        .background(.ultraThinMaterial)
+                        .background(Color(.systemGray5).opacity(0.9))
                         .clipShape(RoundedRectangle(cornerRadius: 18))
                 }
             }
@@ -344,7 +344,7 @@ struct PhotoEditorView: View {
             }
         }
         .padding(16)
-        .background(.ultraThinMaterial)
+        .background(Color(.systemBackground).opacity(0.95))
     }
 
     @ViewBuilder
@@ -374,6 +374,8 @@ struct PhotoEditorView: View {
 
     private var cropControls: some View {
         let crop = Binding(get: { settings.crop }, set: { settings.crop = $0 })
+        let xMax = max(0.01, 1 - crop.wrappedValue.width)
+        let yMax = max(0.01, 1 - crop.wrappedValue.height)
         return VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Text("範囲")
@@ -388,8 +390,8 @@ struct PhotoEditorView: View {
 
             sliderRow(title: "幅", value: crop.width, range: 0.2...1, step: 0.01)
             sliderRow(title: "高さ", value: crop.height, range: 0.2...1, step: 0.01)
-            sliderRow(title: "X", value: crop.x, range: 0...max(0, 1 - crop.wrappedValue.width), step: 0.01)
-            sliderRow(title: "Y", value: crop.y, range: 0...max(0, 1 - crop.wrappedValue.height), step: 0.01)
+            sliderRow(title: "X", value: crop.x, range: 0...xMax, step: min(0.01, xMax))
+            sliderRow(title: "Y", value: crop.y, range: 0...yMax, step: min(0.01, yMax))
         }
     }
 
@@ -455,7 +457,7 @@ struct PhotoEditorView: View {
                         }
                     }
                     .padding(12)
-                    .background(.ultraThinMaterial)
+                    .background(Color(.secondarySystemBackground))
                     .clipShape(RoundedRectangle(cornerRadius: 14))
                 }
             }

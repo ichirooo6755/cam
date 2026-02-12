@@ -116,7 +116,10 @@ struct PhotoGalleryView: View {
                 .multilineTextAlignment(.center)
         }
         .padding()
-        .liquidGlassStyle(radius: 24)
+        .background(
+            RoundedRectangle(cornerRadius: 16)
+                .fill(Color(.secondarySystemBackground))
+        )
         .padding(.horizontal, 24)
     }
     
@@ -131,7 +134,7 @@ struct PhotoGalleryView: View {
                             .frame(minHeight: 150, maxHeight: 150)
                             .clipped()
                             .clipShape(RoundedRectangle(cornerRadius: 12))
-                            .liquidGlassStyle(radius: 16)
+                            .shadow(color: .black.opacity(0.08), radius: 4, y: 2)
 
                         if isSelectionMode {
                             let isSelected = selectedFilenames.contains(filename)
@@ -301,12 +304,64 @@ struct PhotoGalleryView: View {
     }
 }
 
+private final class ThumbnailCache: @unchecked Sendable {
+    static let shared = ThumbnailCache()
+    private let cache = NSCache<NSString, UIImage>()
+
+    init() {
+        cache.countLimit = 100
+        cache.totalCostLimit = 50 * 1024 * 1024
+    }
+
+    func image(forKey key: String) -> UIImage? {
+        cache.object(forKey: key as NSString)
+    }
+
+    func setImage(_ image: UIImage, forKey key: String) {
+        let cost = Int(image.size.width * image.size.height * 4)
+        cache.setObject(image, forKey: key as NSString, cost: cost)
+    }
+
+    func removeAll() {
+        cache.removeAllObjects()
+    }
+}
+
+private actor DownloadLimiter {
+    static let shared = DownloadLimiter(limit: 4)
+    private let limit: Int
+    private var running = 0
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    init(limit: Int) { self.limit = limit }
+
+    func acquire() async {
+        if running < limit {
+            running += 1
+        } else {
+            await withCheckedContinuation { cont in
+                waiters.append(cont)
+            }
+        }
+    }
+
+    func release() {
+        running -= 1
+        if !waiters.isEmpty {
+            running += 1
+            let next = waiters.removeFirst()
+            next.resume()
+        }
+    }
+}
+
 struct PhotoThumbnail: View {
     let filename: String
     let serverIP: String
-    
+
     @State private var image: UIImage?
-    
+    @State private var didFail = false
+
     var body: some View {
         ZStack {
             if let image = image {
@@ -315,8 +370,12 @@ struct PhotoThumbnail: View {
                     .scaledToFill()
                     .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
                     .clipped()
+            } else if didFail {
+                Color.gray.opacity(0.15)
+                Image(systemName: "photo")
+                    .foregroundColor(.gray.opacity(0.4))
             } else {
-                Color.gray.opacity(0.2)
+                Color.gray.opacity(0.15)
                 ProgressView()
             }
         }
@@ -324,16 +383,39 @@ struct PhotoThumbnail: View {
             await loadImage()
         }
     }
-    
+
     private func loadImage() async {
-        let api = SimpleCameraAPI(baseURL: "http://\(serverIP):8001")
+        if let cached = ThumbnailCache.shared.image(forKey: filename) {
+            image = cached
+            return
+        }
+
+        await DownloadLimiter.shared.acquire()
+        defer { Task { await DownloadLimiter.shared.release() } }
+
         do {
-            let loadedImage = try await api.downloadPhoto(filename: filename)
+            let api = SimpleCameraAPI(baseURL: "http://\(serverIP):8001")
+            let loaded = try await api.downloadPhoto(filename: filename)
+            let thumb = downsample(loaded, maxDimension: 300)
+            ThumbnailCache.shared.setImage(thumb, forKey: filename)
             await MainActor.run {
-                image = loadedImage
+                image = thumb
             }
         } catch {
-            // エラー時は何もしない
+            await MainActor.run {
+                didFail = true
+            }
+        }
+    }
+
+    private func downsample(_ source: UIImage, maxDimension: CGFloat) -> UIImage {
+        let maxDim = max(source.size.width, source.size.height)
+        guard maxDim > maxDimension, maxDim > 0 else { return source }
+        let scale = maxDimension / maxDim
+        let newSize = CGSize(width: source.size.width * scale, height: source.size.height * scale)
+        let renderer = UIGraphicsImageRenderer(size: newSize)
+        return renderer.image { _ in
+            source.draw(in: CGRect(origin: .zero, size: newSize))
         }
     }
 }

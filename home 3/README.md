@@ -312,6 +312,36 @@ libcameraのバージョンによって `AwbModeEnum.Shade` が存在せず、
 **解決策**
 `shade` が使えない環境では `Auto` にフォールバックするよう修正しました。
 
+### 症状: フォトエディタでトリミングを選ぶとアプリがフリーズ/クラッシュする
+**原因**
+`cropControls` 内の X/Y スライダーで、幅・高さが 1.0 のとき `range` が `0...0`（スパン 0）になり、
+`step=0.01` が範囲を超えるため SwiftUI の `Slider` がランタイムアサーション失敗を起こしていました。
+
+**解決策**
+X/Y スライダーの上限を `max(0.01, 1 - width/height)` で最低 0.01 に保証し、
+`step` も `min(0.01, 上限)` に制限して範囲ゼロを防止しました。
+
+### 症状: ギャラリーが重い / 写真削除で -1005 エラー
+**原因**
+`PhotoThumbnail` がフル解像度画像をキャッシュなし・同時接続制限なしでダウンロードしていたため、
+メモリが爆発し URLSession の接続数上限に達して `-1005 (network connection was lost)` が発生していました。
+また `liquidGlassStyle`（blur エフェクト）が各サムネイルに適用され、GPU 負荷が高かったです。
+
+**解決策**
+1. `ThumbnailCache`（NSCache / 100枚 / 50MB上限）を導入し、ダウンロード済み画像を再利用
+2. ダウンロード後に 300px にダウンサンプルしてメモリ使用量を大幅削減
+3. 同時ダウンロード数を `DispatchSemaphore(value: 4)` で制限
+4. `liquidGlassStyle` を除去し、軽量な `shadow` に置換
+
+### 症状: フォトエディタの UI が重い
+**原因**
+操作パネルやプリセットリストに `.ultraThinMaterial`（リアルタイムぼかし）を多用しており、
+スライダー操作中に GPU 負荷が高くなっていました。
+
+**解決策**
+`.ultraThinMaterial` を `Color(.systemBackground).opacity(0.95)` や
+`Color(.secondarySystemBackground)` に置換し、描画コストを削減しました。
+
 ### 症状: クラッシュログが確認できない
 **原因**
 camera-service の異常終了が起きていない場合、エラーログは出力されません。
