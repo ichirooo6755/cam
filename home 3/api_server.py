@@ -53,6 +53,15 @@ DEFAULT_SETTINGS = {
     'quality': 90,
 }
 
+def _sanitize_meta_tag(value):
+    if not value:
+        return None
+    safe = re.sub(r'[^A-Za-z0-9._-]+', '_', str(value).strip())
+    safe = safe.strip('._-')
+    if not safe:
+        return None
+    return safe[:48]
+
 CAMERA_MODE_PRESETS = {
     'reaction': {
         'quality': 80,
@@ -633,6 +642,17 @@ class APIHandler(BaseHTTPRequestHandler):
         """手動撮影"""
         service_stopped = False
         try:
+            content_length = int(self.headers.get('Content-Length', 0))
+            body = self.rfile.read(content_length).decode() if content_length > 0 else ''
+            try:
+                request_data = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                self.send_response(400)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({'success': False, 'error': 'Invalid JSON'}).encode())
+                return
+
             settings = DEFAULT_SETTINGS.copy()
             if os.path.exists(SETTINGS_FILE):
                 with open(SETTINGS_FILE, 'r') as f:
@@ -647,7 +667,21 @@ class APIHandler(BaseHTTPRequestHandler):
                 except Exception as e:
                     logger.warning(f"Failed to load session overrides (capture): {e}")
 
-            monitoring_enabled = bool(settings.get('monitoring_enabled', True))
+            service_should_stop = bool(settings.get('monitoring_enabled', True))
+
+            manual_mode = request_data.get('manual_mode') or request_data.get('mode')
+            if manual_mode:
+                manual_mode = str(manual_mode).lower()
+                if manual_mode != 'current':
+                    preset = CAMERA_MODE_PRESETS.get(manual_mode)
+                    if preset is None:
+                        self.send_response(400)
+                        self.send_header('Content-Type', 'application/json')
+                        self.end_headers()
+                        self.wfile.write(
+                            json.dumps({'success': False, 'error': 'Invalid manual_mode'}).encode())
+                        return
+                    settings.update(preset)
 
             width = settings.get('width', 1920)
             height = settings.get('height', 1080)
@@ -660,7 +694,7 @@ class APIHandler(BaseHTTPRequestHandler):
                 width = 1920
                 height = 1080
 
-            if monitoring_enabled:
+            if service_should_stop:
                 stop_result = subprocess.run(
                     ['sudo', '-n', 'systemctl', 'stop', 'camera-service'],
                     capture_output=True,
@@ -691,7 +725,18 @@ class APIHandler(BaseHTTPRequestHandler):
                     time.sleep(0.3)
 
             timestamp = f"{time.time():.6f}"
-            filename = f"manual_{timestamp}.jpg"
+            meta_value = request_data.get('meta') or request_data.get('tag') or request_data.get('label')
+            safe_meta = _sanitize_meta_tag(meta_value)
+            tag_parts = []
+            if manual_mode and manual_mode != 'current':
+                tag_parts.append(manual_mode)
+            if safe_meta:
+                tag_parts.append(safe_meta)
+            tag_suffix = '_'.join(tag_parts)
+            filename = f"manual_{timestamp}"
+            if tag_suffix:
+                filename = f"{filename}_{tag_suffix}"
+            filename = f"{filename}.jpg"
             photo_path = os.path.join(PHOTOS_DIR, filename)
 
             cmd = [
@@ -725,7 +770,27 @@ class APIHandler(BaseHTTPRequestHandler):
 
             result = subprocess.run(cmd, capture_output=True, text=True)
             if result.returncode == 0:
-                response = {'success': True, 'filename': filename}
+                applied_mode = manual_mode if manual_mode and manual_mode != 'current' else settings.get('camera_mode', 'standard')
+                metadata = {
+                    'timestamp': timestamp,
+                    'manual_mode': manual_mode or 'current',
+                    'applied_mode': applied_mode,
+                    'meta': meta_value,
+                    'iso': settings.get('iso'),
+                    'shutter_speed': settings.get('shutter_speed'),
+                    'white_balance': settings.get('white_balance'),
+                    'quality': settings.get('quality'),
+                    'width': width,
+                    'height': height,
+                }
+                try:
+                    meta_path = os.path.splitext(photo_path)[0] + '.json'
+                    with open(meta_path, 'w') as f:
+                        json.dump(metadata, f, indent=2)
+                except Exception as e:
+                    logger.warning(f"Failed to write capture metadata: {e}")
+
+                response = {'success': True, 'filename': filename, 'metadata': metadata}
                 self.send_response(200)
             else:
                 response = {'success': False, 'error': result.stderr}

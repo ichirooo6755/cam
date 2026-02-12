@@ -235,7 +235,7 @@ actor CameraAPI {
     // MARK: - 撮影
 
     /// 撮影を実行し、ファイル名を返す
-    func capture() async throws -> SafeFilename {
+    func capture(manualMode: ManualCaptureMode = .current, meta: String? = nil) async throws -> SafeFilename {
         guard let url = URL(string: "\(baseURL)/api/capture") else {
             throw CameraAPIError.invalidURL
         }
@@ -243,7 +243,14 @@ actor CameraAPI {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = "{}".data(using: .utf8)
+        var body: [String: Any] = [:]
+        if manualMode != .current {
+            body["manual_mode"] = manualMode.rawValue
+        }
+        if let metaValue = meta?.trimmingCharacters(in: .whitespacesAndNewlines), !metaValue.isEmpty {
+            body["meta"] = metaValue
+        }
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
         let (data, response) = try await session.data(for: request)
 

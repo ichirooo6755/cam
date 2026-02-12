@@ -117,6 +117,8 @@ struct ContentView: View {
     @State private var syncState: SyncState = .idle
     @State private var isApplyingRemoteSettings: Bool = false
     @State private var showResetTemporaryConfirm: Bool = false
+    @State private var manualCaptureMode: ManualCaptureMode = .current
+    @State private var manualCaptureMeta: String = ""
 
     @Environment(\.colorScheme) var colorScheme
 
@@ -544,34 +546,61 @@ struct ContentView: View {
     }
 
     private var captureSection: some View {
-        Button(action: capturePhoto) {
-            ZStack {
-                Circle()
-                    .fill(.ultraThinMaterial)
-                    .frame(width: 90, height: 90)
-                    .overlay(
-                        Circle()
-                            .stroke(
-                                LinearGradient(
-                                    colors: [.white.opacity(0.5), .clear], startPoint: .topLeading,
-                                    endPoint: .bottomTrailing),
-                                lineWidth: 2
-                            )
-                    )
+        VStack(spacing: 12) {
+            HStack(spacing: 12) {
+                pickerModule(
+                    title: "MANUAL MODE", selection: $manualCaptureMode,
+                    options: ManualCaptureMode.allCases
+                ) { mode in
+                    manualCaptureMode = mode
+                }
 
-                Circle()
-                    .fill(isCapturing ? Color.gray : Color.red)
-                    .frame(width: 70, height: 70)
-                    .shadow(color: .red.opacity(0.3), radius: 15, x: 0, y: 0)
-
-                if isCapturing {
-                    ProgressView()
-                        .tint(.white)
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("META")
+                        .font(.caption2.weight(.black))
+                        .foregroundColor(.secondary)
+                        .padding(.leading, 4)
+                    TextField("例: test01 / lensA", text: $manualCaptureMeta)
+                        .textFieldStyle(GlassTextFieldStyle())
                 }
             }
+
+            Button(action: capturePhoto) {
+                ZStack {
+                    Circle()
+                        .fill(.ultraThinMaterial)
+                        .frame(width: 90, height: 90)
+                        .overlay(
+                            Circle()
+                                .stroke(
+                                    LinearGradient(
+                                        colors: [.white.opacity(0.5), .clear], startPoint: .topLeading,
+                                        endPoint: .bottomTrailing),
+                                    lineWidth: 2
+                                )
+                        )
+
+                    Circle()
+                        .fill(isCapturing ? Color.gray : Color.red)
+                        .frame(width: 70, height: 70)
+                        .shadow(color: .red.opacity(0.3), radius: 15, x: 0, y: 0)
+
+                    if isCapturing {
+                        ProgressView()
+                            .tint(.white)
+                    }
+                }
+            }
+            .disabled(isCapturing)
+            .padding(.vertical, 6)
+
+            Text("CURRENTは今の設定を使用。MODE指定時は手動撮影だけ一時的にプリセットを適用します。")
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .disabled(isCapturing)
-        .padding(.vertical, 10)
+        .padding(16)
+        .liquidGlassStyle(radius: 20)
     }
 
     private var networkSection: some View {
@@ -914,9 +943,11 @@ struct ContentView: View {
         syncState = .idle
         isCapturing = true
         let apiClient = api
+        let mode = manualCaptureMode
+        let meta = manualCaptureMeta
         Task {
             do {
-                let filename = try await apiClient.capture()
+                let filename = try await apiClient.capture(manualMode: mode, meta: meta)
                 let image = try await apiClient.downloadImage(filename: filename)
                 await MainActor.run {
                     capturedImage = image

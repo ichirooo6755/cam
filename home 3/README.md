@@ -459,6 +459,31 @@ curl -sS "$BASE/api/photos" | head
 
 ---
 
+## ✅ 手動撮影モード + メタデータ付与（実機テスト）
+
+**iOSアプリ**
+- 設定画面のMANUAL MODEで撮影モードを選択
+- METAに任意のタグ（例: `test01` / `lensA`）を入力して撮影
+
+**APIテスト**
+```bash
+BASE="http://192.168.4.1:8001"
+
+# 現在の設定で手動撮影
+curl -sS -X POST "$BASE/api/capture" -H 'Content-Type: application/json' -d '{}'
+
+# 手動撮影をREACTIONで実行し、メタタグを付与
+curl -sS -X POST "$BASE/api/capture" \
+  -H 'Content-Type: application/json' \
+  -d '{"manual_mode":"reaction","meta":"test01"}'
+```
+
+**保存ファイル**
+- 画像: `manual_<timestamp>_<mode>_<meta>.jpg`（metaは安全化して付与）
+- メタ: 同名 `.json` を保存（ISO/SS/WB/quality/size など）
+
+---
+
 ## ✅ 家Wi-Fiでのスマホテスト手順（次の作業）
 1. iPhoneを家Wi-Fiに接続
 2. アプリを開いて **Refresh** を押す

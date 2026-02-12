@@ -220,6 +220,28 @@ enum CameraModeOption: String, CaseIterable, Identifiable, Hashable, Labelable {
     }
 }
 
+// MARK: - 手動撮影モード
+
+enum ManualCaptureMode: String, CaseIterable, Identifiable, Hashable, Labelable {
+    case current
+    case reaction
+    case standard
+    case quality
+    case battery
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .current: return "CURRENT"
+        case .reaction: return "REACTION"
+        case .standard: return "STANDARD"
+        case .quality: return "QUALITY"
+        case .battery: return "BATTERY"
+        }
+    }
+}
+
 // MARK: - ISO選択肢
 
 enum ISOOption: String, CaseIterable, Identifiable, Hashable, Labelable {
