@@ -510,9 +510,325 @@ curl -X POST "http://raspberrypi.local:8001/api/wifi/switch" \
 - テザリング切替でも `iw dev <iface> set power_save off` を実行
 - IP取得は `hostname -I` の先頭ではなく、Wi‑Fi インターフェースのIPv4を優先して判定/表示する
 
+### 症状: テザリング切替の途中失敗で AP に戻らず Pi が無通信になる
+**原因**
+- `switch_to_tethering_mode()` の途中（`wpa_supplicant restart` / `wpa_cli reconfigure` / `wpa_cli reconnect`）で失敗した場合、失敗レスポンスを返して終了し、APフォールバックが未実行になる経路があった
+- この経路では `NetworkManager` 停止後に復旧処理が打ち切られるため、AP未復帰のまま到達不能になる可能性があった
+
+**解決策**
+- `wifi_manager.py` の `switch_to_tethering_mode()` に `_fail_with_ap_fallback()` を導入し、途中失敗時も必ず AP 復帰を試行
+- 失敗時フォールバック後に `_save_wifi_settings('ap', ...)` を実行し、次回起動時の復元方向も AP 側へ一致させる
+
+### 症状: AP/テザリング切替で `iw` / `wpa_cli` が見つからず復旧が不安定になる
+**原因**
+- `sudo -n` や systemd 実行時は PATH が最小化されるため、環境によって `iw` / `wpa_cli` が解決できない
+- その結果、`power_save off` や `wpa_cli reconfigure/reconnect` が失敗し、切替直後の安定化処理が抜ける
+
+**解決策**
+- `wifi_manager.py` に `_resolve_executable()` を追加し、`/usr/sbin`, `/sbin`, `/usr/bin`, `/bin` を含めて実体パスを探索
+- `_detect_wifi_interface()` / `_run_wpa_cli()` / `_run_wpa_cli_readonly()` / AP・テザリング切替の `iw` 呼び出しを解決済み実行ファイルに統一
+
+### 症状: テザリング→AP切替のレスポンス成功後に AP が復帰せず再接続不能になる
+**原因**
+- `switch_to_ap_mode()` が `nmcli hotspot` 実行後の即時成功を返し、`Hotspot` の active 状態と AP 用 IP 帯 (`192.168.4.x` / `10.42.0.x`) の実体確認が不足していた
+- 一部環境で `wpa_supplicant`（汎用ユニット）が残存し、AP 起動時にインターフェース競合が発生する余地があった
+
+**解決策**
+- `switch_to_ap_mode()` / `ensure_ap_persistence()` で `wpa_supplicant@<iface>` だけでなく `wpa_supplicant` も stop+disable して競合を抑止
+- `wifi_manager.py` に `_is_hotspot_active()` と `_wait_for_ap_ready()` を追加し、`Hotspot` が active かつ AP IP 帯が付与されるまで待機
+- AP 準備確認に失敗した場合は `nmcli connection up Hotspot` を再試行し、再確認後に失敗を返すよう変更（成功偽装を防止）
+
+### 症状: デプロイ直後に Pi が到達不能になる（起動時Wi-Fi復元が即時発火）
+**原因**
+- `home 3/update.sh` は再起動前に `/run/picamera_boot_network_applied` を作成しているが、`api_server.py` 側でこのマーカーを消費していなかった
+- そのため `api-server` 再起動のたびに `restore_wifi_mode_on_boot()` が即時実行され、保存済みモードへの切替が走って接続中ネットワークが切断される場合があった
+
+**解決策**
+- `api_server.py` に `BOOT_NETWORK_APPLIED_MARKERS`（`/run` と `/tmp`）と `_consume_boot_network_applied_marker()` を追加
+- `main()` 起動時にマーカーがあれば 1 回だけ復元をスキップし、マーカーを削除して通常動作へ戻す
+- マーカー削除で `PermissionError` が出る環境向けに `sudo -n rm -f` フォールバックを追加
+- これにより「デプロイ直後だけは現在の到達経路を維持」し、次回以降の通常起動では従来どおり復元ロジックを有効化
+
+### 症状: 家Wi-Fi→AP切替が途中失敗すると Pi が無通信になる
+**原因**
+- `switch_to_ap_mode()` は切替冒頭で `dhcpcd` / `wpa_supplicant` を停止し、`NetworkManager` 側へ寄せる設計だが、
+  `NetworkManager` 起動失敗・`nmcli hotspot` 失敗・AP準備確認失敗時に **失敗レスポンスのみ** を返して終了する経路があった
+- この経路では AP もテザリングも未成立の中間状態で復旧が打ち切られ、到達不能になり得た
+
+**解決策**
+- `wifi_manager.py` の `switch_to_ap_mode()` に `_fail_with_tethering_recovery()` を追加し、途中失敗時は
+  `switch_to_tethering_mode(allow_ap_fallback=False)` でクライアント接続の復旧を即時試行するよう変更
+- `switch_to_tethering_mode()` に `allow_ap_fallback` 引数を追加し、AP失敗復旧時はAP再帰フォールバックを抑止して
+  ループを防止
+
+### 症状: AP切替失敗後にテザリング復旧も失敗すると最終復旧先がなくなる
+**原因**
+- AP切替失敗時はまずテザリング復旧を試みるが、周辺Wi-Fi環境不良でテザリング復旧も失敗した場合、
+  そのまま失敗レスポンスを返して終わるため最終到達経路が確保されない場合があった
+
+**解決策**
+- `switch_to_ap_mode()` の `_fail_with_tethering_recovery()` で、テザリング復旧失敗時に
+  `ensure_ap_persistence(allow_recursive_ap_recovery=False)` を追加実行する第3段復旧を実装
+- `ensure_ap_persistence()` を拡張し、`Hotspot` プロファイル欠損時は保存済み SSID/PASS で再作成し、
+  `connection up` 失敗時も `device wifi hotspot` で再生成して AP 再起動を試行
+- これにより「AP失敗→テザリング失敗」の連続失敗時も AP 復旧経路を残す
+
+### 症状: Mac側で同一サブネットを複数NICが保持すると Pi 探索を誤る
+**原因**
+- Macで `en0`（Wi-Fi）と `en11`（USB LAN 等）が同時に `192.168.0.0/24` を保持していると、
+  宛先 `192.168.0.20` の経路が意図しないIF（今回 `en11`）へ吸われることがある
+- この状態では `curl --interface en0 ...` を付けても ARP/経路判断との不整合で到達判定が不安定になり、
+  Pi未到達時の切り分けが難しくなる
+
+**解決策**
+- `home 3/wifi_cycle_test.sh` に Wi-Fi IF自動検出（`networksetup`）を追加し、未指定時は `AP_INTERFACE/HOME_INTERFACE` を自動補完
+- `route -n get <HOME_IP>` を確認して、要求IFと実経路IFが不一致なら警告ログを出す処理を追加
+- `HOME_HOST`/`HOME_IP` が不達でも、`fping` で同一サブネットを走査して `/api/wifi/status` 応答ホストを動的発見するフォールバックを追加
+- `HOME_MAC`（既定: `88-A2-9E-40-1E-B4`）を使った ARP ベース探索を追加し、DHCP再割当でIPが変わっても Home 側ホスト発見を試行
+- `curl --interface <IF>` で失敗した場合に、`/api/wifi/status` / `/api/wifi/switch` を IF未指定（OSルーティング）で再試行するフォールバックを追加
+
+### 追加: センサーステータスAPI + 測光提案API（iOS連携）
+- `camera_service.py`:
+  - `/home/pi/sensor_status.json` を 1秒周期で更新
+  - `brightness/lux/ae_gain/ae_exposure_us/last_change_percent/last_detect_to_capture_ms` を出力
+- `api_server.py`:
+  - `GET /api/sensor/status` を追加（実行時センサー状態 + 有効設定）
+  - `POST /api/metering` を追加（現在露出を基準に ISO/SS の提案値を返却）
+- iOS (`ContentView`):
+  - `SENSOR STATUS` パネルを追加
+  - `測光` ボタンで提案値を取得し、`提案をISO/SSに適用` で一時設定として反映
+
+API例:
+```bash
+BASE="http://192.168.4.1:8001"
+
+curl -sS "$BASE/api/sensor/status"
+
+curl -sS -X POST "$BASE/api/metering" \
+  -H "Content-Type: application/json" \
+  -d '{}'
+
+curl -sS -X POST "$BASE/api/metering" \
+  -H "Content-Type: application/json" \
+  -d '{"target_iso":400}'
+```
+
+### 追加: Wi-Fi切替の自動サイクル試験スクリプト
+- 追加ファイル: `home 3/wifi_cycle_test.sh`
+- 目的: `AP -> tethering -> AP` の連続切替を API で自動実行し、`/api/wifi/status` 到達性を検証
+- 挙動:
+  - 開始時に AP 側 (`192.168.4.1`) を先に確認
+  - AP が不可なら Home 側 (`raspberrypi.local` / `192.168.0.20`) を確認し、まず AP へ戻してからサイクル開始
+  - 各サイクル末尾で `GET /api/sensor/status` と `POST /api/metering` も疎通確認
+
+実行例:
+```bash
+# 1サイクル実行（既定ホスト）
+bash "home 3/wifi_cycle_test.sh" 1
+
+# 待機時間を短縮して試験
+AP_WAIT_SEC=20 HOME_WAIT_SEC=20 STEP_WAIT_SEC=2 \
+  bash "home 3/wifi_cycle_test.sh" 1
+
+# 必要に応じてIFを固定（デュアルNIC環境向け）
+AP_INTERFACE=en0 HOME_INTERFACE=en0 \
+  bash "home 3/wifi_cycle_test.sh" 2
+```
+
 ---
 
 ## 作業ログ
+
+- 2026-02-15 04:43 JST
+  - 変更ファイル:
+    - `home 3/wifi_cycle_test.sh`
+      - `HOME_MAC` 環境変数（既定 `88-A2-9E-40-1E-B4`）を追加
+      - `discover_home_host_by_mac()` を追加し、ARP情報 + `/api/wifi/status` で Home 側ホストを探索
+      - macOS `awk` 互換性問題（`match(..., array)`）を回避するため、ARP解析を `sed` ベースへ修正
+    - `home 3/README.md`
+      - 上記の症状・原因・解決策と検証ログを追記
+  - 実行コマンド:
+    - `bash -n '/Users/sugawaraichirou/Documents/アプリ/home 3/wifi_cycle_test.sh'`（成功）
+    - `AP_INTERFACE=en0 HOME_INTERFACE=en0 AP_WAIT_SEC=8 HOME_WAIT_SEC=8 STEP_WAIT_SEC=1 '/Users/sugawaraichirou/Documents/アプリ/home 3/wifi_cycle_test.sh' 1`
+      - 結果: AP/Home とも未到達（MAC探索含め未解決）
+    - `bash './update.sh' raspberrypi.local`
+      - 結果: `Could not resolve hostname raspberrypi.local` で転送失敗
+    - `curl http://192.168.0.1/webpages/index.html` / `curl .../cgi-bin/luci/...`
+      - 結果: ルータUI到達は正常（Pi探索用の直接ホスト情報は取得不可）
+    - `python3` サブネットスキャン（`192.168.0.x/1..5.x/10.42.0.x`, port `22/8001`）
+      - 結果: `TOTAL 0`
+
+- 2026-02-15 04:33 JST
+  - 変更ファイル:
+    - `home 3/wifi_manager.py`
+      - `ensure_ap_persistence(allow_recursive_ap_recovery=True)` を追加し、非再帰モードでの安全復旧を実装
+      - `Hotspot` プロファイル欠損時の再作成（保存済み SSID/PASS 使用）を追加
+      - `switch_to_ap_mode()` 失敗時の復旧で、テザリング復旧失敗後に AP 永続化復旧を試す第3段フォールバックを追加
+      - 復旧レスポンスに `ap_recovery` を追加し、復旧経路を可視化
+    - `home 3/README.md`
+      - 上記の症状・原因・解決策と検証ログを追記
+  - 実行コマンド:
+    - `python3 -m py_compile '/Users/sugawaraichirou/Documents/アプリ/home 3/wifi_manager.py' '/Users/sugawaraichirou/Documents/アプリ/home 3/api_server.py' '/Users/sugawaraichirou/Documents/アプリ/home 3/camera_service.py'`（成功）
+    - `bash -n '/Users/sugawaraichirou/Documents/アプリ/home 3/wifi_cycle_test.sh'`（成功）
+    - `AP_INTERFACE=en0 HOME_INTERFACE=en0 AP_WAIT_SEC=8 HOME_WAIT_SEC=8 STEP_WAIT_SEC=1 '/Users/sugawaraichirou/Documents/アプリ/home 3/wifi_cycle_test.sh' 1`
+      - 結果: AP/Home とも未到達（実機未接続）
+    - `ifconfig` / `netstat -rn -f inet` / `fping -a -q -g 192.168.0.0/24`
+      - 結果: `en11` は inactive で経路は `en0` に収束、応答ホストは `192.168.0.1`, `192.168.0.165`, `192.168.0.196` のみ
+
+- 2026-02-15 04:23 JST
+  - 変更ファイル:
+    - `home 3/wifi_cycle_test.sh`
+      - `curl_json_with_auto_route()` を追加し、`--interface` 指定失敗時に IF未指定で再試行するよう修正
+      - `wait_for_status()` / `discover_home_host()` を上記フォールバック経路へ統一
+      - `post_mode_switch()` を強化し、IF固定送信失敗時は自動ルーティングで再送するよう修正
+    - `home 3/README.md`
+      - 上記の症状・原因・解決策と診断ログを追記
+  - 実行コマンド:
+    - `bash -n '/Users/sugawaraichirou/Documents/アプリ/home 3/wifi_cycle_test.sh'`（成功）
+    - `AP_INTERFACE=en0 HOME_INTERFACE=en0 AP_WAIT_SEC=8 HOME_WAIT_SEC=8 STEP_WAIT_SEC=1 '/Users/sugawaraichirou/Documents/アプリ/home 3/wifi_cycle_test.sh' 1`
+      - 結果: AP/Home とも未到達で終了（スクリプト構文・再試行ロジックは正常動作）
+    - `networksetup -setnetworkserviceenabled "AX88179A" off` → `on`
+      - 結果: 一時的に `route -n get 192.168.0.20` が `en0` へ収束、`en11` は inactive へ遷移することを確認
+    - `networksetup -setairportnetwork en0 PiCamera picamera123`
+      - 結果: `Could not find network PiCamera.`（現時点で AP SSID 未観測）
+
+- 2026-02-15 03:48 JST
+  - 変更ファイル:
+    - `home 3/wifi_cycle_test.sh`
+      - `networksetup` ベースの Wi-Fi IF 自動検出を追加（`AP_INTERFACE/HOME_INTERFACE` の自動補完）
+      - `route -n get <HOME_IP>` による経路IF不一致警告を追加
+      - `discover_home_host()` を追加し、`fping` + `/api/wifi/status` で Home 側ホストを動的探索するフォールバックを追加
+    - `home 3/README.md`
+      - 上記の症状・原因・解決策と検証ログを追記
+  - 実行コマンド:
+    - `bash -n '/Users/sugawaraichirou/Documents/アプリ/home 3/wifi_cycle_test.sh'`（成功）
+    - `AP_WAIT_SEC=10 HOME_WAIT_SEC=10 STEP_WAIT_SEC=1 '/Users/sugawaraichirou/Documents/アプリ/home 3/wifi_cycle_test.sh' 1`
+      - 結果: `route to 192.168.0.20 is via en11 (requested en0)` 警告を出力し、AP/Home とも未到達で終了
+    - `system_profiler SPAirPortDataType`
+      - 結果: `en0` は `TP-Link_CE5D` 接続中、周辺ネットワークに `PiCamera` は未検出
+
+- 2026-02-15 03:33 JST
+  - 変更ファイル:
+    - `home 3/wifi_manager.py`
+      - `switch_to_ap_mode()` に `_fail_with_tethering_recovery()` を追加
+      - `NetworkManager` 起動失敗 / `nmcli hotspot` 失敗 / AP準備確認失敗 / 例外経路で、
+        失敗返却のみで終了せずテザリング復旧を試行するよう修正
+      - `switch_to_tethering_mode(allow_ap_fallback=True)` を導入し、
+        AP失敗復旧経路では `allow_ap_fallback=False` で再帰ループを防止
+    - `home 3/README.md`
+      - 上記の症状・原因・解決策と診断ログを追記
+  - 実行コマンド:
+    - `python3 -m py_compile '/Users/sugawaraichirou/Documents/アプリ/home 3/wifi_manager.py'`（成功）
+    - `fping -a -q -g 192.168.0.0/24`（応答: `192.168.0.1`, `192.168.0.16`, `192.168.0.68` のみ。`192.168.0.20` なし）
+    - `curl --interface en0 --max-time 4 http://192.168.0.20:8001/api/wifi/status`（タイムアウト）
+    - `curl --interface en11 --max-time 4 http://192.168.0.20:8001/api/wifi/status`（タイムアウト）
+    - `ping -S 192.168.0.165 -c 2 -W 1000 192.168.0.20` / `ping -S 192.168.0.68 -c 2 -W 1000 192.168.0.20`
+      - 結果: どちらも `Host is down`
+    - `route -n get 192.168.0.20`
+      - 結果: `interface: en11`（同一サブネットの別IF経路に吸われる状態を確認）
+    - `ifconfig en0` / `ifconfig en11`
+      - 結果: `en0=192.168.0.165`, `en11=192.168.0.68`（同一 `192.168.0.0/24` で同時活性）
+  - 状況:
+    - AP/テザリング切替の失敗復旧コードは強化済み。
+    - ただし現時点で Pi 実機は `192.168.0.20` / `192.168.4.1` とも到達不可のため、再接続後に実機反映と再検証を継続する。
+
+- 2026-02-15 02:58 JST
+  - 変更ファイル:
+    - `home 3/README.md`
+      - 到達性再診断（`contact.md` 更新確認を含む）の実施ログを追記
+  - 実行コマンド:
+    - `cat /Users/sugawaraichirou/Documents/アプリ/contact.md`
+      - 進捗報告: 「0:24 に 192.168.0.20 で接続したらしい / MAC: `88-A2-9E-40-1E-B4`」を確認
+    - `ping -S 192.168.0.165 -c 3 -W 1000 192.168.0.20` / `ping -S 192.168.0.68 -c 3 -W 1000 192.168.0.20`
+      - 結果: `100% packet loss`（`Host is down` / `No route to host`）
+    - `curl --max-time 4 http://192.168.0.20:8001/api/wifi/status`
+      - 結果: タイムアウト
+    - `curl --max-time 4 http://raspberrypi.local:8001/api/wifi/status`
+      - 結果: 名前解決タイムアウト
+    - `arp -an | grep '192.168.0.20'`
+      - 結果: `incomplete`（ARP解決不能）
+  - 状況:
+    - AP (`PiCamera`) も Home (`192.168.0.20`) も現時点で到達不可。
+    - ローカル修正（テザリング途中失敗時のAP強制フォールバック）は反映済みだが、Pi到達経路未復旧のため実機適用/再検証待ち。
+
+- 2026-02-15 02:01 JST
+  - 変更ファイル:
+    - `home 3/wifi_manager.py`
+      - `switch_to_tethering_mode()` に `_fail_with_ap_fallback()` を追加
+      - `wpa_supplicant restart` / `wpa_cli reconfigure` / `wpa_cli reconnect` / 例外経路でも AP フォールバックを必ず実行するよう統一
+      - フォールバック成功時に `_save_wifi_settings('ap', ...)` を実行し、保存モード不整合を防止
+    - `home 3/README.md`
+      - 上記の症状・原因・解決策を追記
+  - 実行コマンド:
+    - `python3 -m py_compile '/Users/sugawaraichirou/Documents/アプリ/home 3/wifi_manager.py' '/Users/sugawaraichirou/Documents/アプリ/home 3/api_server.py' '/Users/sugawaraichirou/Documents/アプリ/home 3/camera_service.py'`（成功）
+    - `bash -n '/Users/sugawaraichirou/Documents/アプリ/home 3/wifi_cycle_test.sh'`（成功）
+    - `python3` ソケットスキャン（送信元 `192.168.0.165` / `192.168.0.68`、宛先 `192.168.0.0/24`、port `22/8001`）
+      - 結果: `no open ports 22/8001`
+    - `networksetup -setairportnetwork en0 PiCamera picamera123`（`Could not find network PiCamera.`）
+    - `curl --interface en0 http://192.168.4.1:8001/api/wifi/status` / `curl --interface en0 http://10.42.0.1:8001/api/wifi/status`（タイムアウト）
+
+- 2026-02-15 01:48 JST
+  - 変更ファイル:
+    - `home 3/api_server.py`
+      - デプロイマーカーを単一パスから複数パス対応へ拡張（`/run/picamera_boot_network_applied`, `/tmp/picamera_boot_network_applied`）
+      - マーカー削除時に `PermissionError` の場合 `sudo -n rm -f` で再試行するよう改善
+    - `home 3/README.md`
+      - 症状/原因/解決策の記述を上記実装に合わせて更新
+  - 実行コマンド:
+    - `python3 -m py_compile '/Users/sugawaraichirou/Documents/アプリ/home 3/api_server.py' '/Users/sugawaraichirou/Documents/アプリ/home 3/wifi_manager.py' '/Users/sugawaraichirou/Documents/アプリ/home 3/camera_service.py'`（成功）
+    - `bash -n '/Users/sugawaraichirou/Documents/アプリ/home 3/wifi_cycle_test.sh'`（成功）
+    - `curl --interface en0 http://192.168.0.20:8001/api/wifi/status` / `curl --interface en11 ...`（タイムアウト）
+    - `ping -c 1 -W 1000 192.168.0.20`（Host is down）
+
+- 2026-02-15 00:39 JST
+  - 変更ファイル:
+    - `home 3/api_server.py`
+      - デプロイ直後の誤切替抑止として `BOOT_NETWORK_APPLIED_MARKER` を追加
+      - `_consume_boot_network_applied_marker()` を追加し、`main()` でマーカー消費時は `restore_wifi_mode_on_boot()` を1回スキップ
+    - `home 3/wifi_cycle_test.sh`
+      - 新規追加（Wi-Fi切替の自動サイクル試験）
+      - 開始時に AP 未到達なら Home 側から AP へブートストラップして試験開始する前処理を追加
+  - 実行コマンド:
+    - `python3 -m py_compile '/Users/sugawaraichirou/Documents/アプリ/home 3/wifi_manager.py'`（成功）
+    - `networksetup -setairportnetwork en0 PiCamera picamera123`（`PiCamera` が見つからず未接続）
+    - `fping -aqg 192.168.0.0/24` + `nc`/`curl` でスキャン（Pi API/SSH 到達なし）
+    - `AP_WAIT_SEC=20 HOME_WAIT_SEC=20 STEP_WAIT_SEC=2 '/Users/sugawaraichirou/Documents/アプリ/home 3/wifi_cycle_test.sh' 1`（開始前到達性チェック失敗）
+    - `python3 -m py_compile '/Users/sugawaraichirou/Documents/アプリ/home 3/wifi_manager.py' '/Users/sugawaraichirou/Documents/アプリ/home 3/api_server.py' '/Users/sugawaraichirou/Documents/アプリ/home 3/camera_service.py'`（成功）
+
+- 2026-02-15 00:05 JST
+  - 変更ファイル:
+    - `home 3/wifi_manager.py`
+      - `has_nmcli()` を実体パス解決ベースに変更（低PATH環境対応）
+      - `get_current_mode()` / `_is_networkmanager_running()` / `ensure_ap_persistence()` の `nmcli` 呼び出しを実体パス統一
+      - `wpa_supplicant`（汎用ユニット）の stop/disable を AP 系処理に追加
+      - `_is_hotspot_active()` / `_wait_for_ap_ready()` を追加し、AP起動確認（Hotspot active + AP帯IP）を強化
+      - AP準備失敗時に `nmcli connection up Hotspot` 再試行を追加
+  - 実行コマンド:
+    - `python3 -m py_compile '/Users/sugawaraichirou/Documents/アプリ/home 3/wifi_manager.py' '/Users/sugawaraichirou/Documents/アプリ/home 3/api_server.py' '/Users/sugawaraichirou/Documents/アプリ/home 3/camera_service.py'`（成功）
+    - `bash './home 3/update.sh' 192.168.4.1`（転送・サービス再起動成功）
+    - `curl http://192.168.4.1:8001/api/wifi/status` など到達確認（この時点で Pi 到達不可）
+
+- 2026-02-14 19:03 JST
+  - 変更ファイル:
+    - `home 3/wifi_manager.py`
+      - 実行ファイル探索 `_resolve_executable()` 追加
+      - `iw` / `wpa_cli` を実体パス解決して呼び出すよう修正
+    - `home 3/camera_service.py`
+      - センサー状態ファイル出力 (`/home/pi/sensor_status.json`) 追加
+      - `lux/ae_gain/ae_exposure_us` と `last_detect_to_capture_ms` を記録
+    - `home 3/api_server.py`
+      - `GET /api/sensor/status` / `POST /api/metering` を追加
+      - 露出提案ロジック（ISO/シャッターストップ丸め）を追加
+    - `PiCameraControl/PiCameraControl/Models.swift`
+      - `SensorStatusResponse` / `MeteringResponse` モデル追加
+    - `PiCameraControl/PiCameraControl/CameraAPI.swift`
+      - センサー取得 / 測光取得 / 提案適用APIを追加
+    - `PiCameraControl/PiCameraControl/ContentView.swift`
+      - SENSOR STATUS表示と測光UI（提案適用ボタン）を追加
+  - 実行コマンド:
+    - `python3 -m py_compile "home 3/wifi_manager.py" "home 3/camera_service.py" "home 3/api_server.py"`（成功）
+    - `bash ./build_ios_simulator.sh`（`** BUILD SUCCEEDED **`）
+    - `bash ./update.sh raspberrypi.local`（転送・再起動成功）
 
 - 2026-02-12 16:02 JST
   - `wifi_manager.py`: AP切替時に `nmcli networking on` / `nmcli radio wifi on` / `Hotspot autoconnect=yes` / `powersave` 無効化を追加

@@ -82,11 +82,33 @@ def _get_ipv4_addrs_for_interface(iface):
 
 def has_nmcli():
     """Check if nmcli is available"""
-    return shutil.which('nmcli') is not None
+    nmcli_cmd = _resolve_executable('nmcli')
+    return os.path.isabs(nmcli_cmd) and os.path.exists(nmcli_cmd)
+
+def _resolve_executable(name, extra_candidates=None):
+    path = shutil.which(name)
+    if path:
+        return path
+
+    candidates = list(extra_candidates or [])
+    candidates.extend([
+        f'/sbin/{name}',
+        f'/usr/sbin/{name}',
+        f'/usr/bin/{name}',
+        f'/bin/{name}',
+    ])
+
+    for candidate in candidates:
+        if os.path.exists(candidate):
+            return candidate
+
+    return name
 
 def _is_networkmanager_running():
     if not has_nmcli():
         return False
+
+    nmcli_cmd = _resolve_executable('nmcli')
 
     try:
         res = _run(['systemctl', 'is-active', 'NetworkManager'], timeout=10)
@@ -96,7 +118,7 @@ def _is_networkmanager_running():
         pass
 
     try:
-        res = _run(['nmcli', 'general', 'status'], timeout=10)
+        res = _run([nmcli_cmd, 'general', 'status'], timeout=10)
         if res['returncode'] == 0 and res['stdout']:
             return True
     except Exception:
@@ -125,7 +147,8 @@ def _ensure_networkmanager_running(timeout=15):
 
 def _detect_wifi_interface():
     try:
-        res = _run(['iw', 'dev'])
+        iw_cmd = _resolve_executable('iw')
+        res = _run([iw_cmd, 'dev'])
         if res['returncode'] == 0 and res['stdout']:
             for line in res['stdout'].splitlines():
                 line = line.strip()
@@ -145,6 +168,51 @@ def _detect_wpa_ctrl_dir():
             return path
     return '/run/wpa_supplicant'
 
+def _restart_wpa_supplicant_services(iface):
+    """Restart wpa_supplicant in a way that matches the systemd unit layout.
+
+    On Raspberry Pi OS, `wpa_supplicant@<iface>` may require
+    `/etc/wpa_supplicant/wpa_supplicant-<iface>.conf`. If that file doesn't
+    exist, restarting the templated unit fails and tethering won't come up.
+    """
+    iface = iface or _detect_wifi_interface()
+    per_iface_conf = f'/etc/wpa_supplicant/wpa_supplicant-{iface}.conf'
+
+    if not os.path.exists(per_iface_conf):
+        _run(['sudo', '-n', 'cp', '-f', WPA_SUPPLICANT_CONF, per_iface_conf])
+        _run(['sudo', '-n', 'chmod', '600', per_iface_conf])
+
+    ctrl_dir = _detect_wpa_ctrl_dir()
+    sock_path = os.path.join(ctrl_dir, iface)
+
+    _run(['sudo', '-n', 'systemctl', 'stop', f'wpa_supplicant@{iface}'])
+    _run(['sudo', '-n', 'systemctl', 'stop', 'wpa_supplicant'])
+    _run(['sudo', '-n', 'rm', '-f', sock_path])
+
+    if os.path.exists(per_iface_conf):
+        res = _run(['sudo', '-n', 'systemctl', 'restart', f'wpa_supplicant@{iface}'])
+        if res['returncode'] == 0:
+            return res
+        logger.warning(
+            f"wpa_supplicant@{iface} restart failed (fallback to wpa_supplicant): "
+            f"{res['stderr'] or res['stdout']}"
+        )
+
+    return _run(['sudo', '-n', 'systemctl', 'restart', 'wpa_supplicant'])
+
+def _ensure_per_iface_wpa_conf(iface):
+    iface = iface or _detect_wifi_interface()
+    per_iface_conf = f'/etc/wpa_supplicant/wpa_supplicant-{iface}.conf'
+    if os.path.exists(per_iface_conf):
+        return True
+
+    cp_res = _run(['sudo', '-n', 'cp', '-f', WPA_SUPPLICANT_CONF, per_iface_conf])
+    if cp_res['returncode'] != 0:
+        logger.warning(f"Failed to create per-iface wpa conf: {cp_res['stderr'] or cp_res['stdout']}")
+        return False
+    _run(['sudo', '-n', 'chmod', '600', per_iface_conf])
+    return True
+
 def _ensure_wpa_supplicant_running(iface, ctrl_dir):
     sock_path = os.path.join(ctrl_dir, iface)
     if os.path.exists(sock_path):
@@ -157,12 +225,14 @@ def _ensure_wpa_supplicant_running(iface, ctrl_dir):
     _run(['sudo', '-n', 'ip', 'link', 'set', iface, 'up'])
     time.sleep(1)
 
-    _run(['sudo', '-n', 'systemctl', 'start', 'wpa_supplicant'])
-    time.sleep(2)
-    if os.path.exists(sock_path):
-        return True
+    per_iface_conf = f'/etc/wpa_supplicant/wpa_supplicant-{iface}.conf'
+    if os.path.exists(per_iface_conf):
+        _run(['sudo', '-n', 'systemctl', 'start', f'wpa_supplicant@{iface}'])
+        time.sleep(2)
+        if os.path.exists(sock_path):
+            return True
 
-    _run(['sudo', '-n', 'systemctl', 'start', f'wpa_supplicant@{iface}'])
+    _run(['sudo', '-n', 'systemctl', 'start', 'wpa_supplicant'])
     time.sleep(2)
     if os.path.exists(sock_path):
         return True
@@ -279,6 +349,18 @@ def _write_wpa_supplicant_conf(ssid, psk, restart_services=True):
     _run(['sudo', '-n', 'chmod', '600', WPA_SUPPLICANT_CONF])
 
     iface = _detect_wifi_interface()
+
+    per_iface_conf = f'/etc/wpa_supplicant/wpa_supplicant-{iface}.conf'
+    tmp_iface_path = f'/tmp/wpa_supplicant-{iface}.conf.picamera'
+    write_iface_res = _run_with_input(['sudo', '-n', 'tee', tmp_iface_path], conf_text)
+    if write_iface_res['returncode'] == 0:
+        _run(['sudo', '-n', 'mv', tmp_iface_path, per_iface_conf])
+        _run(['sudo', '-n', 'chmod', '600', per_iface_conf])
+    else:
+        logger.warning(
+            f"write per-iface wpa_supplicant config failed: {write_iface_res['stderr'] or write_iface_res['stdout']}"
+        )
+
     if restart_services:
         _run(['sudo', '-n', 'systemctl', 'stop', 'hostapd'])
         _run(['sudo', '-n', 'systemctl', 'stop', 'dnsmasq'])
@@ -316,12 +398,48 @@ def _run(cmd, timeout=20):
         'stderr': (result.stderr or '').strip(),
     }
 
+def _is_hotspot_active():
+    nmcli_cmd = _resolve_executable('nmcli')
+    res = _run([nmcli_cmd, '-t', '-f', 'NAME,TYPE', 'connection', 'show', '--active'], timeout=15)
+    if res['returncode'] != 0 or not res['stdout']:
+        return False
+
+    for line in res['stdout'].splitlines():
+        line = line.strip().lower()
+        if not line:
+            continue
+        if line.startswith('hotspot:') and ('wireless' in line or '802-11-wireless' in line):
+            return True
+    return False
+
+def _wait_for_ap_ready(iface, timeout=35):
+    start_time = time.time()
+    last_ips = []
+    last_hotspot_active = False
+
+    while time.time() - start_time < timeout:
+        last_hotspot_active = _is_hotspot_active()
+        last_ips = _get_ipv4_addrs_for_interface(iface)
+
+        ap_ip_ready = any(
+            ip.startswith('192.168.4.') or ip.startswith('10.42.0.')
+            for ip in last_ips
+        )
+        if last_hotspot_active and ap_ip_ready:
+            return True, None
+
+        time.sleep(2)
+
+    return False, f"hotspot_active={last_hotspot_active}, iface_ips={last_ips}"
+
 def _run_wpa_cli(args, iface=None, timeout=20):
     iface = iface or _detect_wifi_interface()
     ctrl_dir = _detect_wpa_ctrl_dir()
     _ensure_wpa_supplicant_running(iface, ctrl_dir)
 
-    base_cmd = ['wpa_cli', '-p', ctrl_dir, '-i', iface] + list(args)
+    wpa_cli_cmd = _resolve_executable('wpa_cli')
+
+    base_cmd = [wpa_cli_cmd, '-p', ctrl_dir, '-i', iface] + list(args)
     res = _run(base_cmd, timeout=timeout)
     if res['returncode'] == 0 and res['stdout'] and 'FAIL' not in res['stdout']:
         return res
@@ -334,7 +452,9 @@ def _run_wpa_cli_readonly(args, iface=None, timeout=10):
     iface = iface or _detect_wifi_interface()
     ctrl_dir = _detect_wpa_ctrl_dir()
 
-    base_cmd = ['wpa_cli', '-p', ctrl_dir, '-i', iface] + list(args)
+    wpa_cli_cmd = _resolve_executable('wpa_cli')
+
+    base_cmd = [wpa_cli_cmd, '-p', ctrl_dir, '-i', iface] + list(args)
     res = _run(base_cmd, timeout=timeout)
     if res['returncode'] == 0 and res['stdout'] and 'FAIL' not in res['stdout']:
         return res
@@ -406,11 +526,14 @@ def get_current_mode():
     """
     if _is_networkmanager_running():
         try:
-            result = subprocess.run(
-                ['nmcli', '-t', '-f', 'NAME,TYPE', 'connection', 'show', '--active'],
-                capture_output=True, text=True
+            nmcli_cmd = _resolve_executable('nmcli')
+            result = _run(
+                [nmcli_cmd, '-t', '-f', 'NAME,TYPE', 'connection', 'show', '--active'],
+                timeout=15,
             )
-            if 'Hotspot' in result.stdout or 'hotspot' in result.stdout.lower():
+            if result['returncode'] == 0 and (
+                'Hotspot' in result['stdout'] or 'hotspot' in result['stdout'].lower()
+            ):
                 return 'ap'
         except Exception:
             pass
@@ -463,9 +586,28 @@ def get_wifi_status():
     
     return status
 
-def ensure_ap_persistence():
+def ensure_ap_persistence(allow_recursive_ap_recovery=True):
     if not has_nmcli():
         return {'success': False, 'message': 'nmcli not available'}
+
+    iface = _detect_wifi_interface()
+    nmcli_cmd = _resolve_executable('nmcli')
+    iw_cmd = _resolve_executable('iw')
+    ctrl_dir = _detect_wpa_ctrl_dir()
+    sock_path = os.path.join(ctrl_dir, iface)
+
+    _run(['sudo', '-n', 'systemctl', 'stop', f'wpa_supplicant@{iface}'])
+    _run(['sudo', '-n', 'systemctl', 'disable', f'wpa_supplicant@{iface}'])
+    _run(['sudo', '-n', 'systemctl', 'stop', 'wpa_supplicant'])
+    _run(['sudo', '-n', 'systemctl', 'disable', 'wpa_supplicant'])
+    _run(['sudo', '-n', 'rm', '-f', sock_path])
+    _run(['sudo', '-n', 'sh', '-c', f'pkill -f "wpa_supplicant.*-i{iface}" || true'])
+
+    _run(['sudo', '-n', 'ip', 'addr', 'flush', 'dev', iface])
+    _run(['sudo', '-n', 'ip', 'link', 'set', iface, 'down'])
+    time.sleep(1)
+    _run(['sudo', '-n', 'ip', 'link', 'set', iface, 'up'])
+    time.sleep(1)
 
     ok, nm_err = _ensure_networkmanager_running()
     if not ok:
@@ -475,28 +617,76 @@ def ensure_ap_persistence():
     _run(['sudo', '-n', 'systemctl', 'stop', 'dhcpcd'])
     _run(['sudo', '-n', 'systemctl', 'disable', 'dhcpcd'])
 
-    _run(['sudo', '-n', 'nmcli', 'networking', 'on'])
-    _run(['sudo', '-n', 'nmcli', 'radio', 'wifi', 'on'])
+    _run(['sudo', '-n', nmcli_cmd, 'networking', 'on'])
+    _run(['sudo', '-n', nmcli_cmd, 'radio', 'wifi', 'on'])
 
-    iface = _detect_wifi_interface()
-    _run(['sudo', '-n', 'iw', 'dev', iface, 'set', 'power_save', 'off'])
+    _run(['sudo', '-n', iw_cmd, 'dev', iface, 'set', 'power_save', 'off'])
 
-    _run(['sudo', '-n', 'nmcli', 'connection', 'modify', 'Hotspot', 'connection.autoconnect', 'yes'])
-    _run(['sudo', '-n', 'nmcli', 'connection', 'modify', 'Hotspot', '802-11-wireless.powersave', '2'])
-    _run(['sudo', '-n', 'nmcli', 'connection', 'modify', 'Hotspot', '802-11-wireless.band', 'bg'])
-    _run(['sudo', '-n', 'nmcli', 'connection', 'modify', 'Hotspot', '802-11-wireless.channel', '6'])
-    _run(['sudo', '-n', 'nmcli', 'connection', 'modify', 'Hotspot', 'ipv4.method', 'shared'])
-    _run(['sudo', '-n', 'nmcli', 'connection', 'modify', 'Hotspot', 'ipv4.addresses', f'{AP_IP}/24'])
+    saved_ap = get_saved_ap_settings()
+    ssid = saved_ap.get('ssid', _get_default_ap_ssid())
+    password = saved_ap.get('password', _get_default_ap_password())
+    if not password or len(password) < 8:
+        password = _get_default_ap_password()
 
-    active = _run(['nmcli', '-t', '-f', 'NAME,TYPE', 'connection', 'show', '--active'], timeout=15)
+    profile = _run([nmcli_cmd, '-t', '-f', 'NAME', 'connection', 'show', 'Hotspot'], timeout=15)
+    if profile['returncode'] != 0:
+        create = _run([
+            'sudo', '-n', nmcli_cmd, 'device', 'wifi', 'hotspot',
+            'ifname', iface,
+            'ssid', ssid,
+            'password', password,
+        ], timeout=40)
+        if create['returncode'] != 0:
+            return {
+                'success': False,
+                'message': f"Hotspot profile create failed: {create['stderr'] or create['stdout']}",
+            }
+
+    _run(['sudo', '-n', nmcli_cmd, 'connection', 'modify', 'Hotspot', 'connection.autoconnect', 'yes'])
+    _run(['sudo', '-n', nmcli_cmd, 'connection', 'modify', 'Hotspot', '802-11-wireless.powersave', '2'])
+    _run(['sudo', '-n', nmcli_cmd, 'connection', 'modify', 'Hotspot', '802-11-wireless.band', 'bg'])
+    _run(['sudo', '-n', nmcli_cmd, 'connection', 'modify', 'Hotspot', '802-11-wireless.channel', '6'])
+    _run(['sudo', '-n', nmcli_cmd, 'connection', 'modify', 'Hotspot', 'ipv4.method', 'shared'])
+    _run(['sudo', '-n', nmcli_cmd, 'connection', 'modify', 'Hotspot', 'ipv4.addresses', f'{AP_IP}/24'])
+
+    active = _run([nmcli_cmd, '-t', '-f', 'NAME,TYPE', 'connection', 'show', '--active'], timeout=15)
     if active['returncode'] != 0 or not any('Hotspot:' in line for line in active['stdout'].splitlines()):
-        up = _run(['sudo', '-n', 'nmcli', 'connection', 'up', 'Hotspot'], timeout=40)
+        up = _run(['sudo', '-n', nmcli_cmd, 'connection', 'up', 'Hotspot'], timeout=40)
         if up['returncode'] != 0:
-            saved = get_saved_ap_settings()
-            return switch_to_ap_mode(saved.get('ssid'), saved.get('password'))
+            recreate = _run([
+                'sudo', '-n', nmcli_cmd, 'device', 'wifi', 'hotspot',
+                'ifname', iface,
+                'ssid', ssid,
+                'password', password,
+            ], timeout=40)
+            if recreate['returncode'] == 0:
+                active = _run([nmcli_cmd, '-t', '-f', 'NAME,TYPE', 'connection', 'show', '--active'], timeout=15)
+                if any('Hotspot:' in line for line in active['stdout'].splitlines()):
+                    up = {'returncode': 0, 'stdout': 'recreated', 'stderr': ''}
 
-    _run(['sudo', '-n', 'iw', 'dev', iface, 'set', 'power_save', 'off'])
-    return {'success': True}
+        if up['returncode'] != 0:
+            if allow_recursive_ap_recovery:
+                saved = get_saved_ap_settings()
+                return switch_to_ap_mode(saved.get('ssid'), saved.get('password'))
+            return {
+                'success': False,
+                'message': f"Hotspot connection up failed: {up['stderr'] or up['stdout']}",
+            }
+
+    _run(['sudo', '-n', iw_cmd, 'dev', iface, 'set', 'power_save', 'off'])
+    ready, ready_err = _wait_for_ap_ready(iface, timeout=30)
+    if not ready:
+        return {'success': False, 'message': f'AP状態の確認に失敗しました: {ready_err}'}
+
+    ip = _get_primary_ip() or AP_IP
+    if not (ip.startswith('192.168.4.') or ip.startswith('10.42.0.')):
+        ip = AP_IP
+
+    return {
+        'success': True,
+        'ip': ip,
+        'ip_address': ip,
+    }
 
 def switch_to_ap_mode(ssid='PiCamera', password='picamera123'):
     """
@@ -506,6 +696,43 @@ def switch_to_ap_mode(ssid='PiCamera', password='picamera123'):
         return {
             'success': False, 
             'message': 'APモードへの切り替えには nmcli (NetworkManager) が必要です。現在はサポートされていません。'
+        }
+
+    def _fail_with_tethering_recovery(message):
+        logger.warning(f"AP switch failed, recovering tethering path: {message}")
+        recovery = switch_to_tethering_mode(allow_ap_fallback=False)
+        ap_recovery = None
+
+        if recovery.get('success'):
+            try:
+                _save_wifi_settings('tethering', None, None)
+            except Exception as e:
+                logger.warning(f"Failed to persist tethering mode after AP recovery: {e}")
+        else:
+            logger.warning("Tethering recovery failed; trying AP persistence recovery")
+            ap_recovery = ensure_ap_persistence(allow_recursive_ap_recovery=False)
+            if ap_recovery.get('success'):
+                saved_ap = get_saved_ap_settings()
+                try:
+                    _save_wifi_settings('ap', saved_ap.get('ssid'), saved_ap.get('password'))
+                except Exception as e:
+                    logger.warning(f"Failed to persist AP mode after AP persistence recovery: {e}")
+
+        ip = (
+            recovery.get('ip')
+            or recovery.get('ip_address')
+            or (ap_recovery or {}).get('ip')
+            or (ap_recovery or {}).get('ip_address')
+            or _get_primary_ip()
+            or AP_IP
+        )
+        return {
+            'success': False,
+            'message': message,
+            'recovery': recovery,
+            'ap_recovery': ap_recovery,
+            'ip': ip,
+            'ip_address': ip,
         }
 
     try:
@@ -528,26 +755,43 @@ def switch_to_ap_mode(ssid='PiCamera', password='picamera123'):
         _run(['sudo', '-n', 'systemctl', 'disable', 'dhcpcd'])
         time.sleep(1)
 
+        iface = _detect_wifi_interface()
+        nmcli_cmd = _resolve_executable('nmcli')
+        iw_cmd = _resolve_executable('iw')
+        ctrl_dir = _detect_wpa_ctrl_dir()
+        sock_path = os.path.join(ctrl_dir, iface)
+
+        _run(['sudo', '-n', 'systemctl', 'stop', f'wpa_supplicant@{iface}'])
+        _run(['sudo', '-n', 'systemctl', 'disable', f'wpa_supplicant@{iface}'])
+        _run(['sudo', '-n', 'systemctl', 'stop', 'wpa_supplicant'])
+        _run(['sudo', '-n', 'systemctl', 'disable', 'wpa_supplicant'])
+        _run(['sudo', '-n', 'rm', '-f', sock_path])
+        _run(['sudo', '-n', 'sh', '-c', f'pkill -f "wpa_supplicant.*-i{iface}" || true'])
+
+        _run(['sudo', '-n', 'ip', 'addr', 'flush', 'dev', iface])
+        _run(['sudo', '-n', 'ip', 'link', 'set', iface, 'down'])
+        time.sleep(1)
+        _run(['sudo', '-n', 'ip', 'link', 'set', iface, 'up'])
+        time.sleep(1)
+
         _run(['sudo', '-n', 'systemctl', 'enable', 'NetworkManager'])
         ok, nm_err = _ensure_networkmanager_running()
         if not ok:
-            return {'success': False, 'message': f'Hotspot起動に失敗: {nm_err}'}
+            return _fail_with_tethering_recovery(f'Hotspot起動に失敗: {nm_err}')
 
-        _run(['sudo', '-n', 'nmcli', 'networking', 'on'])
-        _run(['sudo', '-n', 'nmcli', 'radio', 'wifi', 'on'])
+        _run(['sudo', '-n', nmcli_cmd, 'networking', 'on'])
+        _run(['sudo', '-n', nmcli_cmd, 'radio', 'wifi', 'on'])
 
-        iface = _detect_wifi_interface()
-
-        _run(['sudo', '-n', 'iw', 'dev', iface, 'set', 'power_save', 'off'])
+        _run(['sudo', '-n', iw_cmd, 'dev', iface, 'set', 'power_save', 'off'])
 
         # Safe teardown with delays
-        _run(['sudo', '-n', 'nmcli', 'connection', 'down', 'Hotspot'])
+        _run(['sudo', '-n', nmcli_cmd, 'connection', 'down', 'Hotspot'])
         time.sleep(2)
-        _run(['sudo', '-n', 'nmcli', 'connection', 'delete', 'Hotspot'])
+        _run(['sudo', '-n', nmcli_cmd, 'connection', 'delete', 'Hotspot'])
         time.sleep(2)
 
         result = _run(
-            ['sudo', '-n', 'nmcli', 'device', 'wifi', 'hotspot',
+            ['sudo', '-n', nmcli_cmd, 'device', 'wifi', 'hotspot',
              'ifname', iface,
              'ssid', ssid,
              'password', password],
@@ -555,22 +799,33 @@ def switch_to_ap_mode(ssid='PiCamera', password='picamera123'):
         )
 
         if result['returncode'] != 0:
-            return {'success': False, 'message': f"Hotspot起動に失敗: {result['stderr'] or result['stdout']}"}
+            return _fail_with_tethering_recovery(
+                f"Hotspot起動に失敗: {result['stderr'] or result['stdout']}"
+            )
 
-        _run(['sudo', '-n', 'nmcli', 'connection', 'modify', 'Hotspot', 'connection.autoconnect', 'yes'])
-        _run(['sudo', '-n', 'nmcli', 'connection', 'modify', 'Hotspot', '802-11-wireless.powersave', '2'])
-        _run(['sudo', '-n', 'nmcli', 'connection', 'modify', 'Hotspot', '802-11-wireless.band', 'bg'])
-        _run(['sudo', '-n', 'nmcli', 'connection', 'modify', 'Hotspot', '802-11-wireless.channel', '6'])
+        _run(['sudo', '-n', nmcli_cmd, 'connection', 'modify', 'Hotspot', 'connection.autoconnect', 'yes'])
+        _run(['sudo', '-n', nmcli_cmd, 'connection', 'modify', 'Hotspot', '802-11-wireless.powersave', '2'])
+        _run(['sudo', '-n', nmcli_cmd, 'connection', 'modify', 'Hotspot', '802-11-wireless.band', 'bg'])
+        _run(['sudo', '-n', nmcli_cmd, 'connection', 'modify', 'Hotspot', '802-11-wireless.channel', '6'])
 
         # APのIPを固定化（失敗しても継続）
-        _run(['sudo', '-n', 'nmcli', 'connection', 'modify', 'Hotspot', 'ipv4.method', 'shared'])
-        _run(['sudo', '-n', 'nmcli', 'connection', 'modify', 'Hotspot', 'ipv4.addresses', f'{AP_IP}/24'])
-        _run(['sudo', '-n', 'nmcli', 'connection', 'down', 'Hotspot'])
+        _run(['sudo', '-n', nmcli_cmd, 'connection', 'modify', 'Hotspot', 'ipv4.method', 'shared'])
+        _run(['sudo', '-n', nmcli_cmd, 'connection', 'modify', 'Hotspot', 'ipv4.addresses', f'{AP_IP}/24'])
+        _run(['sudo', '-n', nmcli_cmd, 'connection', 'down', 'Hotspot'])
         time.sleep(1)
-        _run(['sudo', '-n', 'nmcli', 'connection', 'up', 'Hotspot'])
+        _run(['sudo', '-n', nmcli_cmd, 'connection', 'up', 'Hotspot'])
         time.sleep(2)
 
-        _run(['sudo', '-n', 'iw', 'dev', iface, 'set', 'power_save', 'off'])
+        _run(['sudo', '-n', iw_cmd, 'dev', iface, 'set', 'power_save', 'off'])
+
+        ready, ready_err = _wait_for_ap_ready(iface, timeout=35)
+        if not ready:
+            logger.warning(f"AP readiness check failed, retry hotspot up: {ready_err}")
+            _run(['sudo', '-n', nmcli_cmd, 'connection', 'up', 'Hotspot'], timeout=40)
+            time.sleep(2)
+            ready, ready_err = _wait_for_ap_ready(iface, timeout=20)
+            if not ready:
+                return _fail_with_tethering_recovery(f'AP起動後の確認に失敗: {ready_err}')
 
         # 設定を保存
         _save_wifi_settings('ap', ssid, password)
@@ -589,23 +844,56 @@ def switch_to_ap_mode(ssid='PiCamera', password='picamera123'):
         }
     except Exception as e:
         logger.error(f"AP mode switch failed: {e}")
-        return {'success': False, 'message': str(e)}
+        return _fail_with_tethering_recovery(str(e))
 
-def switch_to_tethering_mode():
+def switch_to_tethering_mode(allow_ap_fallback=True):
     """
     テザリングモード（通常のWi-Fiクライアントモード）に切り替える
+
+    allow_ap_fallback=False の場合は失敗時に AP へ戻さず、
+    失敗情報のみ返します（再帰的な切替ループ防止用途）。
     """
     # 保存された設定からSSIDを取得（もしあれば）
     # ここでは実装簡略化のため、既存のwpa_supplicant.confを優先するか、Webから渡された値を使うべき
     # 引数がないので、UI側で入力させるのが理想だが、今のAPIは引数なし。
     # 実際は update_wifi_settings API経由で wpa_supplicant を書き換えるフローが必要。
+
+    def _fail_with_ap_fallback(message):
+        if not allow_ap_fallback:
+            logger.warning(f"Tethering switch failed (AP fallback disabled): {message}")
+            ip = _get_primary_ip()
+            return {
+                'success': False,
+                'message': message,
+                'fallback': None,
+                'ip': ip,
+                'ip_address': ip,
+            }
+
+        logger.warning(f"Tethering switch failed, fallback to AP: {message}")
+        ap_settings = get_saved_ap_settings()
+        fallback = switch_to_ap_mode(ap_settings.get('ssid'), ap_settings.get('password'))
+        if fallback.get('success'):
+            try:
+                _save_wifi_settings('ap', ap_settings.get('ssid'), ap_settings.get('password'))
+            except Exception as e:
+                logger.warning(f"Failed to persist AP mode after fallback: {e}")
+        ip = fallback.get('ip') or fallback.get('ip_address')
+        return {
+            'success': False,
+            'message': message,
+            'fallback': fallback,
+            'ip': ip,
+            'ip_address': ip,
+        }
     
     if _is_networkmanager_running():
         try:
+            nmcli_cmd = _resolve_executable('nmcli')
             logger.info("Switching to tethering mode: teardown hotspot (nmcli)")
-            _run(['sudo', '-n', 'nmcli', 'connection', 'down', 'Hotspot'])
+            _run(['sudo', '-n', nmcli_cmd, 'connection', 'down', 'Hotspot'])
             time.sleep(2)
-            _run(['sudo', '-n', 'nmcli', 'connection', 'delete', 'Hotspot'])
+            _run(['sudo', '-n', nmcli_cmd, 'connection', 'delete', 'Hotspot'])
             time.sleep(1)
         except Exception as e:
             logger.warning(f"nmcli teardown failed (continue legacy): {e}")
@@ -619,6 +907,9 @@ def switch_to_tethering_mode():
     try:
         logger.info("Switching to tethering mode (legacy)")
         iface = _detect_wifi_interface()
+        iw_cmd = _resolve_executable('iw')
+
+        _ensure_per_iface_wpa_conf(iface)
         _run(['sudo', '-n', 'systemctl', 'stop', 'hostapd'])
         _run(['sudo', '-n', 'systemctl', 'stop', 'dnsmasq'])
 
@@ -627,37 +918,36 @@ def switch_to_tethering_mode():
         time.sleep(1)
         _run(['sudo', '-n', 'ip', 'link', 'set', iface, 'up'])
         time.sleep(1)
-        _run(['sudo', '-n', 'iw', 'dev', iface, 'set', 'power_save', 'off'])
+        _run(['sudo', '-n', iw_cmd, 'dev', iface, 'set', 'power_save', 'off'])
 
         _run(['sudo', '-n', 'systemctl', 'enable', 'dhcpcd'])
-        _run(['sudo', '-n', 'systemctl', 'restart', 'dhcpcd'])
-
-        _run(['sudo', '-n', 'systemctl', 'stop', 'wpa_supplicant'])
-        wpa_restart = _run(['sudo', '-n', 'systemctl', 'restart', f'wpa_supplicant@{iface}'])
+        wpa_restart = _restart_wpa_supplicant_services(iface)
         if wpa_restart['returncode'] != 0:
-            _run(['sudo', '-n', 'systemctl', 'restart', 'wpa_supplicant'])
+            return _fail_with_ap_fallback(
+                f"wpa_supplicant restart failed: {wpa_restart['stderr'] or wpa_restart['stdout']}"
+            )
         time.sleep(2)
+
+        _run(['sudo', '-n', 'systemctl', 'restart', 'dhcpcd'])
 
         reconfigure = _run_wpa_cli(['reconfigure'], iface=iface)
         if reconfigure['returncode'] != 0 or 'FAIL' in reconfigure['stdout']:
-            _run(['sudo', '-n', 'systemctl', 'restart', f'wpa_supplicant@{iface}'])
+            _restart_wpa_supplicant_services(iface)
             time.sleep(2)
             reconfigure = _run_wpa_cli(['reconfigure'], iface=iface)
 
         if reconfigure['returncode'] != 0 or 'FAIL' in reconfigure['stdout']:
-            return {
-                'success': False,
-                'message': f"wpa_cli reconfigure failed: {reconfigure['stderr'] or reconfigure['stdout']}",
-            }
+            return _fail_with_ap_fallback(
+                f"wpa_cli reconfigure failed: {reconfigure['stderr'] or reconfigure['stdout']}"
+            )
 
         time.sleep(3)
 
         reconnect = _run_wpa_cli(['reconnect'], iface=iface)
         if reconnect['returncode'] != 0 or 'FAIL' in reconnect['stdout']:
-            return {
-                'success': False,
-                'message': f"wpa_cli reconnect failed: {reconnect['stderr'] or reconnect['stdout']}",
-            }
+            return _fail_with_ap_fallback(
+                f"wpa_cli reconnect failed: {reconnect['stderr'] or reconnect['stdout']}"
+            )
         time.sleep(2)
 
         _run(['sudo', '-n', 'dhcpcd', '-n', iface])
@@ -665,16 +955,7 @@ def switch_to_tethering_mode():
 
         connected = check_tethering_connection(timeout=30)
         if not connected:
-            ap_settings = get_saved_ap_settings()
-            fallback = switch_to_ap_mode(ap_settings.get('ssid'), ap_settings.get('password'))
-            ip = fallback.get('ip') or fallback.get('ip_address')
-            return {
-                'success': False,
-                'message': 'テザリング接続に失敗したためAPモードに戻しました',
-                'fallback': fallback,
-                'ip': ip,
-                'ip_address': ip,
-            }
+            return _fail_with_ap_fallback('テザリング接続に失敗したためAPモードに戻しました')
 
         _save_wifi_settings('tethering', None, None)
         ip = _get_primary_ip()
@@ -685,7 +966,7 @@ def switch_to_tethering_mode():
             'ip_address': ip,
         }
     except Exception as e:
-        return {'success': False, 'message': str(e)}
+        return _fail_with_ap_fallback(str(e))
 
 def _save_wifi_settings(mode, ssid, password):
     """Wi-Fi設定を保存"""
