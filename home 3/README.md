@@ -573,6 +573,16 @@ curl -X POST "http://raspberrypi.local:8001/api/wifi/switch" \
   `connection up` 失敗時も `device wifi hotspot` で再生成して AP 再起動を試行
 - これにより「AP失敗→テザリング失敗」の連続失敗時も AP 復旧経路を残す
 
+### 症状: 再起動後に AP へ戻らず、家Wi-Fi側のままになる
+**原因**
+- AP切替要求中に `switch_to_ap_mode()` が途中失敗すると、保険としてテザリング復旧を試す設計になっている
+- その復旧が成功した場合、これまでは `wifi_mode=tethering` を保存していたため、再起動時の `restore_wifi_mode_on_boot()` が AP 再試行を行わず、
+  結果として AP SSID が再掲出されないケースが発生していた
+
+**解決策**
+- `switch_to_ap_mode()` の失敗復旧経路で、テザリング復旧成功時でも保存モードを `ap`（要求意図）として保持するよう修正
+- これにより再起動時に AP 復元ロジックが有効になり、AP再試行へ入る
+
 ### 症状: Mac側で同一サブネットを複数NICが保持すると Pi 探索を誤る
 **原因**
 - Macで `en0`（Wi-Fi）と `en11`（USB LAN 等）が同時に `192.168.0.0/24` を保持していると、
@@ -638,6 +648,17 @@ AP_INTERFACE=en0 HOME_INTERFACE=en0 \
 ---
 
 ## 作業ログ
+
+- 2026-02-15 11:35 JST
+  - 変更ファイル:
+    - `home 3/wifi_manager.py`
+      - `switch_to_ap_mode()` の失敗復旧で、テザリング復旧成功時に `wifi_mode=tethering` を保存していた挙動を修正
+      - 代わりに AP 要求意図（`wifi_mode=ap` + SSID/PASS）を保存するよう変更し、再起動時の AP 復元を保証
+    - `home 3/README.md`
+      - 上記の症状・原因・解決策と検証ログを追記
+  - 実行コマンド:
+    - `python3 -m py_compile '/Users/sugawaraichirou/Documents/アプリ/home 3/wifi_manager.py' '/Users/sugawaraichirou/Documents/アプリ/home 3/api_server.py' '/Users/sugawaraichirou/Documents/アプリ/home 3/camera_service.py'`（成功）
+    - `bash -n '/Users/sugawaraichirou/Documents/アプリ/home 3/wifi_cycle_test.sh'`（成功）
 
 - 2026-02-15 04:43 JST
   - 変更ファイル:

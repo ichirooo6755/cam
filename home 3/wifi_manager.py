@@ -705,9 +705,10 @@ def switch_to_ap_mode(ssid='PiCamera', password='picamera123'):
 
         if recovery.get('success'):
             try:
-                _save_wifi_settings('tethering', None, None)
+                # AP切替要求中の失敗復旧なので、再起動時にAP再試行できるよう意図モードはAPで保持する
+                _save_wifi_settings('ap', ssid, password)
             except Exception as e:
-                logger.warning(f"Failed to persist tethering mode after AP recovery: {e}")
+                logger.warning(f"Failed to persist AP intent after AP recovery fallback: {e}")
         else:
             logger.warning("Tethering recovery failed; trying AP persistence recovery")
             ap_recovery = ensure_ap_persistence(allow_recursive_ap_recovery=False)
