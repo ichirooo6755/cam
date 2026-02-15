@@ -9,6 +9,7 @@ HOME_MAC="${HOME_MAC:-88-A2-9E-40-1E-B4}"
 AP_INTERFACE="${AP_INTERFACE:-}"
 HOME_INTERFACE="${HOME_INTERFACE:-}"
 HOME_SUBNET_PREFIX="${HOME_SUBNET_PREFIX:-192.168.0}"
+FORCE_AP_SWITCH="${FORCE_AP_SWITCH:-1}"
 STEP_WAIT_SEC="${STEP_WAIT_SEC:-2}"
 AP_WAIT_SEC="${AP_WAIT_SEC:-120}"
 HOME_WAIT_SEC="${HOME_WAIT_SEC:-90}"
@@ -156,12 +157,18 @@ post_mode_switch() {
   local iface="$1"
   local host="$2"
   local mode="$3"
+  local payload
+
+  payload="{\"mode\":\"${mode}\"}"
+  if [ "$mode" = "ap" ] && [ "$FORCE_AP_SWITCH" = "1" ]; then
+    payload="{\"mode\":\"ap\",\"force\":true}"
+  fi
 
   local result
   if [ -n "$iface" ] && result="$(curl -sS --interface "$iface" --max-time 4 -X POST "http://${host}:8001/api/wifi/switch" \
     -H 'Content-Type: application/json' \
-    -d "{\"mode\":\"${mode}\"}" 2>/dev/null)"; then
-    log "switch request mode=${mode} host=${host} via_iface=${iface} response=${result}"
+    -d "$payload" 2>/dev/null)"; then
+    log "switch request mode=${mode} force_ap=${FORCE_AP_SWITCH} host=${host} via_iface=${iface} response=${result}"
     return 0
   fi
 
@@ -171,8 +178,8 @@ post_mode_switch() {
 
   if result="$(curl -sS --max-time 4 -X POST "http://${host}:8001/api/wifi/switch" \
     -H 'Content-Type: application/json' \
-    -d "{\"mode\":\"${mode}\"}" 2>/dev/null)"; then
-    log "switch request mode=${mode} host=${host} via_iface=auto response=${result}"
+    -d "$payload" 2>/dev/null)"; then
+    log "switch request mode=${mode} force_ap=${FORCE_AP_SWITCH} host=${host} via_iface=auto response=${result}"
     return 0
   fi
 

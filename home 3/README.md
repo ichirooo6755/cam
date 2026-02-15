@@ -148,6 +148,22 @@ bash ./update.sh 192.168.4.1
 - テザリング切替前に `wpa_supplicant.conf` 存在チェックを追加
 - iOS側は非200でもメッセージを復元し、エラー内容をそのまま表示
 
+### 症状: 「APに戻す」操作が成功扱いでも、実際にはAPが復活しないことがある
+**原因**
+- `/api/wifi/switch` は「現在モードが `ap`」と判定された場合に no-op で早期返却しており、
+  実際のAP到達性（`wlan` のAP帯IP）までは検証していませんでした。
+- そのため、名目上 `ap` でもAP制御経路が壊れている状態だと、復旧操作が実行されないケースがありました。
+
+**解決策**
+- `api_server.py` にモード健全性判定（`_is_mode_operational`）を追加
+  - AP: `wlan` のIPv4が `192.168.4.x` / `10.42.0.x` を持つか確認
+  - tethering: `check_tethering_connection()` で接続実体を確認
+- 同一モード要求でも不健全時は no-op せず、強制再適用へ昇格
+- `/api/wifi/switch` に `force: true` を追加（クールダウンをバイパスして復旧を優先）
+- 強制AP時は `switch_to_ap_mode()` 失敗後に `ensure_ap_persistence()` を追加試行
+- APIサーバに常駐の Wi-Fi watchdog を追加
+  - 制御経路断が一定時間継続した場合に AP 強制復旧を自動実行
+
 ### 屋外運用の安全性チェック（現状評価）
 - ✅ デフォルトURL検証（ローカルアドレス制限）やファイル名サニタイズは実装済み
 - ✅ APパスワードが初期値のときにアプリ内で警告表示を追加
@@ -702,11 +718,32 @@ AP_WAIT_SEC=20 HOME_WAIT_SEC=20 STEP_WAIT_SEC=2 \
 # 必要に応じてIFを固定（デュアルNIC環境向け）
 AP_INTERFACE=en0 HOME_INTERFACE=en0 \
   bash "home 3/wifi_cycle_test.sh" 2
+
+# AP復旧を毎回強制して検証（既定値 FORCE_AP_SWITCH=1）
+FORCE_AP_SWITCH=1 AP_INTERFACE=en0 HOME_INTERFACE=en0 \
+  bash "home 3/wifi_cycle_test.sh" 1
 ```
 
 ---
 
 ## 作業ログ
+
+- 2026-02-15 14:45 JST
+  - 変更ファイル:
+    - `home 3/api_server.py`
+      - 同一モード no-op 判定を「モード文字列一致」から「実体健全性判定」へ修正
+      - `/api/wifi/switch` に `force: true` を追加し、強制復旧時はクールダウンをバイパス
+      - 強制AP時に `switch_to_ap_mode()` 失敗後 `ensure_ap_persistence()` を再試行
+      - 通信断継続時にAPを自動復旧する Wi-Fi watchdog を追加
+      - Wi-Fiモード保存処理を `_persist_wifi_mode()` へ共通化
+    - `home 3/wifi_cycle_test.sh`
+      - `FORCE_AP_SWITCH` 環境変数を追加（既定 `1`）
+      - AP切替時に `{"mode":"ap","force":true}` を送れるよう修正
+    - `home 3/README.md`
+      - 上記の症状・原因・解決策、検証コマンドを追記
+  - 実行コマンド:
+    - `python3 -m py_compile '/Users/sugawaraichirou/Documents/アプリ/home 3/api_server.py' '/Users/sugawaraichirou/Documents/アプリ/home 3/wifi_manager.py' '/Users/sugawaraichirou/Documents/アプリ/home 3/camera_service.py'`（成功）
+    - `bash -n '/Users/sugawaraichirou/Documents/アプリ/home 3/wifi_cycle_test.sh'`（成功）
 
 - 2026-02-15 12:11 JST
   - 変更ファイル:

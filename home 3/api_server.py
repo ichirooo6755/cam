@@ -41,12 +41,25 @@ SAFE_FILENAME_PATTERN = re.compile(r'^[A-Za-z0-9._-]+$')
 ALLOWED_PHOTO_EXTENSIONS = ('.jpg', '.jpeg', '.png')
 MAX_JSON_BODY_BYTES = 64 * 1024
 WIFI_SWITCH_COOLDOWN_SEC = 12
+WIFI_RECOVERY_CHECK_INTERVAL_SEC = 10
+WIFI_RECOVERY_OFFLINE_GRACE_SEC = 45
+WIFI_RECOVERY_ATTEMPT_COOLDOWN_SEC = 120
+AP_IP_PREFIXES = ('192.168.4.', '10.42.0.')
 
 _WIFI_SWITCH_LOCK = threading.Lock()
 _WIFI_SWITCH_STATE = {
     'in_progress': False,
     'started_at': 0.0,
     'last_mode': None,
+}
+
+_WIFI_RECOVERY_LOCK = threading.Lock()
+_WIFI_RECOVERY_STATE = {
+    'offline_since': None,
+    'last_attempt_at': 0.0,
+    'last_mode': None,
+    'last_result': None,
+    'last_error': None,
 }
 
 ALLOWED_SETTINGS_KEYS = {
@@ -309,14 +322,14 @@ def _sanitize_settings_patch(patch):
     return sanitized, errors
 
 
-def _begin_wifi_switch(mode):
+def _begin_wifi_switch(mode, bypass_cooldown=False):
     now = time.time()
     with _WIFI_SWITCH_LOCK:
         if _WIFI_SWITCH_STATE.get('in_progress'):
             return False, '別のWi-Fi切替処理が進行中です。しばらく待ってから再実行してください。'
 
         started_at = float(_WIFI_SWITCH_STATE.get('started_at') or 0.0)
-        if now - started_at < WIFI_SWITCH_COOLDOWN_SEC:
+        if (not bypass_cooldown) and now - started_at < WIFI_SWITCH_COOLDOWN_SEC:
             return False, f'Wi-Fi切替直後です。{WIFI_SWITCH_COOLDOWN_SEC}秒以上空けて再試行してください。'
 
         _WIFI_SWITCH_STATE['in_progress'] = True
@@ -328,6 +341,172 @@ def _begin_wifi_switch(mode):
 def _finish_wifi_switch():
     with _WIFI_SWITCH_LOCK:
         _WIFI_SWITCH_STATE['in_progress'] = False
+
+
+def _persist_wifi_mode(mode, ap_ssid=None, ap_password=None):
+    """Wi-Fiモードをcamera_settings.jsonに保存"""
+    try:
+        settings = {}
+        if os.path.exists(SETTINGS_FILE):
+            with open(SETTINGS_FILE, 'r') as f:
+                settings = json.load(f)
+
+        settings['wifi_mode'] = mode
+        if ap_ssid:
+            settings['ap_ssid'] = ap_ssid
+        if ap_password:
+            settings['ap_password'] = ap_password
+
+        with open(SETTINGS_FILE, 'w') as f:
+            json.dump(settings, f, indent=2)
+        logger.info(f"Wi-Fi mode saved: {mode}")
+    except Exception as e:
+        logger.error(f"Failed to save Wi-Fi mode: {e}")
+
+
+def _is_ap_ip(ip_address):
+    ip_text = str(ip_address or '').strip()
+    if not ip_text:
+        return False
+    return any(ip_text.startswith(prefix) for prefix in AP_IP_PREFIXES)
+
+
+def _is_ap_operational():
+    """AP制御が実際に成立しているかを判定する。"""
+    try:
+        current_mode = wifi_manager.get_current_mode()
+        if current_mode != 'ap':
+            return False
+
+        iface = wifi_manager._detect_wifi_interface()
+        ips = wifi_manager._get_ipv4_addrs_for_interface(iface)
+        return any(_is_ap_ip(ip) for ip in ips)
+    except Exception as e:
+        logger.warning(f"Failed to check AP operational status: {e}")
+        return False
+
+
+def _is_mode_operational(mode):
+    mode = str(mode or '').strip().lower()
+    if mode == 'ap':
+        return _is_ap_operational()
+
+    if mode == 'tethering':
+        try:
+            return wifi_manager.check_tethering_connection(timeout=12)
+        except Exception as e:
+            logger.warning(f"Failed to check tethering operational status: {e}")
+            return False
+
+    return False
+
+
+def _run_force_ap_recovery(trigger='watchdog'):
+    """通信不能時にAPへ強制復旧する。"""
+    saved_ap = wifi_manager.get_saved_ap_settings()
+    ssid = saved_ap.get('ssid')
+    password = saved_ap.get('password')
+
+    primary = wifi_manager.switch_to_ap_mode(ssid, password)
+    if primary.get('success'):
+        _persist_wifi_mode('ap', ap_ssid=ssid, ap_password=password)
+        return {
+            'success': True,
+            'message': f'AP force recovery succeeded ({trigger}, switch_to_ap_mode)',
+            'result': primary,
+        }
+
+    persistence = wifi_manager.ensure_ap_persistence(allow_recursive_ap_recovery=False)
+    if persistence.get('success'):
+        _persist_wifi_mode('ap', ap_ssid=ssid, ap_password=password)
+        return {
+            'success': True,
+            'message': f'AP force recovery succeeded ({trigger}, ensure_ap_persistence)',
+            'switch_result': primary,
+            'persistence_result': persistence,
+        }
+
+    return {
+        'success': False,
+        'message': f"AP force recovery failed ({trigger})",
+        'switch_result': primary,
+        'persistence_result': persistence,
+    }
+
+
+def _wifi_recovery_watchdog_loop():
+    """通常経路で到達不能な状態が続いたらAPを自動復旧する。"""
+    logger.info(
+        "Wi-Fi recovery watchdog started "
+        f"(interval={WIFI_RECOVERY_CHECK_INTERVAL_SEC}s grace={WIFI_RECOVERY_OFFLINE_GRACE_SEC}s cooldown={WIFI_RECOVERY_ATTEMPT_COOLDOWN_SEC}s)"
+    )
+
+    while True:
+        time.sleep(WIFI_RECOVERY_CHECK_INTERVAL_SEC)
+
+        try:
+            with _WIFI_SWITCH_LOCK:
+                if _WIFI_SWITCH_STATE.get('in_progress'):
+                    continue
+
+            mode = wifi_manager.get_current_mode()
+            operational = _is_mode_operational(mode)
+            now = time.time()
+
+            should_attempt_recovery = False
+            offline_for_sec = 0
+
+            with _WIFI_RECOVERY_LOCK:
+                _WIFI_RECOVERY_STATE['last_mode'] = mode
+
+                if operational:
+                    if _WIFI_RECOVERY_STATE.get('offline_since'):
+                        logger.info("Wi-Fi recovery watchdog: connectivity restored")
+                    _WIFI_RECOVERY_STATE['offline_since'] = None
+                    _WIFI_RECOVERY_STATE['last_error'] = None
+                    continue
+
+                offline_since = _WIFI_RECOVERY_STATE.get('offline_since')
+                if offline_since is None:
+                    offline_since = now
+                    _WIFI_RECOVERY_STATE['offline_since'] = offline_since
+                    logger.warning("Wi-Fi recovery watchdog: control path seems offline")
+
+                offline_for_sec = now - offline_since
+                last_attempt = float(_WIFI_RECOVERY_STATE.get('last_attempt_at') or 0.0)
+                if (
+                    offline_for_sec >= WIFI_RECOVERY_OFFLINE_GRACE_SEC
+                    and now - last_attempt >= WIFI_RECOVERY_ATTEMPT_COOLDOWN_SEC
+                ):
+                    _WIFI_RECOVERY_STATE['last_attempt_at'] = now
+                    should_attempt_recovery = True
+
+            if not should_attempt_recovery:
+                continue
+
+            can_switch, guard_error = _begin_wifi_switch('watchdog-force-ap', bypass_cooldown=True)
+            if not can_switch:
+                logger.warning(f"Wi-Fi recovery watchdog skipped by switch guard: {guard_error}")
+                continue
+
+            try:
+                result = _run_force_ap_recovery(trigger='watchdog')
+                if result.get('success'):
+                    logger.warning(f"Wi-Fi recovery watchdog: AP recovered after offline {int(offline_for_sec)}s")
+                else:
+                    logger.error(f"Wi-Fi recovery watchdog: AP recovery failed: {result}")
+
+                with _WIFI_RECOVERY_LOCK:
+                    _WIFI_RECOVERY_STATE['last_result'] = result
+                    _WIFI_RECOVERY_STATE['last_error'] = None if result.get('success') else result.get('message')
+            except Exception as e:
+                logger.error(f"Wi-Fi recovery watchdog attempt failed: {e}")
+                with _WIFI_RECOVERY_LOCK:
+                    _WIFI_RECOVERY_STATE['last_error'] = str(e)
+            finally:
+                _finish_wifi_switch()
+        except Exception as e:
+            logger.error(f"Wi-Fi recovery watchdog loop error: {e}")
 
 CAMERA_MODE_PRESETS = {
     'reaction': {
@@ -1175,6 +1354,7 @@ class APIHandler(BaseHTTPRequestHandler):
                 return
 
             mode = str(data.get('mode') or '').strip().lower()
+            force_requested = _parse_bool_value(data.get('force'), default=False)
             if mode not in ('ap', 'tethering'):
                 result = {'success': False, 'message': 'Unknown mode'}
                 self.send_response(400)
@@ -1185,16 +1365,20 @@ class APIHandler(BaseHTTPRequestHandler):
                 return
 
             current_mode = (wifi_manager.get_wifi_status().get('mode') or '').strip().lower()
-            if current_mode == mode:
-                result = {'success': True, 'message': f'既に{mode}モードです'}
-                self.send_response(200)
-                self.send_header('Content-Type', 'application/json')
-                self.end_headers()
-                self.wfile.write(json.dumps(result).encode())
-                self.wfile.flush()
-                return
+            if current_mode == mode and not force_requested:
+                if _is_mode_operational(mode):
+                    result = {'success': True, 'message': f'既に{mode}モードです'}
+                    self.send_response(200)
+                    self.send_header('Content-Type', 'application/json')
+                    self.end_headers()
+                    self.wfile.write(json.dumps(result).encode())
+                    self.wfile.flush()
+                    return
 
-            can_switch, guard_error = _begin_wifi_switch(mode)
+                force_requested = True
+                logger.warning(f"Requested mode={mode} matches current state but control path is unhealthy; forcing recovery")
+
+            can_switch, guard_error = _begin_wifi_switch(mode, bypass_cooldown=force_requested)
             if not can_switch:
                 self.send_response(409)
                 self.send_header('Content-Type', 'application/json')
@@ -1250,7 +1434,11 @@ class APIHandler(BaseHTTPRequestHandler):
 
                 result = {
                     'success': True,
-                    'message': f'APモード切替を開始しました。スマホで「{ssid}」に接続してください。',
+                    'message': (
+                        f'APモードの強制復旧を開始しました。スマホで「{ssid}」に接続してください。'
+                        if force_requested
+                        else f'APモード切替を開始しました。スマホで「{ssid}」に接続してください。'
+                    ),
                     'ip': '192.168.4.1',
                     'ip_address': '192.168.4.1',
                 }
@@ -1264,9 +1452,20 @@ class APIHandler(BaseHTTPRequestHandler):
                     try:
                         time.sleep(0.7)
                         sw = wifi_manager.switch_to_ap_mode(ssid, password)
+                        if force_requested and not sw.get('success'):
+                            logger.warning("Forced AP request: primary AP switch failed, trying ensure_ap_persistence")
+                            persistence = wifi_manager.ensure_ap_persistence(allow_recursive_ap_recovery=False)
+                            sw = {
+                                'success': bool(persistence.get('success')),
+                                'message': sw.get('message'),
+                                'primary': sw,
+                                'persistence': persistence,
+                                'ip': persistence.get('ip') or persistence.get('ip_address') or sw.get('ip') or sw.get('ip_address'),
+                                'ip_address': persistence.get('ip_address') or persistence.get('ip') or sw.get('ip_address') or sw.get('ip'),
+                            }
                         logger.info(f"Wi-Fi switch (ap) result: {sw}")
                         if sw.get('success'):
-                            self._save_wifi_mode('ap', ap_ssid=ssid, ap_password=password)
+                            _persist_wifi_mode('ap', ap_ssid=ssid, ap_password=password)
                     except Exception as e:
                         logger.error(f"Wi-Fi switch (ap) background error: {e}")
                     finally:
@@ -1302,7 +1501,7 @@ class APIHandler(BaseHTTPRequestHandler):
                         sw = wifi_manager.switch_to_tethering_mode()
                         logger.info(f"Wi-Fi switch (tethering) result: {sw}")
                         if sw.get('success'):
-                            self._save_wifi_mode('tethering')
+                            _persist_wifi_mode('tethering')
                     except Exception as e:
                         logger.error(f"Wi-Fi switch (tethering) background error: {e}")
                     finally:
@@ -1514,21 +1713,7 @@ class APIHandler(BaseHTTPRequestHandler):
     
     def _save_wifi_mode(self, mode, ap_ssid=None, ap_password=None):
         """Wi-Fiモードをcamera_settings.jsonに保存"""
-        try:
-            settings = {}
-            if os.path.exists(SETTINGS_FILE):
-                with open(SETTINGS_FILE, 'r') as f:
-                    settings = json.load(f)
-            settings['wifi_mode'] = mode
-            if ap_ssid:
-                settings['ap_ssid'] = ap_ssid
-            if ap_password:
-                settings['ap_password'] = ap_password
-            with open(SETTINGS_FILE, 'w') as f:
-                json.dump(settings, f, indent=2)
-            logger.info(f"Wi-Fi mode saved: {mode}")
-        except Exception as e:
-            logger.error(f"Failed to save Wi-Fi mode: {e}")
+        _persist_wifi_mode(mode, ap_ssid=ap_ssid, ap_password=ap_password)
 
     def log_message(self, format, *args):
         """アクセスログ"""
@@ -1635,6 +1820,8 @@ def main():
 
     if not _consume_boot_network_applied_marker():
         restore_wifi_mode_on_boot()
+
+    threading.Thread(target=_wifi_recovery_watchdog_loop, daemon=True).start()
     
     server_address = ('0.0.0.0', 8001)
     httpd = ReusableHTTPServer(server_address, APIHandler)
