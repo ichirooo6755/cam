@@ -416,13 +416,23 @@ actor CameraAPI {
 
         let (data, response) = try await session.data(for: request)
 
-        guard let httpResponse = response as? HTTPURLResponse,
-            httpResponse.statusCode == 200
-        else {
+        guard let httpResponse = response as? HTTPURLResponse else {
             throw CameraAPIError.serverError
         }
 
-        let result = try JSONDecoder().decode(WiFiSwitchResponse.self, from: data)
+        let decodedResult = try? JSONDecoder().decode(WiFiSwitchResponse.self, from: data)
+
+        if httpResponse.statusCode != 200 {
+            if let decodedResult, let message = decodedResult.message {
+                throw CameraAPIError.updateFailed(message)
+            }
+            throw CameraAPIError.serverError
+        }
+
+        guard let result = decodedResult else {
+            throw CameraAPIError.serverError
+        }
+
         if !result.success {
             throw CameraAPIError.updateFailed(result.message ?? "Wi-Fi switch failed")
         }
@@ -442,13 +452,23 @@ actor CameraAPI {
 
         let (data, response) = try await session.data(for: request)
 
-        guard let httpResponse = response as? HTTPURLResponse,
-            httpResponse.statusCode == 200
-        else {
+        guard let httpResponse = response as? HTTPURLResponse else {
             throw CameraAPIError.serverError
         }
 
-        let result = try JSONDecoder().decode(WiFiSwitchResponse.self, from: data)
+        let decodedResult = try? JSONDecoder().decode(WiFiSwitchResponse.self, from: data)
+
+        if httpResponse.statusCode != 200 {
+            if let decodedResult, let message = decodedResult.message {
+                throw CameraAPIError.updateFailed(message)
+            }
+            throw CameraAPIError.serverError
+        }
+
+        guard let result = decodedResult else {
+            throw CameraAPIError.serverError
+        }
+
         if !result.success {
             throw CameraAPIError.updateFailed(result.message ?? "Wi-Fi write failed")
         }

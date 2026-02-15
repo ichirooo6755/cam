@@ -120,6 +120,34 @@ bash ./update.sh 192.168.4.1
 - ISO/SSをメニュー選択主体から、チップ選択 + `+/-` ステップ操作へ改善
 - ダーク/ライト両方で見やすい背景トーンへ調整（シアン/ティール基調）
 
+### 追加: アプリ外観モード（System / Light / Dark）
+- `ContentView` に `APPEARANCE` セクションを追加
+- `PiCameraControlApp` で `@AppStorage("appAppearanceMode")` を参照し、
+  アプリ全体へ `preferredColorScheme` を適用
+- 端末追従（System）と、撮影時に見やすい強制ダーク表示を切替可能
+
+### 症状: APIへ異常な設定値/未知キーを送れてしまう潜在リスク
+**原因**
+- `/api/settings` が受信キーを広く受け取り、型/範囲チェックも限定的だったため、
+  誤った値で設定ファイルが壊れる余地がありました。
+
+**解決策**
+- `api_server.py` に設定キーの **ホワイトリスト** を追加
+- ISO/SS/quality/threshold/interval/boolean などを **型 + 範囲検証** して不正値を400で拒否
+- リクエストJSONサイズ上限（64KB）を追加して過大ボディを拒否
+
+### 症状: AP/テザリング切替を連打すると競合し不安定化する潜在リスク
+**原因**
+- `/api/wifi/switch` が並列要求や短時間連打を防ぐ仕組みを持たず、
+  バックグラウンド切替処理同士が競合する余地がありました。
+
+**解決策**
+- Wi-Fi切替にロック + クールダウン（12秒）を導入
+- 切替中は `409` で拒否し、同一モード要求は即 `200` で no-op 応答
+- SSID/PASSWORD の文字/長さ検証を強化
+- テザリング切替前に `wpa_supplicant.conf` 存在チェックを追加
+- iOS側は非200でもメッセージを復元し、エラー内容をそのまま表示
+
 ### 屋外運用の安全性チェック（現状評価）
 - ✅ デフォルトURL検証（ローカルアドレス制限）やファイル名サニタイズは実装済み
 - ✅ APパスワードが初期値のときにアプリ内で警告表示を追加
@@ -679,6 +707,27 @@ AP_INTERFACE=en0 HOME_INTERFACE=en0 \
 ---
 
 ## 作業ログ
+
+- 2026-02-15 12:11 JST
+  - 変更ファイル:
+    - `home 3/api_server.py`
+      - `MAX_JSON_BODY_BYTES` によるJSONサイズ制限を追加
+      - `/api/settings` のホワイトリスト検証・型/範囲検証を追加
+      - `/api/wifi/switch` にロック + クールダウン + 同一モードno-opを追加
+      - AP/テザリング切替前の入力・前提条件チェックを追加
+    - `PiCameraControl/PiCameraControl/CameraAPI.swift`
+      - Wi-Fi APIで非200時もJSONメッセージを復元してUIへ返却
+    - `PiCameraControl/PiCameraControl/ContentView.swift`
+      - `APPEARANCE` セクション（System/Light/Dark）を追加
+      - Wi-Fi切替失敗時に固定文言ではなく実エラーメッセージを表示
+    - `PiCameraControl/PiCameraControl/PiCameraControlApp.swift`
+      - `preferredColorScheme` を `appAppearanceMode` でアプリ全体適用
+    - `home 3/README.md`
+      - 上記の症状・原因・解決策と作業ログを追記
+  - 実行コマンド:
+    - `python3 -m py_compile '/Users/sugawaraichirou/Documents/アプリ/home 3/api_server.py' '/Users/sugawaraichirou/Documents/アプリ/home 3/wifi_manager.py' '/Users/sugawaraichirou/Documents/アプリ/home 3/camera_service.py'`（成功）
+    - `bash './build_ios_simulator.sh'`（初回失敗: `invalid redeclaration of 'colorScheme'`）
+    - `bash './build_ios_simulator.sh'`（修正後 `** BUILD SUCCEEDED **`）
 
 - 2026-02-15 11:52 JST
   - 変更ファイル:

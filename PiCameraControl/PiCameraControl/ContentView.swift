@@ -158,9 +158,11 @@ struct ContentView: View {
     }
 
     // MARK: - State
+    @Environment(\.colorScheme) private var colorScheme
     @AppStorage("serverIP") private var serverIP: String = "192.168.4.1"
     @AppStorage("apSSID") private var savedAPSSID: String = "PiCamera"
     @AppStorage("apPassword") private var savedAPPassword: String = "picamera123"
+    @AppStorage("appAppearanceMode") private var appAppearanceMode: String = "system"
 
     @State private var isEditingIP: Bool = false
 
@@ -207,8 +209,6 @@ struct ContentView: View {
     @StateObject private var captureLocationProvider = CaptureLocationProvider()
 
     @FocusState private var isManualMetaFocused: Bool
-
-    @Environment(\.colorScheme) var colorScheme
 
     private var api: CameraAPI {
         CameraAPI(baseURL: "http://\(serverIP):8001")
@@ -311,6 +311,8 @@ struct ContentView: View {
                             .sensoryFeedback(.impact(flexibility: .rigid), trigger: isCapturing)
 
                         sensorStatusSection
+
+                        appearanceSection
 
                         // Network
                         networkSection
@@ -662,6 +664,33 @@ struct ContentView: View {
             }
 
             Text("屋外運用時は、移動・調整中だけ停止し、設置後に再開すると誤撮影と消費電力を抑えられます。")
+                .font(.caption)
+                .foregroundColor(.secondary)
+        }
+        .padding(16)
+        .liquidGlassStyle(radius: 20)
+    }
+
+    private var appearanceSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("APPEARANCE")
+                    .font(.caption2.weight(.black))
+                    .foregroundColor(.secondary)
+                Spacer()
+                Text(colorScheme == .dark ? "現在: DARK" : "現在: LIGHT")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundColor(.secondary)
+            }
+
+            Picker("外観", selection: $appAppearanceMode) {
+                Text("自動").tag("system")
+                Text("ライト").tag("light")
+                Text("ダーク").tag("dark")
+            }
+            .pickerStyle(.segmented)
+
+            Text("Systemにすると端末設定に追従します。屋外撮影はダーク固定が見やすいことが多いです。")
                 .font(.caption)
                 .foregroundColor(.secondary)
         }
@@ -1476,7 +1505,7 @@ struct ContentView: View {
                     toAP: targetAPMode, ssid: apSSIDInput, password: apPasswordInput)
             } catch {
                 await MainActor.run {
-                    errorMessage = "AP切替の開始に失敗しました。接続先とパスワードを確認してください。"
+                    errorMessage = error.localizedDescription
                     isSwitchingWiFi = false
                 }
                 return

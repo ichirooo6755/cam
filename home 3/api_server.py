@@ -39,6 +39,38 @@ BOOT_NETWORK_APPLIED_MARKERS = (
 )
 SAFE_FILENAME_PATTERN = re.compile(r'^[A-Za-z0-9._-]+$')
 ALLOWED_PHOTO_EXTENSIONS = ('.jpg', '.jpeg', '.png')
+MAX_JSON_BODY_BYTES = 64 * 1024
+WIFI_SWITCH_COOLDOWN_SEC = 12
+
+_WIFI_SWITCH_LOCK = threading.Lock()
+_WIFI_SWITCH_STATE = {
+    'in_progress': False,
+    'started_at': 0.0,
+    'last_mode': None,
+}
+
+ALLOWED_SETTINGS_KEYS = {
+    'camera_mode',
+    'brightness_threshold',
+    'detection_threshold',
+    'detection_interval',
+    'check_interval',
+    'capture_cooldown',
+    'iso',
+    'shutter_speed',
+    'white_balance',
+    'contrast',
+    'saturation',
+    'quality',
+    'width',
+    'height',
+    'enable_multiple_exposure',
+    'enable_2in1_composition',
+    'enable_timestamp',
+    'monitoring_enabled',
+}
+
+ALLOWED_WHITE_BALANCE = {'auto', 'daylight', 'cloudy', 'tungsten', 'fluorescent'}
 DEFAULT_SETTINGS = {
     'camera_mode': 'standard',
     'brightness_threshold': 30,
@@ -77,6 +109,225 @@ def _sanitize_location_label(value):
     if not safe:
         return None
     return safe[:96]
+
+
+def _unsafe_text_chars_present(value):
+    if value is None:
+        return False
+    text = str(value)
+    return any((ord(ch) < 32 and ch not in ('\t',)) for ch in text)
+
+
+def _parse_bool_value(value, default=False):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)) and value in (0, 1):
+        return bool(value)
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {'1', 'true', 'yes', 'on'}:
+            return True
+        if lowered in {'0', 'false', 'no', 'off', ''}:
+            return False
+    return default
+
+
+def _parse_int(value):
+    if isinstance(value, bool):
+        return None
+    try:
+        if isinstance(value, str):
+            value = value.strip()
+        return int(value)
+    except Exception:
+        return None
+
+
+def _parse_float(value):
+    if isinstance(value, bool):
+        return None
+    try:
+        if isinstance(value, str):
+            value = value.strip()
+        return float(value)
+    except Exception:
+        return None
+
+
+def _read_json_body(handler, max_bytes=MAX_JSON_BODY_BYTES):
+    content_length_raw = handler.headers.get('Content-Length', '0')
+    try:
+        content_length = int(content_length_raw)
+    except Exception:
+        handler.send_response(400)
+        handler.send_header('Content-Type', 'application/json')
+        handler.end_headers()
+        handler.wfile.write(json.dumps({'success': False, 'message': 'Invalid Content-Length'}).encode())
+        return None
+
+    if content_length < 0 or content_length > max_bytes:
+        handler.send_response(413)
+        handler.send_header('Content-Type', 'application/json')
+        handler.end_headers()
+        handler.wfile.write(json.dumps({'success': False, 'message': 'Request body too large'}).encode())
+        return None
+
+    body = handler.rfile.read(content_length).decode() if content_length > 0 else ''
+    if not body:
+        return {}
+
+    try:
+        payload = json.loads(body)
+    except json.JSONDecodeError:
+        handler.send_response(400)
+        handler.send_header('Content-Type', 'application/json')
+        handler.end_headers()
+        handler.wfile.write(json.dumps({'success': False, 'message': 'Invalid JSON'}).encode())
+        return None
+
+    if not isinstance(payload, dict):
+        handler.send_response(400)
+        handler.send_header('Content-Type', 'application/json')
+        handler.end_headers()
+        handler.wfile.write(json.dumps({'success': False, 'message': 'JSON object required'}).encode())
+        return None
+
+    return payload
+
+
+def _sanitize_settings_patch(patch):
+    errors = []
+    sanitized = {}
+
+    for key, value in patch.items():
+        if key not in ALLOWED_SETTINGS_KEYS:
+            errors.append(f'Unsupported setting key: {key}')
+            continue
+
+        if key == 'camera_mode':
+            mode = str(value).strip().lower()
+            if mode not in CAMERA_MODE_PRESETS:
+                errors.append('camera_mode must be one of reaction/quality/standard/battery')
+            else:
+                sanitized[key] = mode
+            continue
+
+        if key in ('brightness_threshold', 'detection_threshold'):
+            ivalue = _parse_int(value)
+            if ivalue is None or ivalue < 0 or ivalue > 100:
+                errors.append(f'{key} must be an integer in 0..100')
+            else:
+                sanitized[key] = ivalue
+            continue
+
+        if key in ('width', 'height'):
+            ivalue = _parse_int(value)
+            if ivalue is None or ivalue < 320 or ivalue > 5000:
+                errors.append(f'{key} must be an integer in 320..5000')
+            else:
+                sanitized[key] = ivalue
+            continue
+
+        if key in ('quality',):
+            ivalue = _parse_int(value)
+            if ivalue is None or ivalue < 60 or ivalue > 100:
+                errors.append('quality must be an integer in 60..100')
+            else:
+                sanitized[key] = ivalue
+            continue
+
+        if key in ('contrast', 'saturation'):
+            ivalue = _parse_int(value)
+            if ivalue is None or ivalue < -100 or ivalue > 100:
+                errors.append(f'{key} must be an integer in -100..100')
+            else:
+                sanitized[key] = ivalue
+            continue
+
+        if key in ('detection_interval', 'check_interval'):
+            fvalue = _parse_float(value)
+            if fvalue is None or fvalue < 0.05 or fvalue > 10:
+                errors.append(f'{key} must be a number in 0.05..10.0')
+            else:
+                sanitized[key] = round(fvalue, 3)
+            continue
+
+        if key == 'capture_cooldown':
+            fvalue = _parse_float(value)
+            if fvalue is None or fvalue < 0 or fvalue > 30:
+                errors.append('capture_cooldown must be a number in 0..30')
+            else:
+                sanitized[key] = round(fvalue, 3)
+            continue
+
+        if key == 'iso':
+            if isinstance(value, str):
+                lowered = value.strip().lower()
+                if lowered == 'auto':
+                    sanitized[key] = 'auto'
+                else:
+                    ivalue = _parse_int(value)
+                    if ivalue not in METERING_ISO_STOPS:
+                        errors.append('iso must be auto or one of 100/200/400/800/1600/3200')
+                    else:
+                        sanitized[key] = ivalue
+            else:
+                ivalue = _parse_int(value)
+                if ivalue not in METERING_ISO_STOPS:
+                    errors.append('iso must be auto or one of 100/200/400/800/1600/3200')
+                else:
+                    sanitized[key] = ivalue
+            continue
+
+        if key == 'shutter_speed':
+            if isinstance(value, str) and value.strip().lower() == 'auto':
+                sanitized[key] = 'auto'
+            else:
+                ivalue = _parse_int(value)
+                if ivalue is None or ivalue < 2500 or ivalue > 20_000_000:
+                    errors.append('shutter_speed must be auto or microseconds in 2500..20000000')
+                else:
+                    sanitized[key] = ivalue
+            continue
+
+        if key == 'white_balance':
+            wb = str(value).strip().lower()
+            if wb not in ALLOWED_WHITE_BALANCE:
+                errors.append('white_balance must be auto/daylight/cloudy/tungsten/fluorescent')
+            else:
+                sanitized[key] = wb
+            continue
+
+        if key in ('enable_multiple_exposure', 'enable_2in1_composition', 'enable_timestamp', 'monitoring_enabled'):
+            parsed = _parse_bool_value(value, default=None)
+            if parsed is None:
+                errors.append(f'{key} must be boolean')
+            else:
+                sanitized[key] = parsed
+            continue
+
+    return sanitized, errors
+
+
+def _begin_wifi_switch(mode):
+    now = time.time()
+    with _WIFI_SWITCH_LOCK:
+        if _WIFI_SWITCH_STATE.get('in_progress'):
+            return False, '別のWi-Fi切替処理が進行中です。しばらく待ってから再実行してください。'
+
+        started_at = float(_WIFI_SWITCH_STATE.get('started_at') or 0.0)
+        if now - started_at < WIFI_SWITCH_COOLDOWN_SEC:
+            return False, f'Wi-Fi切替直後です。{WIFI_SWITCH_COOLDOWN_SEC}秒以上空けて再試行してください。'
+
+        _WIFI_SWITCH_STATE['in_progress'] = True
+        _WIFI_SWITCH_STATE['started_at'] = now
+        _WIFI_SWITCH_STATE['last_mode'] = mode
+        return True, None
+
+
+def _finish_wifi_switch():
+    with _WIFI_SWITCH_LOCK:
+        _WIFI_SWITCH_STATE['in_progress'] = False
 
 CAMERA_MODE_PRESETS = {
     'reaction': {
@@ -619,9 +870,9 @@ class APIHandler(BaseHTTPRequestHandler):
     
     def delete_photos(self):
         try:
-            content_length = int(self.headers.get('Content-Length', 0))
-            body = self.rfile.read(content_length).decode()
-            data = json.loads(body) if body else {}
+            data = _read_json_body(self)
+            if data is None:
+                return
 
             filenames = []
             if isinstance(data.get('filenames'), list):
@@ -785,12 +1036,22 @@ class APIHandler(BaseHTTPRequestHandler):
     def update_settings(self):
         """設定を更新"""
         try:
-            content_length = int(self.headers.get('Content-Length', 0))
-            body = self.rfile.read(content_length).decode()
-            new_settings = json.loads(body)
+            new_settings = _read_json_body(self)
+            if new_settings is None:
+                return
 
-            is_temporary = bool(new_settings.pop('temporary', False))
-            reset_temporary = bool(new_settings.pop('reset_temporary', False))
+            is_temporary = _parse_bool_value(new_settings.pop('temporary', False), default=False)
+            reset_temporary = _parse_bool_value(new_settings.pop('reset_temporary', False), default=False)
+
+            sanitized_patch, validation_errors = _sanitize_settings_patch(new_settings)
+            if validation_errors:
+                self.send_response(400)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({'success': False, 'errors': validation_errors}).encode())
+                return
+
+            new_settings = sanitized_patch
 
             if reset_temporary:
                 try:
@@ -864,23 +1125,41 @@ class APIHandler(BaseHTTPRequestHandler):
     def write_wpa_settings(self):
         """家Wi-Fi設定を書き込み"""
         try:
-            content_length = int(self.headers.get('Content-Length', 0))
-            body = self.rfile.read(content_length).decode()
-            data = json.loads(body) if body else {}
+            data = _read_json_body(self)
+            if data is None:
+                return
 
-            ssid = data.get('ssid')
-            psk = data.get('psk')
+            ssid = str(data.get('ssid') or '').strip()
+            psk = str(data.get('psk') or '').strip()
+
+            if _unsafe_text_chars_present(ssid) or _unsafe_text_chars_present(psk):
+                self.send_response(400)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({'success': False, 'message': 'ssid/psk contains invalid characters'}).encode())
+                return
+
+            ssid_len = len(ssid.encode('utf-8'))
+            if ssid_len < 1 or ssid_len > 32:
+                self.send_response(400)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({'success': False, 'message': 'ssid must be 1..32 bytes'}).encode())
+                return
+
+            if len(psk) < 8 or len(psk) > 63:
+                self.send_response(400)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({'success': False, 'message': 'psk must be 8..63 chars'}).encode())
+                return
+
             result = wifi_manager.configure_wpa_supplicant(ssid, psk)
 
-            self.send_response(200)
+            self.send_response(200 if result.get('success') else 400)
             self.send_header('Content-Type', 'application/json')
             self.end_headers()
             self.wfile.write(json.dumps(result).encode())
-        except json.JSONDecodeError:
-            self.send_response(400)
-            self.send_header('Content-Type', 'application/json')
-            self.end_headers()
-            self.wfile.write(json.dumps({'success': False, 'message': 'Invalid JSON'}).encode())
         except Exception as e:
             logger.error(f"write_wpa_settings error: {e}")
             self.send_response(500)
@@ -891,18 +1170,46 @@ class APIHandler(BaseHTTPRequestHandler):
     def switch_wifi_mode(self):
         """Wi-Fiモード切り替え"""
         try:
-            content_length = int(self.headers.get('Content-Length', 0))
-            body = self.rfile.read(content_length).decode()
-            data = json.loads(body) if body else {}
+            data = _read_json_body(self)
+            if data is None:
+                return
 
-            mode = data.get('mode')
+            mode = str(data.get('mode') or '').strip().lower()
+            if mode not in ('ap', 'tethering'):
+                result = {'success': False, 'message': 'Unknown mode'}
+                self.send_response(400)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps(result).encode())
+                self.wfile.flush()
+                return
+
+            current_mode = (wifi_manager.get_wifi_status().get('mode') or '').strip().lower()
+            if current_mode == mode:
+                result = {'success': True, 'message': f'既に{mode}モードです'}
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps(result).encode())
+                self.wfile.flush()
+                return
+
+            can_switch, guard_error = _begin_wifi_switch(mode)
+            if not can_switch:
+                self.send_response(409)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({'success': False, 'message': guard_error}).encode())
+                self.wfile.flush()
+                return
 
             if mode == 'ap':
                 saved = wifi_manager.get_saved_ap_settings()
-                ssid = data.get('ssid') or saved.get('ssid')
-                password = data.get('password') or saved.get('password')
+                ssid = str(data.get('ssid') or saved.get('ssid') or '').strip()
+                password = str(data.get('password') or saved.get('password') or '').strip()
 
                 if not ssid or not password:
+                    _finish_wifi_switch()
                     result = {'success': False, 'message': 'ssid/password required'}
                     self.send_response(400)
                     self.send_header('Content-Type', 'application/json')
@@ -911,8 +1218,29 @@ class APIHandler(BaseHTTPRequestHandler):
                     self.wfile.flush()
                     return
 
-                if len(password) < 8:
-                    result = {'success': False, 'message': 'パスワードは8文字以上必要です'}
+                if _unsafe_text_chars_present(ssid) or _unsafe_text_chars_present(password):
+                    _finish_wifi_switch()
+                    result = {'success': False, 'message': 'ssid/password contains invalid characters'}
+                    self.send_response(400)
+                    self.send_header('Content-Type', 'application/json')
+                    self.end_headers()
+                    self.wfile.write(json.dumps(result).encode())
+                    self.wfile.flush()
+                    return
+
+                if len(ssid.encode('utf-8')) < 1 or len(ssid.encode('utf-8')) > 32:
+                    _finish_wifi_switch()
+                    result = {'success': False, 'message': 'SSIDは1〜32byteで指定してください'}
+                    self.send_response(400)
+                    self.send_header('Content-Type', 'application/json')
+                    self.end_headers()
+                    self.wfile.write(json.dumps(result).encode())
+                    self.wfile.flush()
+                    return
+
+                if len(password) < 8 or len(password) > 63:
+                    _finish_wifi_switch()
+                    result = {'success': False, 'message': 'パスワードは8〜63文字で指定してください'}
                     self.send_response(400)
                     self.send_header('Content-Type', 'application/json')
                     self.end_headers()
@@ -941,11 +1269,22 @@ class APIHandler(BaseHTTPRequestHandler):
                             self._save_wifi_mode('ap', ap_ssid=ssid, ap_password=password)
                     except Exception as e:
                         logger.error(f"Wi-Fi switch (ap) background error: {e}")
+                    finally:
+                        _finish_wifi_switch()
 
                 threading.Thread(target=worker, daemon=True).start()
                 return
 
             if mode == 'tethering':
+                if not os.path.exists(wifi_manager.WPA_SUPPLICANT_CONF):
+                    _finish_wifi_switch()
+                    self.send_response(400)
+                    self.send_header('Content-Type', 'application/json')
+                    self.end_headers()
+                    self.wfile.write(json.dumps({'success': False, 'message': 'wpa_supplicant.conf が見つかりません'}).encode())
+                    self.wfile.flush()
+                    return
+
                 result = {
                     'success': True,
                     'message': 'テザリング切替を開始しました。Wi-Fiを切り替えた後、raspberrypi.local で再接続してください。',
@@ -966,17 +1305,13 @@ class APIHandler(BaseHTTPRequestHandler):
                             self._save_wifi_mode('tethering')
                     except Exception as e:
                         logger.error(f"Wi-Fi switch (tethering) background error: {e}")
+                    finally:
+                        _finish_wifi_switch()
 
                 threading.Thread(target=worker, daemon=True).start()
                 return
-
-            result = {'success': False, 'message': 'Unknown mode'}
-            self.send_response(400)
-            self.send_header('Content-Type', 'application/json')
-            self.end_headers()
-            self.wfile.write(json.dumps(result).encode())
-            self.wfile.flush()
         except Exception as e:
+            _finish_wifi_switch()
             logger.error(f"Wi-Fi switch error: {e}")
             self.send_response(500)
             self.send_header('Content-Type', 'application/json')
@@ -987,15 +1322,8 @@ class APIHandler(BaseHTTPRequestHandler):
         """手動撮影"""
         service_stopped = False
         try:
-            content_length = int(self.headers.get('Content-Length', 0))
-            body = self.rfile.read(content_length).decode() if content_length > 0 else ''
-            try:
-                request_data = json.loads(body) if body else {}
-            except json.JSONDecodeError:
-                self.send_response(400)
-                self.send_header('Content-Type', 'application/json')
-                self.end_headers()
-                self.wfile.write(json.dumps({'success': False, 'error': 'Invalid JSON'}).encode())
+            request_data = _read_json_body(self)
+            if request_data is None:
                 return
 
             latitude = None
