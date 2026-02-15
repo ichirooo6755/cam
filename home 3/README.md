@@ -164,6 +164,22 @@ bash ./update.sh 192.168.4.1
 - APIサーバに常駐の Wi-Fi watchdog を追加
   - 制御経路断が一定時間継続した場合に AP 強制復旧を自動実行
 
+### 症状: Raspberry Pi が未起動（SDカードとしてMac接続中）のため、SSH配備ができない
+**原因**
+- Pi本体がネットワーク上に存在しない状態では、`update.sh` による SSH/SCP 配備は実行できません。
+
+**解決策**
+- `/Volumes/bootfs/picamera_payload/` を作成し、最新の以下ファイルを配置
+  - `api_server.py`
+  - `wifi_manager.py`
+  - `camera_service.py`
+  - `camera-service.service`
+  - `api-server.service`
+- `/Volumes/bootfs/firstrun.sh` に first boot 適用ブロックを追加
+  - 起動時に payload を `/home/pi` と `/etc/systemd/system` へ配置
+  - `camera-service` / `api-server` を `daemon-reload` 後に有効化・再起動
+- `cmdline.txt` の `systemd.run=/boot/firstrun.sh` が有効であることを確認
+
 ### 屋外運用の安全性チェック（現状評価）
 - ✅ デフォルトURL検証（ローカルアドレス制限）やファイル名サニタイズは実装済み
 - ✅ APパスワードが初期値のときにアプリ内で警告表示を追加
@@ -727,6 +743,21 @@ FORCE_AP_SWITCH=1 AP_INTERFACE=en0 HOME_INTERFACE=en0 \
 ---
 
 ## 作業ログ
+
+- 2026-02-15 14:52 JST
+  - 変更ファイル:
+    - `/Volumes/bootfs/firstrun.sh`（SDカード上）
+      - `picamera_payload` を first boot で `/home/pi` / `/etc/systemd/system` へ反映する処理を追加
+      - 旧サービス停止・無効化、`camera-service` / `api-server` の有効化・再起動を追加
+    - `/Volumes/bootfs/picamera_payload/*`（SDカード上）
+      - `api_server.py` / `wifi_manager.py` / `camera_service.py`
+      - `camera-service.service` / `api-server.service`
+    - `home 3/README.md`
+      - 上記の症状・原因・解決策、作業ログを追記
+  - 実行コマンド:
+    - `mkdir -p '/Volumes/bootfs/picamera_payload' && cp ... '/Volumes/bootfs/picamera_payload/'`（成功）
+    - `bash -n '/Volumes/bootfs/firstrun.sh'`（成功）
+    - `cat '/Volumes/bootfs/cmdline.txt'`（`systemd.run=/boot/firstrun.sh` を確認）
 
 - 2026-02-15 14:45 JST
   - 変更ファイル:
