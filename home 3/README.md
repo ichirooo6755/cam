@@ -147,6 +147,14 @@ bash ./update.sh 192.168.4.1
 - 写真一覧/写真配信で `SAFE_FILENAME_PATTERN` + `ALLOWED_PHOTO_EXTENSIONS` を適用し、
   `GET /photos/<filename>` はストリーム転送（`shutil.copyfileobj`）へ変更してメモリ消費を抑制
 
+### 症状: APIがAPパスワードを返してしまい、不要な情報露出が発生する潜在リスク
+**原因**
+- `/api/wifi/status` が保存済みの `ap_password` をレスポンスへ含めていました。
+- `/api/settings` が `camera_settings.json` の内容をほぼそのまま返しており、`ap_password` が含まれる可能性がありました。
+
+**解決策**
+- APIレスポンスから `ap_password` を除去（内部保存・Wi-Fi切替処理は維持）
+
 ### 症状: AP/テザリング切替を連打すると競合し不安定化する潜在リスク
 **原因**
 - `/api/wifi/switch` が並列要求や短時間連打を防ぐ仕組みを持たず、
@@ -755,6 +763,18 @@ FORCE_AP_SWITCH=1 AP_INTERFACE=en0 HOME_INTERFACE=en0 \
 ---
 
 ## 作業ログ
+
+- 2026-02-15 19:16 JST
+  - 変更ファイル:
+    - `home 3/api_server.py`
+      - `/api/wifi/status` / `/api/settings` から `ap_password` を除外（不要な情報露出を防止）
+    - `home 3/README.md`
+      - 上記の症状・原因・解決策、作業ログを追記
+  - 実行コマンド:
+    - `python3 -m py_compile 'home 3/api_server.py'`（成功）
+    - `bash 'home 3/update.sh' raspberrypi.local`（成功）
+    - `curl -sS http://raspberrypi.local:8001/api/wifi/status`（`ap_password` が含まれないことを確認）
+    - `curl -sS http://raspberrypi.local:8001/api/settings`（`ap_password` が含まれないことを確認）
 
 - 2026-02-15 18:32 JST
   - 変更ファイル:

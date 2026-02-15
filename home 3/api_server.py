@@ -892,7 +892,6 @@ class APIHandler(BaseHTTPRequestHandler):
         status = wifi_manager.get_wifi_status()
         ap_settings = wifi_manager.get_saved_ap_settings()
         status['ap_ssid'] = ap_settings['ssid']
-        status['ap_password'] = ap_settings['password']
 
         self.send_response(200)
         self.send_header('Content-Type', 'application/json')
@@ -1203,6 +1202,8 @@ class APIHandler(BaseHTTPRequestHandler):
                 settings['brightness_threshold'] = settings['detection_threshold']
             if 'brightness_threshold' in settings and 'detection_threshold' not in settings:
                 settings['detection_threshold'] = settings['brightness_threshold']
+
+            settings.pop('ap_password', None)
 
             self.send_response(200)
             self.send_header('Content-Type', 'application/json')
