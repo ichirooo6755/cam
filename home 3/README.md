@@ -178,6 +178,7 @@ bash ./update.sh 192.168.4.1
 - `/Volumes/bootfs/firstrun.sh` に first boot 適用ブロックを追加
   - 起動時に payload を `/home/pi` と `/etc/systemd/system` へ配置
   - `camera-service` / `api-server` を `daemon-reload` 後に有効化・再起動
+  - `/home/pi/camera_settings.json` を補正し、`wifi_mode=ap`（未設定時は `PiCamera` / `picamera123`）を明示保存
 - `cmdline.txt` の `systemd.run=/boot/firstrun.sh` が有効であることを確認
 
 ### 屋外運用の安全性チェック（現状評価）
@@ -743,6 +744,13 @@ FORCE_AP_SWITCH=1 AP_INTERFACE=en0 HOME_INTERFACE=en0 \
 ---
 
 ## 作業ログ
+
+- 2026-02-15 14:56 JST
+  - 変更ファイル:
+    - `/Volumes/bootfs/firstrun.sh`（SDカード上）
+      - first boot 時に `/home/pi/camera_settings.json` へ `wifi_mode=ap` を明示保存する処理を追加
+  - 実行コマンド:
+    - `bash -n '/Volumes/bootfs/firstrun.sh'`（成功）
 
 - 2026-02-15 14:52 JST
   - 変更ファイル:
