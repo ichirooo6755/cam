@@ -824,9 +824,9 @@ class APIHandler(BaseHTTPRequestHandler):
 
     def serve_metering_recommendation(self):
         try:
-            content_length = int(self.headers.get('Content-Length', 0))
-            body = self.rfile.read(content_length).decode() if content_length > 0 else ''
-            data = json.loads(body) if body else {}
+            data = _read_json_body(self)
+            if data is None:
+                return
 
             sensor = {}
             if os.path.exists(SENSOR_STATUS_FILE):
@@ -873,7 +873,10 @@ class APIHandler(BaseHTTPRequestHandler):
         try:
             files = []
             if os.path.exists(PHOTOS_DIR):
-                files = [f for f in os.listdir(PHOTOS_DIR) if f.endswith('.jpg')]
+                files = [
+                    f for f in os.listdir(PHOTOS_DIR)
+                    if f.lower().endswith(ALLOWED_PHOTO_EXTENSIONS) and SAFE_FILENAME_PATTERN.match(f)
+                ]
                 files.sort(reverse=True)  # 新しい順
             
             self.send_response(200)
@@ -922,20 +925,27 @@ class APIHandler(BaseHTTPRequestHandler):
         """写真ファイルを配信"""
         try:
             filename = os.path.basename(path)
+            if not filename or SAFE_FILENAME_PATTERN.match(filename) is None:
+                self.send_error(400)
+                return
+
+            if not filename.lower().endswith(ALLOWED_PHOTO_EXTENSIONS):
+                self.send_error(400)
+                return
+
             filepath = os.path.join(PHOTOS_DIR, filename)
             
             if not os.path.exists(filepath):
                 self.send_error(404)
                 return
-            
-            with open(filepath, 'rb') as f:
-                content = f.read()
-            
+
+            content_type = 'image/png' if filename.lower().endswith('.png') else 'image/jpeg'
             self.send_response(200)
-            self.send_header('Content-Type', 'image/jpeg')
-            self.send_header('Content-Length', len(content))
+            self.send_header('Content-Type', content_type)
+            self.send_header('Content-Length', os.path.getsize(filepath))
             self.end_headers()
-            self.wfile.write(content)
+            with open(filepath, 'rb') as f:
+                shutil.copyfileobj(f, self.wfile)
         except Exception as e:
             logger.error(f"Error serving photo: {e}")
             self.send_error(500)
@@ -943,12 +953,12 @@ class APIHandler(BaseHTTPRequestHandler):
     def serve_photo_request(self):
         """POSTで写真ファイルを配信"""
         try:
-            content_length = int(self.headers.get('Content-Length', 0))
-            body = self.rfile.read(content_length).decode()
-            data = json.loads(body) if body else {}
+            data = _read_json_body(self)
+            if data is None:
+                return
 
             filename = data.get('filename', '')
-            thumbnail = bool(data.get('thumbnail', False))
+            thumbnail = _parse_bool_value(data.get('thumbnail', False), default=False)
             try:
                 max_dim = int(data.get('max_dim', THUMBNAIL_MAX_DIM_DEFAULT))
             except (TypeError, ValueError):
@@ -958,7 +968,10 @@ class APIHandler(BaseHTTPRequestHandler):
             if safe_name != filename:
                 self.send_error(400)
                 return
-            if not safe_name.lower().endswith(('.jpg', '.jpeg', '.png')):
+            if not safe_name.lower().endswith(ALLOWED_PHOTO_EXTENSIONS):
+                self.send_error(400)
+                return
+            if SAFE_FILENAME_PATTERN.match(safe_name) is None:
                 self.send_error(400)
                 return
 
@@ -988,16 +1001,8 @@ class APIHandler(BaseHTTPRequestHandler):
     def serve_photo_metadata(self):
         """写真のメタデータ(JSON sidecar)を返す"""
         try:
-            content_length = int(self.headers.get('Content-Length', 0))
-            body = self.rfile.read(content_length).decode() if content_length > 0 else ''
-
-            try:
-                data = json.loads(body) if body else {}
-            except json.JSONDecodeError:
-                self.send_response(400)
-                self.send_header('Content-Type', 'application/json')
-                self.end_headers()
-                self.wfile.write(json.dumps({'success': False, 'error': 'Invalid JSON'}).encode())
+            data = _read_json_body(self)
+            if data is None:
                 return
 
             filename = data.get('filename', '')

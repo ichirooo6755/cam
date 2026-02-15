@@ -3,3 +3,7 @@
 **/*.py[cod]
 **/xcuserdata/
 **/*.xcuserstate
+contact.md
+.windsurf/contact.md
+.windsurf/rules/rule.md
+wifi_cycle_test_*.log

@@ -601,7 +601,7 @@ def ensure_ap_persistence(allow_recursive_ap_recovery=True):
     _run(['sudo', '-n', 'systemctl', 'stop', 'wpa_supplicant'])
     _run(['sudo', '-n', 'systemctl', 'disable', 'wpa_supplicant'])
     _run(['sudo', '-n', 'rm', '-f', sock_path])
-    _run(['sudo', '-n', 'sh', '-c', f'pkill -f "wpa_supplicant.*-i{iface}" || true'])
+    _run(['sudo', '-n', 'pkill', '-f', f'wpa_supplicant.*-i{iface}'])
 
     _run(['sudo', '-n', 'ip', 'addr', 'flush', 'dev', iface])
     _run(['sudo', '-n', 'ip', 'link', 'set', iface, 'down'])
@@ -767,7 +767,7 @@ def switch_to_ap_mode(ssid='PiCamera', password='picamera123'):
         _run(['sudo', '-n', 'systemctl', 'stop', 'wpa_supplicant'])
         _run(['sudo', '-n', 'systemctl', 'disable', 'wpa_supplicant'])
         _run(['sudo', '-n', 'rm', '-f', sock_path])
-        _run(['sudo', '-n', 'sh', '-c', f'pkill -f "wpa_supplicant.*-i{iface}" || true'])
+        _run(['sudo', '-n', 'pkill', '-f', f'wpa_supplicant.*-i{iface}'])
 
         _run(['sudo', '-n', 'ip', 'addr', 'flush', 'dev', iface])
         _run(['sudo', '-n', 'ip', 'link', 'set', iface, 'down'])

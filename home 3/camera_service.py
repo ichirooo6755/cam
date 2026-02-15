@@ -41,10 +41,12 @@ logger = logging.getLogger(__name__)
 PHOTOS_DIR = '/home/pi/photos'
 SETTINGS_FILE = '/home/pi/camera_settings.json'
 SESSION_OVERRIDES_FILE = '/home/pi/camera_session_overrides.json'
+SENSOR_STATUS_FILE = '/home/pi/sensor_status.json'
 BRIGHTNESS_THRESHOLD = 30
 CHECK_INTERVAL = 0.25  # 250ms間隔でチェック（旧版の挙動に合わせる）
 CAPTURE_COOLDOWN = 0.25  # 最短撮影間隔
 SETTINGS_RELOAD_INTERVAL = 1.0
+SENSOR_STATUS_WRITE_INTERVAL = 1.0
 MIN_CHANGE_AMOUNT = 5
 
 DEFAULT_SETTINGS = {
@@ -83,6 +85,24 @@ def get_brightness_fast(camera):
         gray = array
     return np.mean(gray)
 
+def get_sensor_sample(camera):
+    metadata = camera.capture_metadata()
+    lux = metadata.get('Lux')
+    ae_gain = metadata.get('AnalogueGain')
+    ae_exposure_us = metadata.get('ExposureTime')
+
+    if lux is not None:
+        brightness = float(lux)
+    else:
+        array = camera.capture_array("lores")
+        if len(array.shape) == 3:
+            gray = np.mean(array, axis=2)
+        else:
+            gray = array
+        brightness = float(np.mean(gray))
+
+    return brightness, lux, ae_gain, ae_exposure_us
+
 def load_settings() -> dict:
     settings = DEFAULT_SETTINGS.copy()
     try:
@@ -101,6 +121,17 @@ def load_settings() -> dict:
     except Exception as e:
         logger.warning(f"Failed to load session overrides: {e}")
     return settings
+
+def write_sensor_status(state: dict) -> None:
+    try:
+        payload = dict(state)
+        payload['updated_at'] = datetime.now().isoformat()
+        tmp_path = f"{SENSOR_STATUS_FILE}.tmp"
+        with open(tmp_path, 'w', encoding='utf-8') as f:
+            json.dump(payload, f, indent=2)
+        os.replace(tmp_path, SENSOR_STATUS_FILE)
+    except Exception as e:
+        logger.debug(f"Failed to write sensor status: {e}")
 
 def _add_timestamp(image: Image.Image, timestamp: str) -> Image.Image:
     if ImageDraw is None:
@@ -201,6 +232,7 @@ def capture_photo(camera, settings: dict, composition_state: dict, detected_at: 
         capture_end = time.time()
         if detected_at is not None:
             detect_delay = capture_end - detected_at
+            composition_state['last_detect_to_capture_ms'] = round(detect_delay * 1000.0, 1)
             logger.info("Detect->Capture delay: %.3fs", detect_delay)
         logger.info("Photo captured: %s (capture=%.3fs)", filepath, capture_end - capture_start)
 
@@ -268,7 +300,27 @@ def main():
     detection_interval = CHECK_INTERVAL
     check_interval = CHECK_INTERVAL
     capture_cooldown = CAPTURE_COOLDOWN
-    composition_state = {'last_frame': None, 'last_frame_path': None}
+    composition_state = {
+        'last_frame': None,
+        'last_frame_path': None,
+        'last_detect_to_capture_ms': None,
+    }
+    sensor_state = {
+        'service': 'camera-service',
+        'camera_mode': settings.get('camera_mode', 'standard'),
+        'monitoring_enabled': True,
+        'threshold_percent': threshold,
+        'detection_interval': detection_interval,
+        'check_interval': check_interval,
+        'capture_cooldown': capture_cooldown,
+        'brightness': None,
+        'last_change_percent': None,
+        'last_change_amount': None,
+        'last_capture_at': None,
+        'last_detected_at': None,
+        'last_detect_to_capture_ms': None,
+    }
+    last_sensor_status_write = 0.0
     
     try:
         while True:
@@ -308,6 +360,14 @@ def main():
                     height = 1080
 
                 desired_size = (width, height)
+                sensor_state['camera_mode'] = settings.get('camera_mode', 'standard')
+                sensor_state['monitoring_enabled'] = monitoring_enabled
+                sensor_state['threshold_percent'] = threshold
+                sensor_state['detection_interval'] = detection_interval
+                sensor_state['check_interval'] = check_interval
+                sensor_state['capture_cooldown'] = capture_cooldown
+                sensor_state['width'] = width
+                sensor_state['height'] = height
 
                 if not monitoring_enabled:
                     if camera is not None:
@@ -322,7 +382,11 @@ def main():
                         camera = None
                         current_main_size = None
                         last_brightness = None
-                        composition_state = {'last_frame': None, 'last_frame_path': None}
+                        composition_state = {
+                            'last_frame': None,
+                            'last_frame_path': None,
+                            'last_detect_to_capture_ms': None,
+                        }
                 else:
                     if camera is None or current_main_size != desired_size:
                         if camera is not None:
@@ -346,21 +410,33 @@ def main():
                         camera = cam
                         current_main_size = desired_size
                         last_brightness = None
-                        composition_state = {'last_frame': None, 'last_frame_path': None}
+                        composition_state = {
+                            'last_frame': None,
+                            'last_frame_path': None,
+                            'last_detect_to_capture_ms': None,
+                        }
 
                 last_settings_load = current_time
 
             if not settings.get('monitoring_enabled', True):
+                sensor_state['state'] = 'monitoring_disabled'
                 time.sleep(check_interval)
+                if current_time - last_sensor_status_write >= SENSOR_STATUS_WRITE_INTERVAL:
+                    write_sensor_status(sensor_state)
+                    last_sensor_status_write = current_time
                 continue
 
             if camera is None:
+                sensor_state['state'] = 'camera_unavailable'
                 time.sleep(check_interval)
+                if current_time - last_sensor_status_write >= SENSOR_STATUS_WRITE_INTERVAL:
+                    write_sensor_status(sensor_state)
+                    last_sensor_status_write = current_time
                 continue
 
             # 明るさチェック
             try:
-                brightness = get_brightness_fast(camera)
+                brightness, lux, ae_gain, ae_exposure_us = get_sensor_sample(camera)
 
                 if last_brightness is None:
                     last_brightness = brightness
@@ -370,6 +446,12 @@ def main():
                 prev_brightness = last_brightness
                 change_amount = brightness - prev_brightness
                 last_brightness = brightness
+                sensor_state['state'] = 'monitoring'
+                sensor_state['brightness'] = round(float(brightness), 3)
+                sensor_state['lux'] = round(float(lux), 3) if lux is not None else None
+                sensor_state['ae_gain'] = round(float(ae_gain), 4) if ae_gain is not None else None
+                sensor_state['ae_exposure_us'] = round(float(ae_exposure_us), 1) if ae_exposure_us is not None else None
+                sensor_state['last_change_amount'] = round(float(change_amount), 3)
 
                 if change_amount < 0:
                     time.sleep(check_interval)
@@ -379,6 +461,7 @@ def main():
                     change_percent = change_amount / prev_brightness * 100
                 else:
                     change_percent = change_amount * 100
+                sensor_state['last_change_percent'] = round(float(change_percent), 3)
 
                 if change_percent >= threshold and change_amount >= MIN_CHANGE_AMOUNT:
                     if current_time - last_capture_time >= detection_interval:
@@ -388,17 +471,28 @@ def main():
                             threshold,
                             change_percent,
                         )
+                        sensor_state['last_detected_at'] = datetime.now().isoformat()
                         if capture_photo(camera, settings, composition_state, detected_at=current_time):
                             last_capture_time = current_time
-            
+                            sensor_state['last_capture_at'] = datetime.now().isoformat()
+                            sensor_state['last_detect_to_capture_ms'] = composition_state.get('last_detect_to_capture_ms')
+
             except Exception as e:
                 logger.error(f"Detection error: {e}")
-            
+                sensor_state['last_error'] = str(e)
+
+            if current_time - last_sensor_status_write >= SENSOR_STATUS_WRITE_INTERVAL:
+                write_sensor_status(sensor_state)
+                last_sensor_status_write = current_time
+
             time.sleep(check_interval)
             
     except KeyboardInterrupt:
         logger.info("Service stopped by user")
     finally:
+        sensor_state['state'] = 'stopped'
+        sensor_state['monitoring_enabled'] = False
+        write_sensor_status(sensor_state)
         if camera is not None:
             camera.stop()
             camera.close()

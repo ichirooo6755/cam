@@ -136,6 +136,17 @@ bash ./update.sh 192.168.4.1
 - ISO/SS/quality/threshold/interval/boolean などを **型 + 範囲検証** して不正値を400で拒否
 - リクエストJSONサイズ上限（64KB）を追加して過大ボディを拒否
 
+### 症状: 一部POST APIがJSONサイズ制限/検証を通らず、大きなボディや不正JSONで500になる潜在リスク
+**原因**
+- `/api/metering` / `/api/photo` / `/api/photo/meta` が個別に `Content-Length` を読み取り `json.loads` しており、
+  `MAX_JSON_BODY_BYTES` の上限・不正JSON時の400・JSON object強制などが一貫して適用されていませんでした。
+- `GET /photos/<filename>` がファイル名検証を行わず、画像をメモリへ丸ごと読み込む実装でした。
+
+**解決策**
+- 上記POST APIを `_read_json_body()` に統一し、過大ボディ/不正JSON/非object JSON を 4xx で拒否するように修正
+- 写真一覧/写真配信で `SAFE_FILENAME_PATTERN` + `ALLOWED_PHOTO_EXTENSIONS` を適用し、
+  `GET /photos/<filename>` はストリーム転送（`shutil.copyfileobj`）へ変更してメモリ消費を抑制
+
 ### 症状: AP/テザリング切替を連打すると競合し不安定化する潜在リスク
 **原因**
 - `/api/wifi/switch` が並列要求や短時間連打を防ぐ仕組みを持たず、
@@ -744,6 +755,31 @@ FORCE_AP_SWITCH=1 AP_INTERFACE=en0 HOME_INTERFACE=en0 \
 ---
 
 ## 作業ログ
+
+- 2026-02-15 18:32 JST
+  - 変更ファイル:
+    - `home 3/wifi_manager.py`
+      - `sudo sh -c 'pkill ... || true'` を廃止し、`sudo pkill -f ...` の直接実行へ変更（shell呼び出し削減）
+    - `home 3/README.md`
+      - 上記の作業ログを追記
+  - 実行コマンド:
+    - `python3 -m py_compile 'home 3/wifi_manager.py' 'home 3/api_server.py' 'home 3/camera_service.py'`（成功）
+    - `bash 'home 3/update.sh' raspberrypi.local`（成功）
+    - `curl -sS http://raspberrypi.local:8001/api/status`（成功）
+    - `curl -sS http://raspberrypi.local:8001/api/sensor/status`（成功）
+    - `curl -sS -X POST http://raspberrypi.local:8001/api/metering -H 'Content-Type: application/json' -d '{}'`（成功）
+
+- 2026-02-15 18:02 JST
+  - 変更ファイル:
+    - `home 3/api_server.py`
+      - JSONパーサ `_read_json_body()` を `/api/metering` / `/api/photo` / `/api/photo/meta` へ適用
+      - `GET /api/photos` の拡張子/ファイル名フィルタを強化
+      - `GET /photos/<filename>` にファイル名検証を追加し、ストリーム転送へ変更
+    - `.gitignore`
+      - `contact.md` / `.windsurf/contact.md` / `.windsurf/rules/rule.md` / `wifi_cycle_test_*.log` を git 対象外へ
+  - 実行コマンド:
+    - `python3 -m py_compile 'home 3/api_server.py' 'home 3/wifi_manager.py' 'home 3/camera_service.py' 'mock_server.py'`（成功）
+    - `bash -n 'home 3/update.sh' 'home 3/deploy.sh' 'home 3/wifi_cycle_test.sh' 'PiCameraControl/build_ios_simulator.sh'`（成功）
 
 - 2026-02-15 14:56 JST
   - 変更ファイル:
