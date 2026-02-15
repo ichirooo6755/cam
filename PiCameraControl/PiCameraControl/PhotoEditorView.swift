@@ -38,6 +38,8 @@ struct PhotoEditorSettings: Codable, Hashable {
     var highlightRecovery: Double
     var shadowBoost: Double
     var temperature: Double
+    var irAutoCorrect: Bool
+    var irCorrectionStrength: Double
     var monochrome: Double
     var crop: NormalizedRect
     var radialMask: RadialMaskSettings
@@ -49,6 +51,8 @@ struct PhotoEditorSettings: Codable, Hashable {
         highlightRecovery: 0,
         shadowBoost: 0,
         temperature: 0,
+        irAutoCorrect: false,
+        irCorrectionStrength: 0.75,
         monochrome: 0,
         crop: .full,
         radialMask: .default
@@ -106,6 +110,10 @@ private enum PhotoEditorRenderer {
             f.highlightAmount = Float(clamp(1 - settings.highlightRecovery, 0, 1))
             f.shadowAmount = Float(clamp(settings.shadowBoost, 0, 1))
             output = f.outputImage ?? output
+        }
+
+        if settings.irAutoCorrect {
+            output = applyInfraredAutoCorrection(to: output, strength: settings.irCorrectionStrength)
         }
 
         let effectiveSaturation = settings.saturation * (1 - settings.monochrome)
@@ -177,6 +185,52 @@ private enum PhotoEditorRenderer {
         return blend.outputImage ?? image
     }
 
+    private static func applyInfraredAutoCorrection(to image: CIImage, strength: Double) -> CIImage {
+        let normalizedStrength = clamp(strength, 0, 1)
+        guard normalizedStrength > 0.0001 else { return image }
+
+        var output = image
+
+        let tempTint = CIFilter.temperatureAndTint()
+        tempTint.inputImage = output
+        tempTint.neutral = CIVector(x: 6500, y: 0)
+        tempTint.targetNeutral = CIVector(
+            x: 6500 - 1300 * normalizedStrength,
+            y: -120 * normalizedStrength
+        )
+        output = tempTint.outputImage ?? output
+
+        let matrix = CIFilter.colorMatrix()
+        matrix.inputImage = output
+        matrix.rVector = CIVector(
+            x: 1 - 0.18 * normalizedStrength,
+            y: 0.04 * normalizedStrength,
+            z: 0.02 * normalizedStrength,
+            w: 0
+        )
+        matrix.gVector = CIVector(
+            x: 0.08 * normalizedStrength,
+            y: 1 + 0.12 * normalizedStrength,
+            z: 0.08 * normalizedStrength,
+            w: 0
+        )
+        matrix.bVector = CIVector(
+            x: 0.03 * normalizedStrength,
+            y: 0.06 * normalizedStrength,
+            z: 1 - 0.16 * normalizedStrength,
+            w: 0
+        )
+        matrix.aVector = CIVector(x: 0, y: 0, z: 0, w: 1)
+        output = matrix.outputImage ?? output
+
+        let controls = CIFilter.colorControls()
+        controls.inputImage = output
+        controls.saturation = Float(max(0.7, 1 - 0.1 * normalizedStrength))
+        output = controls.outputImage ?? output
+
+        return output
+    }
+
     private static func clamp(_ value: Double, _ minValue: Double, _ maxValue: Double) -> Double {
         min(max(value, minValue), maxValue)
     }
@@ -228,6 +282,7 @@ struct PhotoEditorView: View {
     @State private var resultMessage: String = ""
 
     @State private var imageWriteCoordinator: ImageWriteCoordinator?
+    @GestureState private var showingOriginalWhilePress: Bool = false
 
     var body: some View {
         NavigationView {
@@ -311,18 +366,35 @@ struct PhotoEditorView: View {
 
     private var previewArea: some View {
         ZStack {
-            if let previewImage {
-                Image(uiImage: previewImage)
+            let imageToShow = showingOriginalWhilePress ? originalImage : (previewImage ?? originalImage)
+            Image(uiImage: imageToShow)
                     .resizable()
                     .aspectRatio(contentMode: .fit)
                     .padding(.horizontal, 10)
-            } else {
-                Image(uiImage: originalImage)
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
-                    .padding(.horizontal, 10)
+
+            if showingOriginalWhilePress {
+                VStack {
+                    HStack {
+                        Text("ORIGINAL")
+                            .font(.caption2.weight(.bold))
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(Color.black.opacity(0.7))
+                            .foregroundColor(.white)
+                            .cornerRadius(8)
+                        Spacer()
+                    }
+                    Spacer()
+                }
+                .padding(16)
             }
         }
+        .gesture(
+            DragGesture(minimumDistance: 0)
+                .updating($showingOriginalWhilePress) { _, state, _ in
+                    state = true
+                }
+        )
     }
 
     private var controlsArea: some View {
@@ -357,6 +429,13 @@ struct PhotoEditorView: View {
             sliderRow(title: "シャドウ", value: $settings.shadowBoost, range: 0...1, step: 0.02)
 
         case .color:
+            Toggle("IR赤み自動補正", isOn: $settings.irAutoCorrect)
+                .toggleStyle(SwitchToggleStyle(tint: .blue))
+            sliderRow(title: "IR補正強度", value: $settings.irCorrectionStrength, range: 0...1, step: 0.02)
+            Button("IR補正プリセット") {
+                applyInfraredPreset()
+            }
+            .font(.caption.weight(.bold))
             sliderRow(title: "彩度", value: $settings.saturation, range: 0...2, step: 0.02)
             sliderRow(title: "色温度", value: $settings.temperature, range: -2000...2000, step: 25)
             sliderRow(title: "モノクロ", value: $settings.monochrome, range: 0...1, step: 0.02)
@@ -499,6 +578,13 @@ struct PhotoEditorView: View {
 
     private func resetAll() {
         settings = .default
+    }
+
+    private func applyInfraredPreset() {
+        settings.irAutoCorrect = true
+        settings.irCorrectionStrength = 0.78
+        settings.temperature = -850
+        settings.highlightRecovery = max(settings.highlightRecovery, 0.18)
     }
 
     private func exportToPhotoLibrary() {

@@ -470,12 +470,22 @@ struct PhotoDetailView: View {
                                 VStack(alignment: .leading, spacing: 4) {
                                     Text("WB: \((metadata.whiteBalance ?? "-").uppercased())")
                                     Text("Q: \(metadata.quality.map(String.init) ?? "-")")
-                                    Text("META: \(metadata.meta?.isEmpty == false ? metadata.meta! : "-")")
+                                    Text("DATE: \(metadata.capturedDateDisplay)")
                                 }
                                 .monospacedDigit()
                             }
                             .font(.caption.weight(.medium))
                             .foregroundColor(.white.opacity(0.8))
+
+                            Text("LOC: \(metadata.locationDisplay)")
+                                .font(.caption.weight(.medium))
+                                .foregroundColor(.white.opacity(0.8))
+                                .monospacedDigit()
+
+                            Text("META: \(metadata.meta?.isEmpty == false ? metadata.meta! : "-")")
+                                .font(.caption.weight(.medium))
+                                .foregroundColor(.white.opacity(0.8))
+                                .monospacedDigit()
                         }
                         .padding(14)
                         .frame(maxWidth: .infinity, alignment: .leading)

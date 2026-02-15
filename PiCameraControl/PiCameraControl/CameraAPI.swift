@@ -234,7 +234,11 @@ actor CameraAPI {
 
     // MARK: - 撮影
 
-    func captureWithMetadata(manualMode: ManualCaptureMode = .current, meta: String? = nil) async throws
+    func captureWithMetadata(
+        manualMode: ManualCaptureMode = .current,
+        meta: String? = nil,
+        location: CaptureLocationPayload? = nil
+    ) async throws
         -> (SafeFilename, PhotoMetadata?)
     {
         guard let url = URL(string: "\(baseURL)/api/capture") else {
@@ -250,6 +254,9 @@ actor CameraAPI {
         }
         if let metaValue = meta?.trimmingCharacters(in: .whitespacesAndNewlines), !metaValue.isEmpty {
             body["meta"] = metaValue
+        }
+        if let location {
+            body["location"] = location.jsonObject
         }
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
@@ -285,8 +292,16 @@ actor CameraAPI {
     }
 
     /// 撮影を実行し、ファイル名を返す
-    func capture(manualMode: ManualCaptureMode = .current, meta: String? = nil) async throws -> SafeFilename {
-        let (filename, _metadata) = try await captureWithMetadata(manualMode: manualMode, meta: meta)
+    func capture(
+        manualMode: ManualCaptureMode = .current,
+        meta: String? = nil,
+        location: CaptureLocationPayload? = nil
+    ) async throws -> SafeFilename {
+        let (filename, _) = try await captureWithMetadata(
+            manualMode: manualMode,
+            meta: meta,
+            location: location
+        )
         return filename
     }
 
@@ -437,6 +452,74 @@ actor CameraAPI {
         if !result.success {
             throw CameraAPIError.updateFailed(result.message ?? "Wi-Fi write failed")
         }
+    }
+
+    // MARK: - Sensor / Metering
+
+    func fetchSensorStatus() async throws -> SensorStatusResponse {
+        guard let url = URL(string: "\(baseURL)/api/sensor/status") else {
+            throw CameraAPIError.invalidURL
+        }
+
+        let (data, response) = try await session.data(from: url)
+
+        guard let httpResponse = response as? HTTPURLResponse,
+            httpResponse.statusCode == 200
+        else {
+            throw CameraAPIError.serverError
+        }
+
+        let decoded = try JSONDecoder().decode(SensorStatusResponse.self, from: data)
+        if !decoded.success {
+            throw CameraAPIError.updateFailed(decoded.error ?? "Sensor status fetch failed")
+        }
+        return decoded
+    }
+
+    func fetchMeteringRecommendation(
+        targetISO: Int? = nil,
+        targetShutterUs: Int? = nil
+    ) async throws -> MeteringRecommendation {
+        guard let url = URL(string: "\(baseURL)/api/metering") else {
+            throw CameraAPIError.invalidURL
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        var body: [String: Any] = [:]
+        if let targetISO {
+            body["target_iso"] = targetISO
+        }
+        if let targetShutterUs {
+            body["target_shutter_us"] = targetShutterUs
+        }
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let (data, response) = try await session.data(for: request)
+
+        guard let httpResponse = response as? HTTPURLResponse,
+            httpResponse.statusCode == 200
+        else {
+            throw CameraAPIError.serverError
+        }
+
+        let decoded = try JSONDecoder().decode(MeteringResponse.self, from: data)
+        guard decoded.success, let recommendation = decoded.recommendation else {
+            throw CameraAPIError.updateFailed(decoded.error ?? "Metering recommendation failed")
+        }
+        return recommendation
+    }
+
+    func applyMeteringRecommendation(
+        _ recommendation: MeteringRecommendation,
+        temporary: Bool = true
+    ) async throws {
+        try await updateSettings([
+            "iso": recommendation.recommendedISO,
+            "shutter_speed": recommendation.recommendedShutterUs,
+        ], temporary: temporary)
     }
 }
 

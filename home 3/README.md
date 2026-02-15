@@ -95,6 +95,37 @@ bash ./update.sh 192.168.4.1
 注意:
 - 編集は非破壊で、Pi上の元画像ファイルは変更しません（書き出しはiOS側に新規保存です）
 
+### 症状: IRフィルター無し写真で赤被り（マゼンタ被り）が強い
+**原因**
+- IRカット無しの撮影では赤/マゼンタ成分が過剰になりやすく、通常のWB調整だけでは追い込みが大変
+
+**解決策**
+- `PhotoEditorView` に **IR赤み自動補正**（ON/OFF + 強度）を追加
+- 色温度・チャンネルバランス・彩度を複合補正する `applyInfraredAutoCorrection()` を追加
+- ワンタップで効く `IR補正プリセット` を追加
+- プレビュー長押しで `ORIGINAL` と比較できる比較UIを追加
+
+### 追加: メタデータ拡張（ISO/SS/日時/場所）
+- `api_server.py` の `/api/capture` でメタデータに以下を保存
+  - `captured_at`（UTC ISO8601）
+  - `latitude` / `longitude`（範囲チェック済み）
+  - `location_label`（サニタイズ済み）
+- iOS側 `CameraAPI.captureWithMetadata()` は `location` ペイロードを送信可能に拡張
+- `ContentView` と `PhotoGalleryView` のメタ表示を `DATE` / `LOC` 含む表示へ更新
+
+### 追加: 光検知の一時停止ボタン + ISO/SSクイック操作
+- `ContentView` に `LIGHT DETECTION` カードを追加
+  - `ACTIVE/PAUSED` 状態表示
+  - 1タップで `光検知を一時停止/再開`
+- ISO/SSをメニュー選択主体から、チップ選択 + `+/-` ステップ操作へ改善
+- ダーク/ライト両方で見やすい背景トーンへ調整（シアン/ティール基調）
+
+### 屋外運用の安全性チェック（現状評価）
+- ✅ デフォルトURL検証（ローカルアドレス制限）やファイル名サニタイズは実装済み
+- ✅ APパスワードが初期値のときにアプリ内で警告表示を追加
+- ⚠ APIはローカルネットワーク内で認証無しのため、外部運用時はAPパスワードを必ず強固化すること
+- ⚠ 位置情報メタデータを使う場合はプライバシー配慮（必要時のみ許可）
+
 ### 追加: 写真削除API（/api/photos/delete）
 iOSアプリの単体削除 / 一括削除はこのAPIを使用します。
 
@@ -648,6 +679,34 @@ AP_INTERFACE=en0 HOME_INTERFACE=en0 \
 ---
 
 ## 作業ログ
+
+- 2026-02-15 11:52 JST
+  - 変更ファイル:
+    - `PiCameraControl/PiCameraControl/PhotoEditorView.swift`
+      - IR赤み自動補正（ON/OFF + 強度）を追加
+      - `IR補正プリセット` と、長押し `ORIGINAL` 比較表示を追加
+    - `PiCameraControl/PiCameraControl/ContentView.swift`
+      - 光検知の一時停止/再開カード（`LIGHT DETECTION`）を追加
+      - ISO/SS をチップ + `+/-` で素早く調整できるUIへ改善
+      - 手動撮影時に位置情報を添付できるよう `CaptureLocationProvider` を追加
+      - `LAST CAPTURE` のメタ表示を `DATE` / `LOC` 対応に拡張
+    - `PiCameraControl/PiCameraControl/CameraAPI.swift`
+      - `captureWithMetadata` に `location` ペイロード対応を追加
+    - `PiCameraControl/PiCameraControl/Models.swift`
+      - `PhotoMetadata` に `captured_at` / `latitude` / `longitude` / `location_label` を追加
+      - `capturedDateDisplay` / `locationDisplay` を追加
+    - `PiCameraControl/PiCameraControl/PhotoGalleryView.swift`
+      - 詳細メタ表示を `DATE` / `LOC` 対応に拡張
+    - `PiCameraControl/PiCameraControl/Info.plist`
+      - `NSLocationWhenInUseUsageDescription` を追加
+    - `home 3/api_server.py`
+      - `/api/capture` メタデータに `captured_at` / 位置情報（バリデーション付き）を保存
+    - `home 3/README.md`
+      - 上記の症状・原因・解決策、屋外運用の安全性チェックを追記
+  - 実行コマンド:
+    - `python3 -m py_compile '/Users/sugawaraichirou/Documents/アプリ/home 3/api_server.py' '/Users/sugawaraichirou/Documents/アプリ/home 3/wifi_manager.py' '/Users/sugawaraichirou/Documents/アプリ/home 3/camera_service.py'`（成功）
+    - `bash -n '/Users/sugawaraichirou/Documents/アプリ/PiCameraControl/build_ios_simulator.sh'`（成功）
+    - `bash './build_ios_simulator.sh'`（`** BUILD SUCCEEDED **`）
 
 - 2026-02-15 11:35 JST
   - 変更ファイル:

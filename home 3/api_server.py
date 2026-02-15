@@ -13,6 +13,7 @@ import glob
 import time
 import threading
 import re
+import datetime
 
 import wifi_manager
 try:
@@ -31,6 +32,11 @@ THUMBNAIL_MAX_DIM_DEFAULT = 300
 THUMBNAIL_QUALITY = 75
 SETTINGS_FILE = '/home/pi/camera_settings.json'
 SESSION_OVERRIDES_FILE = '/home/pi/camera_session_overrides.json'
+SENSOR_STATUS_FILE = '/home/pi/sensor_status.json'
+BOOT_NETWORK_APPLIED_MARKERS = (
+    '/run/picamera_boot_network_applied',
+    '/tmp/picamera_boot_network_applied',
+)
 SAFE_FILENAME_PATTERN = re.compile(r'^[A-Za-z0-9._-]+$')
 ALLOWED_PHOTO_EXTENSIONS = ('.jpg', '.jpeg', '.png')
 DEFAULT_SETTINGS = {
@@ -61,6 +67,16 @@ def _sanitize_meta_tag(value):
     if not safe:
         return None
     return safe[:48]
+
+
+def _sanitize_location_label(value):
+    if not value:
+        return None
+    safe = re.sub(r'[^A-Za-z0-9._\-\s]+', '', str(value).strip())
+    safe = re.sub(r'\s+', ' ', safe).strip()
+    if not safe:
+        return None
+    return safe[:96]
 
 CAMERA_MODE_PRESETS = {
     'reaction': {
@@ -107,6 +123,169 @@ CAMERA_MODE_PRESETS = {
     },
 }
 
+METERING_ISO_STOPS = [100, 200, 400, 800, 1600, 3200]
+METERING_SHUTTER_US_STOPS = [
+    2500,
+    4000,
+    8000,
+    16666,
+    33333,
+    66666,
+    125000,
+    250000,
+    500000,
+    1_000_000,
+    2_000_000,
+    3_000_000,
+    4_000_000,
+    5_000_000,
+    6_000_000,
+    7_000_000,
+    8_000_000,
+    9_000_000,
+    10_000_000,
+    11_000_000,
+    12_000_000,
+    13_000_000,
+    14_000_000,
+    15_000_000,
+    16_000_000,
+    17_000_000,
+    18_000_000,
+    19_000_000,
+    20_000_000,
+]
+
+def _load_effective_settings():
+    settings = DEFAULT_SETTINGS.copy()
+    if os.path.exists(SETTINGS_FILE):
+        with open(SETTINGS_FILE, 'r') as f:
+            settings.update(json.load(f))
+
+    if os.path.exists(SESSION_OVERRIDES_FILE):
+        try:
+            with open(SESSION_OVERRIDES_FILE, 'r') as f:
+                overrides = json.load(f)
+            if isinstance(overrides, dict):
+                settings.update(overrides)
+        except Exception as e:
+            logger.warning(f"Failed to load session overrides: {e}")
+
+    if 'detection_threshold' in settings and 'brightness_threshold' not in settings:
+        settings['brightness_threshold'] = settings['detection_threshold']
+    if 'brightness_threshold' in settings and 'detection_threshold' not in settings:
+        settings['detection_threshold'] = settings['brightness_threshold']
+    return settings
+
+def _nearest_stop(stops, value):
+    return min(stops, key=lambda x: abs(x - value))
+
+def _format_shutter_label(microseconds):
+    try:
+        microseconds = int(microseconds)
+    except (TypeError, ValueError):
+        return '-'
+
+    if microseconds <= 0:
+        return '-'
+    if microseconds >= 1_000_000:
+        seconds = microseconds / 1_000_000
+        if abs(seconds - round(seconds)) < 0.0001:
+            return f"{int(round(seconds))}s"
+        return f"{seconds:.2f}s"
+
+    fps = round(1_000_000 / microseconds)
+    if fps <= 0:
+        return '-'
+    return f"1/{fps}"
+
+def _default_metering_shutter_us(camera_mode):
+    if camera_mode == 'reaction':
+        return 8000
+    if camera_mode == 'quality':
+        return 250000
+    if camera_mode == 'battery':
+        return 33333
+    return 16666
+
+def _calc_metering_recommendation(sensor_status, settings, target_iso=None, target_shutter_us=None):
+    base_iso = None
+    base_shutter_us = None
+    source = 'fallback'
+
+    ae_gain = sensor_status.get('ae_gain')
+    ae_exposure_us = sensor_status.get('ae_exposure_us')
+    try:
+        if ae_gain is not None and ae_exposure_us is not None:
+            base_iso = int(round(float(ae_gain) * 100.0))
+            base_shutter_us = int(float(ae_exposure_us))
+            source = 'ae_metadata'
+    except (TypeError, ValueError):
+        base_iso = None
+        base_shutter_us = None
+
+    if base_iso is None:
+        iso_value = settings.get('iso', 'auto')
+        if iso_value != 'auto':
+            try:
+                base_iso = int(iso_value)
+                source = 'manual_settings'
+            except (TypeError, ValueError):
+                base_iso = None
+
+    if base_shutter_us is None:
+        shutter_value = settings.get('shutter_speed', 'auto')
+        if shutter_value != 'auto':
+            try:
+                base_shutter_us = int(shutter_value)
+                source = 'manual_settings'
+            except (TypeError, ValueError):
+                base_shutter_us = None
+
+    if base_iso is None:
+        base_iso = 200
+    if base_shutter_us is None:
+        base_shutter_us = 16666
+
+    base_iso = max(100, min(3200, base_iso))
+    base_shutter_us = max(2500, min(20_000_000, base_shutter_us))
+
+    if target_iso is not None:
+        target_iso = max(100, min(3200, int(target_iso)))
+    if target_shutter_us is not None:
+        target_shutter_us = max(2500, min(20_000_000, int(target_shutter_us)))
+
+    if target_iso is None and target_shutter_us is None:
+        target_shutter_us = _default_metering_shutter_us(settings.get('camera_mode', 'standard'))
+
+    exposure_product = float(base_iso) * float(base_shutter_us)
+
+    if target_iso is None and target_shutter_us is not None:
+        target_iso = int(round(exposure_product / float(target_shutter_us)))
+    if target_shutter_us is None and target_iso is not None:
+        target_shutter_us = int(round(exposure_product / float(target_iso)))
+
+    target_iso = max(100, min(3200, int(target_iso)))
+    target_shutter_us = max(2500, min(20_000_000, int(target_shutter_us)))
+
+    recommended_iso = _nearest_stop(METERING_ISO_STOPS, target_iso)
+    refined_shutter = int(round(exposure_product / float(recommended_iso)))
+    refined_shutter = max(2500, min(20_000_000, refined_shutter))
+    recommended_shutter_us = _nearest_stop(METERING_SHUTTER_US_STOPS, refined_shutter)
+
+    return {
+        'recommended_iso': int(recommended_iso),
+        'recommended_shutter_us': int(recommended_shutter_us),
+        'recommended_shutter_label': _format_shutter_label(recommended_shutter_us),
+        'base_iso': int(base_iso),
+        'base_shutter_us': int(base_shutter_us),
+        'base_shutter_label': _format_shutter_label(base_shutter_us),
+        'source': source,
+        'camera_mode': settings.get('camera_mode', 'standard'),
+        'lux': sensor_status.get('lux'),
+        'brightness': sensor_status.get('brightness'),
+    }
+
 def _thumbnail_path(filename, max_dim):
     base, _ext = os.path.splitext(filename)
     return os.path.join(THUMBNAIL_DIR, f"{base}_w{max_dim}.jpg")
@@ -151,6 +330,8 @@ class APIHandler(BaseHTTPRequestHandler):
             self.serve_settings()
         elif parsed.path == '/api/wifi/status':
             self.serve_wifi_status()
+        elif parsed.path == '/api/sensor/status':
+            self.serve_sensor_status()
         elif parsed.path.startswith('/photos/'):
             self.serve_photo_file(parsed.path)
         else:
@@ -173,8 +354,89 @@ class APIHandler(BaseHTTPRequestHandler):
             self.write_wpa_settings()
         elif parsed.path == '/api/wifi/switch':
             self.switch_wifi_mode()
+        elif parsed.path == '/api/metering':
+            self.serve_metering_recommendation()
         else:
             self.send_error(404)
+
+    def serve_sensor_status(self):
+        try:
+            sensor = {}
+            if os.path.exists(SENSOR_STATUS_FILE):
+                with open(SENSOR_STATUS_FILE, 'r', encoding='utf-8') as f:
+                    loaded = json.load(f)
+                    if isinstance(loaded, dict):
+                        sensor = loaded
+
+            settings = _load_effective_settings()
+            payload = {
+                'success': True,
+                'sensor': sensor,
+                'settings': {
+                    'camera_mode': settings.get('camera_mode', 'standard'),
+                    'monitoring_enabled': settings.get('monitoring_enabled', True),
+                    'iso': settings.get('iso', 'auto'),
+                    'shutter_speed': settings.get('shutter_speed', 'auto'),
+                    'white_balance': settings.get('white_balance', 'auto'),
+                    'quality': settings.get('quality', 90),
+                },
+            }
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps(payload).encode())
+        except Exception as e:
+            logger.error(f"Error serving sensor status: {e}")
+            self.send_response(500)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({'success': False, 'error': str(e)}).encode())
+
+    def serve_metering_recommendation(self):
+        try:
+            content_length = int(self.headers.get('Content-Length', 0))
+            body = self.rfile.read(content_length).decode() if content_length > 0 else ''
+            data = json.loads(body) if body else {}
+
+            sensor = {}
+            if os.path.exists(SENSOR_STATUS_FILE):
+                with open(SENSOR_STATUS_FILE, 'r', encoding='utf-8') as f:
+                    loaded = json.load(f)
+                    if isinstance(loaded, dict):
+                        sensor = loaded
+
+            settings = _load_effective_settings()
+
+            target_iso = data.get('target_iso')
+            if target_iso == 'auto':
+                target_iso = None
+            if target_iso is not None:
+                target_iso = int(target_iso)
+
+            target_shutter_us = data.get('target_shutter_us')
+            if target_shutter_us == 'auto':
+                target_shutter_us = None
+            if target_shutter_us is not None:
+                target_shutter_us = int(target_shutter_us)
+
+            recommendation = _calc_metering_recommendation(
+                sensor_status=sensor,
+                settings=settings,
+                target_iso=target_iso,
+                target_shutter_us=target_shutter_us,
+            )
+
+            response = {'success': True, 'recommendation': recommendation}
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps(response).encode())
+        except Exception as e:
+            logger.error(f"Metering recommendation error: {e}")
+            self.send_response(500)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({'success': False, 'error': str(e)}).encode())
     
     def serve_photo_list(self):
         """写真一覧を返す"""
@@ -736,6 +998,30 @@ class APIHandler(BaseHTTPRequestHandler):
                 self.wfile.write(json.dumps({'success': False, 'error': 'Invalid JSON'}).encode())
                 return
 
+            latitude = None
+            longitude = None
+            location_label = None
+            location_obj = request_data.get('location')
+            if isinstance(location_obj, dict):
+                try:
+                    lat_raw = location_obj.get('latitude')
+                    lon_raw = location_obj.get('longitude')
+                    if lat_raw is not None and lon_raw is not None:
+                        lat_value = float(lat_raw)
+                        lon_value = float(lon_raw)
+                        if -90.0 <= lat_value <= 90.0 and -180.0 <= lon_value <= 180.0:
+                            latitude = round(lat_value, 7)
+                            longitude = round(lon_value, 7)
+                except Exception as e:
+                    logger.warning(f"Invalid capture location coordinates ignored: {e}")
+
+                try:
+                    location_label = _sanitize_location_label(
+                        location_obj.get('label') or location_obj.get('name')
+                    )
+                except Exception:
+                    location_label = None
+
             settings = DEFAULT_SETTINGS.copy()
             if os.path.exists(SETTINGS_FILE):
                 with open(SETTINGS_FILE, 'r') as f:
@@ -856,6 +1142,7 @@ class APIHandler(BaseHTTPRequestHandler):
                 applied_mode = manual_mode if manual_mode and manual_mode != 'current' else settings.get('camera_mode', 'standard')
                 metadata = {
                     'timestamp': timestamp,
+                    'captured_at': datetime.datetime.now(datetime.timezone.utc).isoformat(),
                     'manual_mode': manual_mode or 'current',
                     'applied_mode': applied_mode,
                     'meta': meta_value,
@@ -866,6 +1153,11 @@ class APIHandler(BaseHTTPRequestHandler):
                     'width': width,
                     'height': height,
                 }
+                if latitude is not None and longitude is not None:
+                    metadata['latitude'] = latitude
+                    metadata['longitude'] = longitude
+                if location_label:
+                    metadata['location_label'] = location_label
                 try:
                     meta_path = os.path.splitext(photo_path)[0] + '.json'
                     with open(meta_path, 'w') as f:
@@ -967,6 +1259,43 @@ def restore_wifi_mode_on_boot():
     except Exception as e:
         logger.error(f"Failed to restore Wi-Fi mode: {e}")
 
+
+def _consume_boot_network_applied_marker():
+    """デプロイ/再起動直後の1回だけWi-Fi自動復元をスキップする。"""
+    consumed = False
+
+    for marker in BOOT_NETWORK_APPLIED_MARKERS:
+        if not os.path.exists(marker):
+            continue
+
+        removed = False
+        try:
+            os.remove(marker)
+            removed = True
+        except PermissionError:
+            sudo_rm = subprocess.run(
+                ['sudo', '-n', 'rm', '-f', marker],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if sudo_rm.returncode == 0:
+                removed = True
+            else:
+                logger.warning(
+                    f"Failed to remove boot marker with sudo: {marker}: "
+                    f"{sudo_rm.stderr.strip() or sudo_rm.stdout.strip()}"
+                )
+        except Exception as e:
+            logger.warning(f"Failed to remove boot marker: {marker}: {e}")
+
+        if removed:
+            consumed = True
+
+    if consumed:
+        logger.info("Skip boot Wi-Fi restore once: deployment marker consumed")
+    return consumed
+
 def main():
     os.makedirs(PHOTOS_DIR, exist_ok=True)
 
@@ -976,7 +1305,8 @@ def main():
     except Exception as e:
         logger.warning(f"Failed to clear session overrides on boot: {e}")
 
-    restore_wifi_mode_on_boot()
+    if not _consume_boot_network_applied_marker():
+        restore_wifi_mode_on_boot()
     
     server_address = ('0.0.0.0', 8001)
     httpd = ReusableHTTPServer(server_address, APIHandler)

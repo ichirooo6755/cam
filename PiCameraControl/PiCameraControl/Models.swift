@@ -137,6 +137,7 @@ enum ShutterSpeedValue: Codable, Equatable {
 
 struct PhotoMetadata: Codable, Equatable {
     let timestamp: String?
+    let capturedAt: String?
     let manualMode: String?
     let appliedMode: String?
     let meta: String?
@@ -146,9 +147,13 @@ struct PhotoMetadata: Codable, Equatable {
     let quality: Int?
     let width: Int?
     let height: Int?
+    let latitude: Double?
+    let longitude: Double?
+    let locationLabel: String?
 
     enum CodingKeys: String, CodingKey {
         case timestamp
+        case capturedAt = "captured_at"
         case manualMode = "manual_mode"
         case appliedMode = "applied_mode"
         case meta
@@ -158,6 +163,61 @@ struct PhotoMetadata: Codable, Equatable {
         case quality
         case width
         case height
+        case latitude
+        case longitude
+        case locationLabel = "location_label"
+    }
+}
+
+struct CaptureLocationPayload: Equatable {
+    let latitude: Double
+    let longitude: Double
+    let label: String?
+
+    var jsonObject: [String: Any] {
+        var object: [String: Any] = [
+            "latitude": latitude,
+            "longitude": longitude,
+        ]
+        if let label {
+            object["label"] = label
+        }
+        return object
+    }
+}
+
+extension PhotoMetadata {
+    private static let displayFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "ja_JP")
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .medium
+        return formatter
+    }()
+
+    var capturedDate: Date? {
+        if let capturedAt, let date = ISO8601DateFormatter().date(from: capturedAt) {
+            return date
+        }
+        if let timestamp, let value = Double(timestamp) {
+            return Date(timeIntervalSince1970: value)
+        }
+        return nil
+    }
+
+    var capturedDateDisplay: String {
+        guard let date = capturedDate else { return "-" }
+        return Self.displayFormatter.string(from: date)
+    }
+
+    var locationDisplay: String {
+        if let locationLabel, !locationLabel.isEmpty {
+            return locationLabel
+        }
+        if let latitude, let longitude {
+            return String(format: "%.5f, %.5f", latitude, longitude)
+        }
+        return "-"
     }
 }
 
@@ -223,6 +283,105 @@ struct WiFiStatus: Codable {
 struct WiFiSwitchResponse: Codable {
     let success: Bool
     let message: String?
+}
+
+struct SensorLinkedSettings: Codable {
+    let cameraMode: String?
+    let monitoringEnabled: Bool?
+    let iso: ISOValue?
+    let shutterSpeed: ShutterSpeedValue?
+    let whiteBalance: String?
+    let quality: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case cameraMode = "camera_mode"
+        case monitoringEnabled = "monitoring_enabled"
+        case iso
+        case shutterSpeed = "shutter_speed"
+        case whiteBalance = "white_balance"
+        case quality
+    }
+}
+
+struct SensorRuntimeStatus: Codable {
+    let service: String?
+    let state: String?
+    let cameraMode: String?
+    let monitoringEnabled: Bool?
+    let thresholdPercent: Int?
+    let detectionInterval: Double?
+    let checkInterval: Double?
+    let captureCooldown: Double?
+    let brightness: Double?
+    let lux: Double?
+    let aeGain: Double?
+    let aeExposureUs: Double?
+    let lastChangePercent: Double?
+    let lastChangeAmount: Double?
+    let lastCaptureAt: String?
+    let lastDetectedAt: String?
+    let lastDetectToCaptureMs: Double?
+    let updatedAt: String?
+
+    enum CodingKeys: String, CodingKey {
+        case service
+        case state
+        case cameraMode = "camera_mode"
+        case monitoringEnabled = "monitoring_enabled"
+        case thresholdPercent = "threshold_percent"
+        case detectionInterval = "detection_interval"
+        case checkInterval = "check_interval"
+        case captureCooldown = "capture_cooldown"
+        case brightness
+        case lux
+        case aeGain = "ae_gain"
+        case aeExposureUs = "ae_exposure_us"
+        case lastChangePercent = "last_change_percent"
+        case lastChangeAmount = "last_change_amount"
+        case lastCaptureAt = "last_capture_at"
+        case lastDetectedAt = "last_detected_at"
+        case lastDetectToCaptureMs = "last_detect_to_capture_ms"
+        case updatedAt = "updated_at"
+    }
+}
+
+struct SensorStatusResponse: Codable {
+    let success: Bool
+    let sensor: SensorRuntimeStatus?
+    let settings: SensorLinkedSettings?
+    let error: String?
+}
+
+struct MeteringRecommendation: Codable {
+    let recommendedISO: Int
+    let recommendedShutterUs: Int
+    let recommendedShutterLabel: String?
+    let baseISO: Int?
+    let baseShutterUs: Int?
+    let baseShutterLabel: String?
+    let source: String?
+    let cameraMode: String?
+    let lux: Double?
+    let brightness: Double?
+
+    enum CodingKeys: String, CodingKey {
+        case recommendedISO = "recommended_iso"
+        case recommendedShutterUs = "recommended_shutter_us"
+        case recommendedShutterLabel = "recommended_shutter_label"
+        case baseISO = "base_iso"
+        case baseShutterUs = "base_shutter_us"
+        case baseShutterLabel = "base_shutter_label"
+        case source
+        case cameraMode = "camera_mode"
+        case lux
+        case brightness
+    }
+}
+
+struct MeteringResponse: Codable {
+    let success: Bool
+    let recommendation: MeteringRecommendation?
+    let error: String?
 }
 
 // MARK: - Helper Protocols

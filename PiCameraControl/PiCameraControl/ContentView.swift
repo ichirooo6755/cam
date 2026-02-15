@@ -1,4 +1,5 @@
 import SwiftUI
+import CoreLocation
 
 #if canImport(UIKit)
     import UIKit
@@ -30,6 +31,86 @@ struct LiquidGlassModifier: ViewModifier {
                         lineWidth: 1
                     )
             )
+    }
+}
+
+@MainActor
+final class CaptureLocationProvider: NSObject, ObservableObject, CLLocationManagerDelegate {
+    @Published private(set) var authorization: CLAuthorizationStatus
+    @Published private(set) var latestLocation: CLLocation?
+    @Published private(set) var lastLocationError: String?
+
+    private let manager = CLLocationManager()
+
+    override init() {
+        authorization = manager.authorizationStatus
+        super.init()
+        manager.delegate = self
+        manager.desiredAccuracy = kCLLocationAccuracyHundredMeters
+        manager.distanceFilter = 20
+    }
+
+    func requestAuthorizationAndStart() {
+        authorization = manager.authorizationStatus
+        if authorization == .notDetermined {
+            manager.requestWhenInUseAuthorization()
+            return
+        }
+        if authorization == .authorizedAlways || authorization == .authorizedWhenInUse {
+            manager.startUpdatingLocation()
+        }
+    }
+
+    func capturePayload(label: String? = nil) -> CaptureLocationPayload? {
+        guard let location = latestLocation else {
+            return nil
+        }
+        let age = abs(location.timestamp.timeIntervalSinceNow)
+        if age > 60 * 20 {
+            return nil
+        }
+        if location.horizontalAccuracy <= 0 || location.horizontalAccuracy > 500 {
+            return nil
+        }
+        return CaptureLocationPayload(
+            latitude: location.coordinate.latitude,
+            longitude: location.coordinate.longitude,
+            label: label
+        )
+    }
+
+    var statusLabel: String {
+        if let latestLocation {
+            let age = Int(abs(latestLocation.timestamp.timeIntervalSinceNow))
+            return "位置情報: 取得済み (±\(Int(max(latestLocation.horizontalAccuracy, 0)))m / \(age)s前)"
+        }
+
+        switch authorization {
+        case .authorizedAlways, .authorizedWhenInUse:
+            return "位置情報: 取得中"
+        case .denied, .restricted:
+            return "位置情報: 許可なし"
+        case .notDetermined:
+            return "位置情報: 未許可"
+        @unknown default:
+            return "位置情報: 不明"
+        }
+    }
+
+    func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+        authorization = manager.authorizationStatus
+        if authorization == .authorizedAlways || authorization == .authorizedWhenInUse {
+            manager.startUpdatingLocation()
+        }
+    }
+
+    func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
+        latestLocation = locations.last
+        lastLocationError = nil
+    }
+
+    func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
+        lastLocationError = error.localizedDescription
     }
 }
 
@@ -120,6 +201,10 @@ struct ContentView: View {
     @State private var manualCaptureMode: ManualCaptureMode = .current
     @State private var manualCaptureMeta: String = ""
     @State private var lastCaptureMetadata: PhotoMetadata? = nil
+    @State private var sensorStatus: SensorRuntimeStatus? = nil
+    @State private var meteringRecommendation: MeteringRecommendation? = nil
+    @State private var isMetering: Bool = false
+    @StateObject private var captureLocationProvider = CaptureLocationProvider()
 
     @FocusState private var isManualMetaFocused: Bool
 
@@ -153,6 +238,8 @@ struct ContentView: View {
 
                         syncBanner
 
+                        monitoringQuickSection
+
                         // Camera Controls
                         VStack(spacing: 24) {
                             pickerModule(
@@ -161,15 +248,9 @@ struct ContentView: View {
                             ) { opt in
                                 updateCameraMode(opt)
                             }
-                            HStack(spacing: 16) {
-                                pickerModule(
-                                    title: "ISO", selection: $selectedISO,
-                                    options: ISOOption.allCases
-                                ) { opt in
-                                    updateISO(opt)
-                                }
-                                shutterPickerModule
-                            }
+
+                            isoQuickModule
+                            shutterPickerModule
 
                             pickerModule(
                                 title: "QUALITY", selection: $selectedQuality,
@@ -228,6 +309,8 @@ struct ContentView: View {
                         // Capture Button
                         captureSection
                             .sensoryFeedback(.impact(flexibility: .rigid), trigger: isCapturing)
+
+                        sensorStatusSection
 
                         // Network
                         networkSection
@@ -318,9 +401,90 @@ struct ContentView: View {
             .onAppear {
                 apSSIDInput = savedAPSSID
                 apPasswordInput = savedAPPassword
+                captureLocationProvider.requestAuthorizationAndStart()
                 loadAllSettings()
             }
         }
+    }
+
+    private func runMetering() {
+        isMetering = true
+        errorMessage = nil
+        let apiClient = api
+        let (targetISO, targetShutter) = meteringTargetsFromSelection()
+        Task {
+            do {
+                let recommendation = try await apiClient.fetchMeteringRecommendation(
+                    targetISO: targetISO,
+                    targetShutterUs: targetShutter
+                )
+                let sensor = try? await apiClient.fetchSensorStatus()
+                await MainActor.run {
+                    meteringRecommendation = recommendation
+                    sensorStatus = sensor?.sensor
+                    isMetering = false
+                }
+            } catch {
+                await MainActor.run {
+                    isMetering = false
+                    errorMessage = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    private func applyMeteringRecommendation(_ recommendation: MeteringRecommendation) {
+        isMetering = true
+        errorMessage = nil
+        let apiClient = api
+        Task {
+            do {
+                try await apiClient.applyMeteringRecommendation(recommendation)
+                let settings = try await apiClient.fetchSettings()
+                let sensor = try? await apiClient.fetchSensorStatus()
+                await MainActor.run {
+                    applyRemoteSettings(settings)
+                    sensorStatus = sensor?.sensor
+                    syncState = .success("測光提案を適用しました")
+                    isMetering = false
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+                        if syncState == .success("測光提案を適用しました") {
+                            syncState = .idle
+                        }
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    isMetering = false
+                    errorMessage = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    private func meteringTargetsFromSelection() -> (Int?, Int?) {
+        var targetISO: Int?
+        switch selectedISO.isoValue {
+        case .auto:
+            targetISO = nil
+        case .value(let value):
+            targetISO = value
+        }
+
+        var targetShutter: Int?
+        switch selectedShutterSpeed.shutterValue {
+        case .auto:
+            targetShutter = nil
+        case .microseconds(let us):
+            targetShutter = us
+        }
+
+        return (targetISO, targetShutter)
+    }
+
+    private func formatSensorValue(_ value: Double?, digits: Int) -> String {
+        guard let value else { return "-" }
+        return String(format: "%.*f", digits, value)
     }
 
     private func connectHomeWiFi() {
@@ -364,12 +528,12 @@ struct ContentView: View {
 
     private var backgroundGradient: some View {
         ZStack {
-            Color(colorScheme == .dark ? .black : .white)
+            Color(colorScheme == .dark ? Color(red: 0.06, green: 0.07, blue: 0.08) : Color(red: 0.97, green: 0.98, blue: 0.99))
 
             LinearGradient(
                 colors: [
-                    Color.blue.opacity(0.15),
-                    Color.purple.opacity(0.15),
+                    Color.cyan.opacity(colorScheme == .dark ? 0.22 : 0.14),
+                    Color.white.opacity(colorScheme == .dark ? 0.04 : 0.2),
                     Color.clear,
                 ],
                 startPoint: .topLeading,
@@ -377,7 +541,7 @@ struct ContentView: View {
             )
 
             RadialGradient(
-                colors: [Color.blue.opacity(0.1), .clear],
+                colors: [Color.teal.opacity(colorScheme == .dark ? 0.2 : 0.1), .clear],
                 center: .bottomTrailing,
                 startRadius: 0,
                 endRadius: 400
@@ -469,6 +633,92 @@ struct ContentView: View {
         .liquidGlassStyle(radius: 20)
     }
 
+    private var monitoringQuickSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("LIGHT DETECTION")
+                    .font(.caption2.weight(.black))
+                    .foregroundColor(.secondary)
+                Spacer()
+                Text(manualModeEnabled ? "PAUSED" : "ACTIVE")
+                    .font(.caption2.weight(.heavy))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background((manualModeEnabled ? Color.orange : Color.green).opacity(0.2))
+                    .foregroundColor(manualModeEnabled ? .orange : .green)
+                    .cornerRadius(8)
+            }
+
+            Button {
+                quickToggleMonitoring()
+            } label: {
+                Text(manualModeEnabled ? "光検知を再開" : "光検知を一時停止")
+                    .font(.caption.weight(.bold))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                    .background(manualModeEnabled ? Color.green : Color.orange)
+                    .foregroundColor(.white)
+                    .cornerRadius(12)
+            }
+
+            Text("屋外運用時は、移動・調整中だけ停止し、設置後に再開すると誤撮影と消費電力を抑えられます。")
+                .font(.caption)
+                .foregroundColor(.secondary)
+        }
+        .padding(16)
+        .liquidGlassStyle(radius: 20)
+    }
+
+    private var isoQuickModule: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("ISO")
+                    .font(.caption2.weight(.black))
+                    .foregroundColor(.secondary)
+                Spacer()
+                Text(selectedISO.label)
+                    .font(.caption.weight(.semibold))
+                    .foregroundColor(.secondary)
+                    .monospacedDigit()
+
+                HStack(spacing: 8) {
+                    Button {
+                        shiftISO(step: -1)
+                    } label: {
+                        Image(systemName: "minus")
+                            .font(.caption.weight(.bold))
+                    }
+                    .buttonStyle(.bordered)
+
+                    Button {
+                        shiftISO(step: 1)
+                    } label: {
+                        Image(systemName: "plus")
+                            .font(.caption.weight(.bold))
+                    }
+                    .buttonStyle(.bordered)
+                }
+            }
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(ISOOption.allCases) { option in
+                        quickChip(
+                            title: option.label,
+                            active: selectedISO == option,
+                            activeColor: .blue
+                        ) {
+                            selectedISO = option
+                            updateISO(option)
+                        }
+                    }
+                }
+            }
+        }
+        .padding(16)
+        .liquidGlassStyle(radius: 20)
+    }
+
     private var whiteBalanceModule: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("WHITE BALANCE")
@@ -501,26 +751,153 @@ struct ContentView: View {
         .liquidGlassStyle(radius: 20)
     }
 
-    private var shutterPickerModule: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("SHUTTER")
-                .font(.caption2.weight(.black))
-                .foregroundColor(.secondary)
-                .padding(.leading, 4)
+    private var sensorStatusSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("SENSOR STATUS")
+                    .font(.caption2.weight(.black))
+                    .foregroundColor(.secondary)
 
-            Picker("SHUTTER", selection: $selectedShutterSpeed) {
-                ForEach(shutterOptions, id: \.self) { opt in
-                    Text(opt.label).tag(opt)
+                Spacer()
+
+                if isMetering {
+                    ProgressView()
+                        .scaleEffect(0.8)
                 }
+
+                Button {
+                    runMetering()
+                } label: {
+                    Text("測光")
+                        .font(.caption.weight(.bold))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(Color.orange)
+                        .foregroundColor(.white)
+                        .cornerRadius(8)
+                }
+                .disabled(isMetering)
             }
-            .pickerStyle(.menu)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 4)
-            .onChange(of: selectedShutterSpeed) { _, newValue in
-                updateShutterSpeed(newValue)
+
+            if let sensorStatus {
+                HStack(alignment: .top, spacing: 16) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("STATE: \((sensorStatus.state ?? "-").uppercased())")
+                        Text("MODE: \((sensorStatus.cameraMode ?? "-").uppercased())")
+                        Text("BRIGHT: \(formatSensorValue(sensorStatus.brightness, digits: 2))")
+                    }
+                    .monospacedDigit()
+
+                    Spacer()
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Δ%: \(formatSensorValue(sensorStatus.lastChangePercent, digits: 2))")
+                        Text("LUX: \(formatSensorValue(sensorStatus.lux, digits: 2))")
+                        Text("D→C: \(formatSensorValue(sensorStatus.lastDetectToCaptureMs, digits: 1))ms")
+                    }
+                    .monospacedDigit()
+                }
+                .font(.caption2.weight(.medium))
+                .foregroundColor(.secondary)
+            } else {
+                Text("センサーステータス未取得")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+
+            if let recommendation = meteringRecommendation {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("METERING RESULT")
+                        .font(.caption2.weight(.black))
+                        .foregroundColor(.secondary)
+
+                    HStack(alignment: .top, spacing: 16) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("ISO: \(recommendation.recommendedISO)")
+                            Text("SS: \(recommendation.recommendedShutterLabel ?? "-")")
+                        }
+                        .monospacedDigit()
+
+                        Spacer()
+
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("BASE ISO: \(recommendation.baseISO.map(String.init) ?? "-")")
+                            Text("BASE SS: \(recommendation.baseShutterLabel ?? "-")")
+                        }
+                        .monospacedDigit()
+                    }
+                    .font(.caption2.weight(.medium))
+                    .foregroundColor(.secondary)
+
+                    Button {
+                        applyMeteringRecommendation(recommendation)
+                    } label: {
+                        Text("提案をISO/SSに適用")
+                            .font(.caption.weight(.black))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 10)
+                            .background(Color.orange.opacity(0.9))
+                            .foregroundColor(.white)
+                            .cornerRadius(10)
+                    }
+                    .disabled(isMetering)
+                }
+                .padding(12)
+                .background(Color.primary.opacity(0.05))
+                .cornerRadius(14)
             }
         }
-        .padding(12)
+        .padding(16)
+        .liquidGlassStyle(radius: 20)
+    }
+
+    private var shutterPickerModule: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("SHUTTER")
+                    .font(.caption2.weight(.black))
+                    .foregroundColor(.secondary)
+                Spacer()
+                Text(selectedShutterSpeed.label)
+                    .font(.caption.weight(.semibold))
+                    .foregroundColor(.secondary)
+                    .monospacedDigit()
+
+                HStack(spacing: 8) {
+                    Button {
+                        shiftShutter(step: -1)
+                    } label: {
+                        Image(systemName: "minus")
+                            .font(.caption.weight(.bold))
+                    }
+                    .buttonStyle(.bordered)
+
+                    Button {
+                        shiftShutter(step: 1)
+                    } label: {
+                        Image(systemName: "plus")
+                            .font(.caption.weight(.bold))
+                    }
+                    .buttonStyle(.bordered)
+                }
+            }
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(shutterOptions, id: \.self) { opt in
+                        quickChip(
+                            title: opt.label,
+                            active: selectedShutterSpeed == opt,
+                            activeColor: .indigo
+                        ) {
+                            selectedShutterSpeed = opt
+                            updateShutterSpeed(opt)
+                        }
+                    }
+                }
+            }
+        }
+        .padding(16)
         .liquidGlassStyle(radius: 20)
     }
 
@@ -612,6 +989,11 @@ struct ContentView: View {
                 .foregroundColor(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
+            Text(captureLocationProvider.statusLabel)
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
             if let metadata = lastCaptureMetadata {
                 VStack(alignment: .leading, spacing: 10) {
                     Text("LAST CAPTURE")
@@ -631,12 +1013,22 @@ struct ContentView: View {
                         VStack(alignment: .leading, spacing: 4) {
                             Text("WB: \((metadata.whiteBalance ?? "-").uppercased())")
                             Text("Q: \(metadata.quality.map(String.init) ?? "-")")
-                            Text("META: \(metadata.meta?.isEmpty == false ? metadata.meta! : "-")")
+                            Text("DATE: \(metadata.capturedDateDisplay)")
                         }
                         .monospacedDigit()
                     }
                     .font(.caption2.weight(.medium))
                     .foregroundColor(.secondary)
+
+                    Text("LOC: \(metadata.locationDisplay)")
+                        .font(.caption2.weight(.medium))
+                        .foregroundColor(.secondary)
+                        .monospacedDigit()
+
+                    Text("META: \(metadata.meta?.isEmpty == false ? metadata.meta! : "-")")
+                        .font(.caption2.weight(.medium))
+                        .foregroundColor(.secondary)
+                        .monospacedDigit()
                 }
                 .padding(12)
                 .background(Color.primary.opacity(0.05))
@@ -690,6 +1082,12 @@ struct ContentView: View {
                     SecureField("AP PASSWORD", text: $apPasswordInput)
                         .textFieldStyle(GlassTextFieldStyle())
                         .disabled(isSwitchingWiFi)
+
+                    if apPasswordInput == "picamera123" {
+                        Text("⚠ デフォルトAPパスワードは外部利用時に危険です。8文字以上の固有パスワードへ変更してください。")
+                            .font(.caption)
+                            .foregroundColor(.orange)
+                    }
 
                     Button(action: switchWiFiMode) {
                         Text(isAPMode ? "AP設定を適用" : "APへ切り替え開始")
@@ -764,6 +1162,7 @@ struct ContentView: View {
             do {
                 let settings = try await api.fetchSettings()
                 let wifi = try await api.fetchWiFiStatus()
+                let sensor = try? await api.fetchSensorStatus()
                 await MainActor.run {
                     applyRemoteSettings(settings)
 
@@ -782,6 +1181,7 @@ struct ContentView: View {
                     }
                     isAPMode = wifi.mode == "ap"
                     targetAPMode = isAPMode
+                    sensorStatus = sensor?.sensor
 
                     isLoading = false
                 }
@@ -869,6 +1269,16 @@ struct ContentView: View {
         }
     }
 
+    private func shiftISO(step: Int) {
+        let all = ISOOption.allCases
+        guard let currentIndex = all.firstIndex(of: selectedISO) else { return }
+        let next = min(max(currentIndex + step, 0), all.count - 1)
+        guard next != currentIndex else { return }
+        let target = all[next]
+        selectedISO = target
+        updateISO(target)
+    }
+
     private func updateShutterSpeed(_ option: ShutterSpeedOption) {
         performSettingUpdate(
             label: "シャッター",
@@ -876,6 +1286,16 @@ struct ContentView: View {
         ) { api in
             try await api.updateShutterSpeed(option.shutterValue)
         }
+    }
+
+    private func shiftShutter(step: Int) {
+        let all = shutterOptions
+        guard let currentIndex = all.firstIndex(of: selectedShutterSpeed) else { return }
+        let next = min(max(currentIndex + step, 0), all.count - 1)
+        guard next != currentIndex else { return }
+        let target = all[next]
+        selectedShutterSpeed = target
+        updateShutterSpeed(target)
     }
 
     private func updateQuality(_ option: QualityOption) {
@@ -943,6 +1363,29 @@ struct ContentView: View {
         }
     }
 
+    private func quickToggleMonitoring() {
+        let targetMonitoringEnabled = manualModeEnabled
+        manualModeEnabled.toggle()
+        updateMonitoringEnabled(targetMonitoringEnabled)
+    }
+
+    private func quickChip(
+        title: String,
+        active: Bool,
+        activeColor: Color,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(active ? activeColor : Color.primary.opacity(0.08))
+                .foregroundColor(active ? .white : .primary)
+                .cornerRadius(10)
+        }
+    }
+
     private func updateToggle(
         multipleExposure: Bool? = nil, composition2in1: Bool? = nil, timestamp: Bool? = nil
     ) {
@@ -991,11 +1434,13 @@ struct ContentView: View {
         let apiClient = api
         let mode = manualCaptureMode
         let meta = manualCaptureMeta
+        let locationPayload = captureLocationProvider.capturePayload()
         Task {
             do {
                 let (filename, metadata) = try await apiClient.captureWithMetadata(
                     manualMode: mode,
-                    meta: meta
+                    meta: meta,
+                    location: locationPayload
                 )
                 let image = try await apiClient.downloadImage(filename: filename)
                 await MainActor.run {
