@@ -27,3 +27,4 @@ cd "home 3" && bash ./wifi_cycle_test.sh
 - Wi-Fi切替: `_WIFI_SWITCH_LOCK`排他、409拒否、12秒CD、自動fallback
 - API追加: `api_server.py`→`Models.swift`→`CameraAPI.swift`→deploy
 - `contact.md`で進捗確認
+- APやテザリング関係でなければ変更はpiにデプロイし、APテザリングに関係なく、gitにはpushして。

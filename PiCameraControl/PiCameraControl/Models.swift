@@ -17,6 +17,8 @@ struct CameraSettings: Codable {
     var checkInterval: Double
     var captureCooldown: Double
     var enableMultipleExposure: Bool
+    var multipleExposureMode: String  // "blend" or "additive"
+    var multipleExposureCount: Int    // 多重露光の枚数（2-10）
     var enable2in1Composition: Bool
     var enableTimestamp: Bool
 
@@ -32,6 +34,8 @@ struct CameraSettings: Codable {
         case checkInterval = "check_interval"
         case captureCooldown = "capture_cooldown"
         case enableMultipleExposure = "enable_multiple_exposure"
+        case multipleExposureMode = "multiple_exposure_mode"
+        case multipleExposureCount = "multiple_exposure_count"
         case enable2in1Composition = "enable_2in1_composition"
         case enableTimestamp = "enable_timestamp"
     }
@@ -59,6 +63,10 @@ struct CameraSettings: Codable {
             try container.decodeIfPresent(Double.self, forKey: .captureCooldown) ?? 0.25
         enableMultipleExposure =
             try container.decodeIfPresent(Bool.self, forKey: .enableMultipleExposure) ?? false
+        multipleExposureMode =
+            try container.decodeIfPresent(String.self, forKey: .multipleExposureMode) ?? "blend"
+        multipleExposureCount =
+            try container.decodeIfPresent(Int.self, forKey: .multipleExposureCount) ?? 2
         enable2in1Composition =
             try container.decodeIfPresent(Bool.self, forKey: .enable2in1Composition) ?? false
         enableTimestamp =
@@ -555,6 +563,7 @@ enum ShutterSpeedOption: String, CaseIterable, Identifiable, Hashable, Labelable
     case ss8, ss4, ss2
     case ss1s, ss2s, ss3s, ss4s, ss5s, ss6s, ss7s, ss8s, ss9s, ss10s
     case ss11s, ss12s, ss13s, ss14s, ss15s, ss16s, ss17s, ss18s, ss19s, ss20s
+    case ss30s, ss60s, ss120s  // 長時間露光: 星の軌跡撮影対応
 
     var id: String { rawValue }
 
@@ -590,6 +599,9 @@ enum ShutterSpeedOption: String, CaseIterable, Identifiable, Hashable, Labelable
         case .ss18s: return "18s"
         case .ss19s: return "19s"
         case .ss20s: return "20s"
+        case .ss30s: return "30s"
+        case .ss60s: return "60s"
+        case .ss120s: return "120s"
         }
     }
 
@@ -625,6 +637,9 @@ enum ShutterSpeedOption: String, CaseIterable, Identifiable, Hashable, Labelable
         case .ss18s: return 18_000_000
         case .ss19s: return 19_000_000
         case .ss20s: return 20_000_000
+        case .ss30s: return 30_000_000
+        case .ss60s: return 60_000_000
+        case .ss120s: return 120_000_000
         }
     }
 

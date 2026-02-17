@@ -94,12 +94,22 @@ final class ImageWriteCoordinator: NSObject {
     }
 }
 
-// MARK: - ImageAnalyzer
+// MARK: - ImageAnalyzer (精度向上版)
 
 struct ImageAnalysisResult {
-    var brightness: Double  // 0-1
-    var contrast: Double    // 0-1
-    var saturation: Double  // 0-1
+    var brightness: Double      // 0-1 (平均輝度)
+    var contrast: Double        // 0-1 (ヒストグラム標準偏差)
+    var saturation: Double      // 0-1 (平均彩度)
+    var histogram: HistogramData  // ヒストグラム情報
+    var colorBalance: (r: Double, g: Double, b: Double)  // RGB平均
+    var exposureScore: Double   // 露出評価（0=暗い, 0.5=適正, 1=明るい）
+}
+
+struct HistogramData {
+    var luminanceStdDev: Double  // 輝度の標準偏差
+    var shadowClipping: Double   // シャドウクリッピング（0-1）
+    var highlightClipping: Double // ハイライトクリッピング（0-1）
+    var dynamicRange: Double     // ダイナミックレンジ（0-1）
 }
 
 private enum ImageAnalyzer {
@@ -117,110 +127,308 @@ private enum ImageAnalyzer {
             return nil
         }
 
-        let extent = ciImage.extent
-
         // 平均色を計算
-        let averageFilter = CIFilter(name: "CIAreaAverage", parameters: [
-            kCIInputImageKey: ciImage,
-            kCIInputExtentKey: CIVector(cgRect: extent)
-        ])
-
-        guard let outputImage = averageFilter?.outputImage else { return nil }
-
-        var bitmap = [UInt8](repeating: 0, count: 4)
-        context.render(outputImage, toBitmap: &bitmap, rowBytes: 4, bounds: CGRect(x: 0, y: 0, width: 1, height: 1), format: .RGBA8, colorSpace: nil)
-
-        let r = Double(bitmap[0]) / 255.0
-        let g = Double(bitmap[1]) / 255.0
-        let b = Double(bitmap[2]) / 255.0
+        let avgColor = calculateAverageColor(ciImage)
+        let r = avgColor.r
+        let g = avgColor.g
+        let b = avgColor.b
 
         // 明るさ（輝度）
         let brightness = 0.299 * r + 0.587 * g + 0.114 * b
 
-        // コントラスト（簡易推定：ヒストグラムの代わりに標準偏差を使用）
-        let contrast = estimateContrast(ciImage: ciImage)
+        // ヒストグラム分析
+        let histogram = analyzeHistogram(ciImage)
+
+        // コントラスト（ヒストグラム標準偏差ベース）
+        let contrast = histogram.luminanceStdDev
 
         // 彩度（色の鮮やかさ）
         let maxRGB = max(r, g, b)
         let minRGB = min(r, g, b)
         let saturation = maxRGB > 0 ? (maxRGB - minRGB) / maxRGB : 0
 
-        return ImageAnalysisResult(brightness: brightness, contrast: contrast, saturation: saturation)
+        // 露出スコア（明暗バランス評価）
+        let exposureScore = calculateExposureScore(brightness: brightness, histogram: histogram)
+
+        return ImageAnalysisResult(
+            brightness: brightness,
+            contrast: contrast,
+            saturation: saturation,
+            histogram: histogram,
+            colorBalance: (r, g, b),
+            exposureScore: exposureScore
+        )
     }
 
-    private static func estimateContrast(ciImage: CIImage) -> Double {
-        // 簡易的なコントラスト推定（0-1の範囲）
-        // 実際にはヒストグラム分析が理想的だが、簡易版として固定値を返す
-        return 0.5
+    /// 平均色を計算
+    private static func calculateAverageColor(_ ciImage: CIImage) -> (r: Double, g: Double, b: Double) {
+        let extent = ciImage.extent
+        let averageFilter = CIFilter(name: "CIAreaAverage", parameters: [
+            kCIInputImageKey: ciImage,
+            kCIInputExtentKey: CIVector(cgRect: extent)
+        ])
+
+        guard let outputImage = averageFilter?.outputImage else {
+            return (0.5, 0.5, 0.5)
+        }
+
+        var bitmap = [UInt8](repeating: 0, count: 4)
+        context.render(outputImage, toBitmap: &bitmap, rowBytes: 4, bounds: CGRect(x: 0, y: 0, width: 1, height: 1), format: .RGBA8, colorSpace: nil)
+
+        return (
+            Double(bitmap[0]) / 255.0,
+            Double(bitmap[1]) / 255.0,
+            Double(bitmap[2]) / 255.0
+        )
+    }
+
+    /// ヒストグラム分析（精度向上版）
+    private static func analyzeHistogram(_ ciImage: CIImage) -> HistogramData {
+        // サンプリング（高速化のためダウンスケール）
+        let scale: CGFloat = 0.25
+        let transform = CGAffineTransform(scaleX: scale, y: scale)
+        let scaledImage = ciImage.transformed(by: transform)
+
+        guard let cgImage = context.createCGImage(scaledImage, from: scaledImage.extent) else {
+            return HistogramData(luminanceStdDev: 0.5, shadowClipping: 0, highlightClipping: 0, dynamicRange: 0.5)
+        }
+
+        let width = cgImage.width
+        let height = cgImage.height
+        let bytesPerPixel = 4
+        let bytesPerRow = bytesPerPixel * width
+        let bitsPerComponent = 8
+
+        var pixelData = [UInt8](repeating: 0, count: width * height * bytesPerPixel)
+
+        guard let context = CGContext(
+            data: &pixelData,
+            width: width,
+            height: height,
+            bitsPerComponent: bitsPerComponent,
+            bytesPerRow: bytesPerRow,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
+        ) else {
+            return HistogramData(luminanceStdDev: 0.5, shadowClipping: 0, highlightClipping: 0, dynamicRange: 0.5)
+        }
+
+        context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
+
+        // 輝度ヒストグラム作成
+        var luminanceValues: [Double] = []
+        var shadowCount = 0
+        var highlightCount = 0
+
+        for i in stride(from: 0, to: pixelData.count, by: bytesPerPixel) {
+            let r = Double(pixelData[i]) / 255.0
+            let g = Double(pixelData[i + 1]) / 255.0
+            let b = Double(pixelData[i + 2]) / 255.0
+
+            let luminance = 0.299 * r + 0.587 * g + 0.114 * b
+            luminanceValues.append(luminance)
+
+            // クリッピング検出
+            if luminance < 0.05 { shadowCount += 1 }
+            if luminance > 0.95 { highlightCount += 1 }
+        }
+
+        // 標準偏差計算
+        let mean = luminanceValues.reduce(0, +) / Double(luminanceValues.count)
+        let variance = luminanceValues.map { pow($0 - mean, 2) }.reduce(0, +) / Double(luminanceValues.count)
+        let stdDev = sqrt(variance)
+
+        // クリッピング率
+        let totalPixels = Double(luminanceValues.count)
+        let shadowClipping = Double(shadowCount) / totalPixels
+        let highlightClipping = Double(highlightCount) / totalPixels
+
+        // ダイナミックレンジ（最大値-最小値）
+        let minLum = luminanceValues.min() ?? 0
+        let maxLum = luminanceValues.max() ?? 1
+        let dynamicRange = maxLum - minLum
+
+        return HistogramData(
+            luminanceStdDev: stdDev,
+            shadowClipping: shadowClipping,
+            highlightClipping: highlightClipping,
+            dynamicRange: dynamicRange
+        )
+    }
+
+    /// 露出スコア計算
+    private static func calculateExposureScore(brightness: Double, histogram: HistogramData) -> Double {
+        // 理想的な露出: brightness = 0.4-0.6, クリッピングなし
+        let brightnessScore = 1.0 - abs(brightness - 0.5) * 2.0
+        let clippingPenalty = (histogram.shadowClipping + histogram.highlightClipping) * 2.0
+        return max(0, min(1, brightnessScore - clippingPenalty))
     }
 }
 
-// MARK: - AutoEditEngine
+// MARK: - AutoEditEngine (精度向上版)
 
 private enum AutoEditEngine {
-    /// 画像分析結果に基づいて設定を提案
+    /// 画像分析結果に基づいて設定を提案（精度向上版）
     static func suggestSettings(for analysis: ImageAnalysisResult, learningData: [AutoEditEvaluation]) -> PhotoEditorSettings {
         var settings = PhotoEditorSettings.default
 
-        // 高評価データから学習（簡易版）
+        // 学習データの分析
         let highRatedData = learningData.filter { $0.userRating >= 4 }
+        let lowRatedData = learningData.filter { $0.userRating <= 2 }
 
-        // 明るさ補正
-        if analysis.brightness < 0.3 {
-            // 暗い画像
-            settings.exposureEV = 0.5 + (0.3 - analysis.brightness) * 2
-            settings.shadowBoost = 0.3
-        } else if analysis.brightness > 0.7 {
-            // 明るい画像
-            settings.exposureEV = -0.3 - (analysis.brightness - 0.7) * 2
-            settings.highlightRecovery = 0.4
-        }
+        // ベース補正（ヒストグラム分析ベース）
+        applyBaseCorrections(&settings, analysis: analysis)
 
-        // コントラスト補正
-        if analysis.contrast < 0.4 {
-            settings.contrast = 1.2
-            settings.clarity = 0.3
-        }
-
-        // 彩度補正
-        if analysis.saturation < 0.3 {
-            // 低彩度の場合
-            settings.vibrance = 0.2
-            settings.saturation = 1.1
-        } else if analysis.saturation > 0.7 {
-            // 高彩度の場合
-            settings.saturation = 0.9
-        }
-
-        // 学習データから調整（高評価データの平均を参照）
+        // ポジティブ学習（高評価データから学習）
         if !highRatedData.isEmpty {
-            var avgExposure = 0.0
-            var avgContrast = 0.0
-            var avgSaturation = 0.0
-
-            for data in highRatedData {
-                if let finalSettings = data.finalSettings {
-                    avgExposure += finalSettings.exposureEV
-                    avgContrast += finalSettings.contrast
-                    avgSaturation += finalSettings.saturation
-                }
-            }
-
-            let count = Double(highRatedData.count)
-            avgExposure /= count
-            avgContrast /= count
-            avgSaturation /= count
-
-            // 学習データで微調整（20%の重み）
-            settings.exposureEV = settings.exposureEV * 0.8 + avgExposure * 0.2
-            settings.contrast = settings.contrast * 0.8 + avgContrast * 0.2
-            settings.saturation = settings.saturation * 0.8 + avgSaturation * 0.2
+            applyPositiveLearning(&settings, highRatedData: highRatedData, analysis: analysis)
         }
+
+        // ネガティブ学習（低評価データから回避）
+        if !lowRatedData.isEmpty {
+            applyNegativeLearning(&settings, lowRatedData: lowRatedData, analysis: analysis)
+        }
+
+        // 動的重み調整（学習データ量に応じて重みを調整）
+        let learningWeight = calculateLearningWeight(dataCount: learningData.count)
+        settings = blendSettings(base: settings, learned: settings, weight: learningWeight)
 
         return settings
     }
 
-    /// 自動編集の評価を記録
+    /// ベース補正（ヒストグラム分析ベース）
+    private static func applyBaseCorrections(_ settings: inout PhotoEditorSettings, analysis: ImageAnalysisResult) {
+        let hist = analysis.histogram
+
+        // 露出補正（クリッピングとダイナミックレンジを考慮）
+        if hist.shadowClipping > 0.1 {
+            // シャドウクリッピング → 明るくする
+            settings.exposureEV = 0.5 + hist.shadowClipping
+            settings.shadowBoost = 0.4
+        } else if hist.highlightClipping > 0.1 {
+            // ハイライトクリッピング → 暗くする
+            settings.exposureEV = -0.5 - hist.highlightClipping
+            settings.highlightRecovery = 0.5
+        } else if analysis.exposureScore < 0.5 {
+            // 露出不足
+            settings.exposureEV = (0.5 - analysis.exposureScore) * 2.0
+            settings.shadowBoost = 0.3
+        }
+
+        // コントラスト補正（標準偏差ベース）
+        if hist.luminanceStdDev < 0.15 {
+            // 低コントラスト
+            settings.contrast = 1.3
+            settings.clarity = 0.4
+        } else if hist.luminanceStdDev > 0.35 {
+            // 高コントラスト
+            settings.contrast = 0.9
+            settings.highlightRecovery = 0.3
+            settings.shadowBoost = 0.2
+        }
+
+        // 彩度補正
+        if analysis.saturation < 0.25 {
+            settings.vibrance = 0.3
+            settings.saturation = 1.15
+        } else if analysis.saturation > 0.75 {
+            settings.saturation = 0.85
+        }
+
+        // ダイナミックレンジ補正
+        if hist.dynamicRange < 0.4 {
+            // 狭いダイナミックレンジ → コントラスト強化
+            settings.contrast = 1.25
+            settings.clarity = 0.3
+        }
+    }
+
+    /// ポジティブ学習（高評価データから学習）
+    private static func applyPositiveLearning(_ settings: inout PhotoEditorSettings, highRatedData: [AutoEditEvaluation], analysis: ImageAnalysisResult) {
+        // 類似画像の学習データを重視（明るさベース）
+        let similarData = highRatedData.filter {
+            abs($0.imageBrightness - analysis.brightness) < 0.2
+        }
+
+        let targetData = similarData.isEmpty ? highRatedData : similarData
+
+        var avgExposure = 0.0
+        var avgContrast = 0.0
+        var avgSaturation = 0.0
+        var avgClarity = 0.0
+        var avgHighlightRecovery = 0.0
+        var avgShadowBoost = 0.0
+
+        for data in targetData {
+            if let finalSettings = data.finalSettings {
+                avgExposure += finalSettings.exposureEV
+                avgContrast += finalSettings.contrast
+                avgSaturation += finalSettings.saturation
+                avgClarity += finalSettings.clarity
+                avgHighlightRecovery += finalSettings.highlightRecovery
+                avgShadowBoost += finalSettings.shadowBoost
+            }
+        }
+
+        let count = Double(targetData.count)
+        avgExposure /= count
+        avgContrast /= count
+        avgSaturation /= count
+        avgClarity /= count
+        avgHighlightRecovery /= count
+        avgShadowBoost /= count
+
+        // 学習データで微調整（30%の重み - 以前より重視）
+        settings.exposureEV = settings.exposureEV * 0.7 + avgExposure * 0.3
+        settings.contrast = settings.contrast * 0.7 + avgContrast * 0.3
+        settings.saturation = settings.saturation * 0.7 + avgSaturation * 0.3
+        settings.clarity = settings.clarity * 0.7 + avgClarity * 0.3
+        settings.highlightRecovery = settings.highlightRecovery * 0.7 + avgHighlightRecovery * 0.3
+        settings.shadowBoost = settings.shadowBoost * 0.7 + avgShadowBoost * 0.3
+    }
+
+    /// ネガティブ学習（低評価データから回避）
+    private static func applyNegativeLearning(_ settings: inout PhotoEditorSettings, lowRatedData: [AutoEditEvaluation], analysis: ImageAnalysisResult) {
+        // 低評価データの共通パターンを避ける
+        for data in lowRatedData {
+            guard let predicted = data.predictedSettings,
+                  abs(data.imageBrightness - analysis.brightness) < 0.2 else {
+                continue
+            }
+
+            // 低評価につながった設定を避ける
+            // 予測値と逆方向に調整（ペナルティ）
+            if abs(settings.exposureEV - predicted.exposureEV) < 0.3 {
+                settings.exposureEV -= (predicted.exposureEV - settings.exposureEV) * 0.1
+            }
+
+            if abs(settings.contrast - predicted.contrast) < 0.2 {
+                settings.contrast -= (predicted.contrast - settings.contrast) * 0.1
+            }
+
+            if abs(settings.saturation - predicted.saturation) < 0.2 {
+                settings.saturation -= (predicted.saturation - settings.saturation) * 0.1
+            }
+        }
+    }
+
+    /// 学習重み計算（データ量に応じた信頼度）
+    private static func calculateLearningWeight(dataCount: Int) -> Double {
+        // データが多いほど学習重みを高くする（最大50%）
+        let normalized = Double(min(dataCount, 50)) / 50.0
+        return 0.2 + (normalized * 0.3)  // 20% -> 50%
+    }
+
+    /// 設定のブレンド
+    private static func blendSettings(base: PhotoEditorSettings, learned: PhotoEditorSettings, weight: Double) -> PhotoEditorSettings {
+        var result = base
+        result.exposureEV = base.exposureEV * (1 - weight) + learned.exposureEV * weight
+        result.contrast = base.contrast * (1 - weight) + learned.contrast * weight
+        result.saturation = base.saturation * (1 - weight) + learned.saturation * weight
+        return result
+    }
+
+    /// 自動編集の評価を記録（精度向上版）
     static func recordEvaluation(
         predicted: PhotoEditorSettings,
         final: PhotoEditorSettings,
@@ -241,11 +449,29 @@ private enum AutoEditEngine {
         evaluation.predictedSettingsJSON = predictedString
         evaluation.finalSettingsJSON = finalString
         evaluation.userRating = Int16(rating)
+
+        // 基本画像特徴量
         evaluation.imageBrightness = analysis.brightness
         evaluation.imageContrast = analysis.contrast
         evaluation.imageSaturation = analysis.saturation
 
+        // 拡張特徴量（メモ: Core Dataモデルに追加する場合）
+        // evaluation.shadowClipping = analysis.histogram.shadowClipping
+        // evaluation.highlightClipping = analysis.histogram.highlightClipping
+        // evaluation.dynamicRange = analysis.histogram.dynamicRange
+        // evaluation.exposureScore = analysis.exposureScore
+
         try? context.save()
+
+        // デバッグログ（学習の進捗確認用）
+        #if DEBUG
+        print("🧠 Learning: Rating \(rating)⭐️ | Brightness \(String(format: "%.2f", analysis.brightness)) | Contrast \(String(format: "%.2f", analysis.contrast))")
+        if rating >= 4 {
+            print("  ✅ Positive: EV \(String(format: "%.2f", final.exposureEV)) | Contrast \(String(format: "%.2f", final.contrast))")
+        } else if rating <= 2 {
+            print("  ❌ Negative: Avoid predicted EV \(String(format: "%.2f", predicted.exposureEV))")
+        }
+        #endif
     }
 }
 

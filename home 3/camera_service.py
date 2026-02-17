@@ -67,6 +67,8 @@ DEFAULT_SETTINGS = {
     'width': 1920,
     'height': 1080,
     'enable_multiple_exposure': False,
+    'multiple_exposure_mode': 'blend',  # blend/additive (星の軌跡など長時間露光効果)
+    'multiple_exposure_count': 2,  # 多重露光の枚数（2-10）
     'enable_2in1_composition': False,
     'enable_timestamp': False,
     'monitoring_enabled': True,
@@ -143,7 +145,8 @@ def write_sensor_status(state: dict) -> None:
     except Exception as e:
         logger.debug(f"Failed to write sensor status: {e}")
 
-def _add_timestamp(image: Image.Image, timestamp: str) -> Image.Image:
+# 省電力化: タイムスタンプ追加はiPhone側に移行
+# def _add_timestamp(image: Image.Image, timestamp: str) -> Image.Image:
     if ImageDraw is None:
         return image
 
@@ -227,6 +230,7 @@ def _apply_camera_controls(camera: Picamera2, settings: dict) -> None:
     if controls:
         camera.set_controls(controls)
 
+# 省電力化: 画像合成はiPhone側に移行（Pi側では使用しない）
 def _compose_images(first: Image.Image, second: Image.Image, settings: dict) -> Optional[Image.Image]:
     if settings.get('enable_2in1_composition', False):
         w1, h1 = first.size
@@ -241,13 +245,28 @@ def _compose_images(first: Image.Image, second: Image.Image, settings: dict) -> 
 
     if settings.get('enable_multiple_exposure', False):
         second_resized = second.resize(first.size)
-        return Image.blend(first, second_resized, 0.5)
+        mode = settings.get('multiple_exposure_mode', 'blend')
+
+        if mode == 'additive':
+            # 加算合成: 星の軌跡や車のライトトレイル撮影用
+            # PILでは直接加算できないのでnumpyで処理
+            arr1 = np.array(first, dtype=np.float32)
+            arr2 = np.array(second_resized, dtype=np.float32)
+            # 加算してクリップ（0-255範囲）
+            result_arr = np.clip(arr1 + arr2, 0, 255).astype(np.uint8)
+            return Image.fromarray(result_arr)
+        else:
+            # blend: 通常のブレンド（50:50）
+            return Image.blend(first, second_resized, 0.5)
 
     return None
 
 def capture_photo(camera, settings: dict, composition_state: dict, detected_at: Optional[float] = None) -> bool:
     """
-    写真を撮影して保存
+    写真を撮影して保存（画像処理なし・省電力版）
+
+    画像合成・タイムスタンプ追加などはiPhone側で実行。
+    Pi側はカメラ制御と撮影のみに特化し、消費電力を最小化。
     """
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
     raw_mode = settings.get('raw_mode', False)
@@ -259,6 +278,7 @@ def capture_photo(camera, settings: dict, composition_state: dict, detected_at: 
         filepath = os.path.join(PHOTOS_DIR, f'photo_{timestamp}.jpg')
 
     try:
+        # JPEG品質はユーザー設定を尊重（最高画質モード対応）
         quality = settings.get('quality', 90)
         camera.options["quality"] = quality
         capture_start = time.time()
@@ -286,44 +306,27 @@ def capture_photo(camera, settings: dict, composition_state: dict, detected_at: 
             logger.info("Detect->Capture delay: %.3fs", detect_delay)
         logger.info("Photo captured: %s (capture=%.3fs)", filepath, capture_end - capture_start)
 
-        if Image is None:
-            return True
-
+        # 多重露光・コンポジション対応: 複数枚撮影して個別保存
+        # 合成はiPhone側で実行
         composition_enabled = settings.get('enable_multiple_exposure', False) or settings.get('enable_2in1_composition', False)
         if composition_enabled:
-            image = Image.open(filepath)
-            image.load()
-
-            if composition_state['last_frame'] is None:
-                composition_state['last_frame'] = image
+            if composition_state['last_frame_path'] is None:
                 composition_state['last_frame_path'] = filepath
-                logger.info("Waiting for second frame for composition")
-                return False
+                composition_state['frame_count'] = 1
+                logger.info("Multi-exposure: First frame saved. Waiting for second frame...")
+                return False  # まだ完了していない
+            else:
+                composition_state['frame_count'] = composition_state.get('frame_count', 1) + 1
+                max_frames = settings.get('multiple_exposure_count', 2)
 
-            composite = _compose_images(composition_state['last_frame'], image, settings)
-            if composite is None:
-                return True
-
-            if settings.get('enable_timestamp', False):
-                composite = _add_timestamp(composite, timestamp)
-
-            composite_path = os.path.join(PHOTOS_DIR, f'COMPOSITE_{timestamp}.jpg')
-            composite.save(composite_path, quality=settings.get('quality', 90))
-            logger.info(f"Composite saved: {composite_path}")
-
-            for temp_path in (composition_state['last_frame_path'], filepath):
-                if temp_path and os.path.exists(temp_path):
-                    os.remove(temp_path)
-
-            composition_state['last_frame'] = None
-            composition_state['last_frame_path'] = None
-            return True
-
-        if settings.get('enable_timestamp', False) and Image is not None:
-            image = Image.open(filepath)
-            image.load()
-            image = _add_timestamp(image, timestamp)
-            image.save(filepath, quality=quality)
+                if composition_state['frame_count'] >= max_frames:
+                    logger.info(f"Multi-exposure: All {max_frames} frames captured. Ready for iPhone-side composition.")
+                    composition_state['last_frame_path'] = None
+                    composition_state['frame_count'] = 0
+                    return True
+                else:
+                    logger.info(f"Multi-exposure: Frame {composition_state['frame_count']}/{max_frames} saved.")
+                    return False
 
         return True
     except Exception as e:
@@ -351,8 +354,8 @@ def main():
     check_interval = CHECK_INTERVAL
     capture_cooldown = CAPTURE_COOLDOWN
     composition_state = {
-        'last_frame': None,
         'last_frame_path': None,
+        'frame_count': 0,
         'last_detect_to_capture_ms': None,
     }
     sensor_state = {

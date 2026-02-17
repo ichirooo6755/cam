@@ -162,6 +162,7 @@ struct ContentView: View {
 
     // Toggles
     @State private var enableMultipleExposure: Bool = false
+    @State private var multipleExposureMode: String = "blend"  // "blend" or "additive"
     @State private var enable2in1Composition: Bool = false
     @State private var enableTimestamp: Bool = false
     @State private var manualModeEnabled: Bool = false
@@ -322,6 +323,62 @@ struct ContentView: View {
                             GlassToggle(title: "日時刻印", isOn: $enableTimestamp) {
                                 updateToggle(timestamp: enableTimestamp)
                             }
+                        }
+
+                        // 多重露光モード選択
+                        if enableMultipleExposure {
+                            VStack(alignment: .leading, spacing: 12) {
+                                Text("MULTIPLE EXPOSURE MODE")
+                                    .font(.caption2.weight(.black))
+                                    .foregroundColor(.secondary)
+                                    .padding(.horizontal, 4)
+
+                                ScrollView(.horizontal, showsIndicators: false) {
+                                    HStack(spacing: 10) {
+                                        Button {
+                                            multipleExposureMode = "blend"
+                                            updateMultipleExposureMode("blend")
+                                        } label: {
+                                            VStack(alignment: .leading, spacing: 4) {
+                                                Text("BLEND")
+                                                    .font(.system(size: 12, weight: .bold, design: .monospaced))
+                                                Text("50:50ブレンド")
+                                                    .font(.system(size: 9, weight: .medium))
+                                                    .foregroundColor(.secondary)
+                                            }
+                                            .padding(.horizontal, 14)
+                                            .padding(.vertical, 10)
+                                            .background(
+                                                RoundedRectangle(cornerRadius: 10)
+                                                    .fill(multipleExposureMode == "blend" ? Color.purple.opacity(0.85) : Color.gray.opacity(0.15))
+                                            )
+                                            .foregroundColor(multipleExposureMode == "blend" ? .white : .primary)
+                                        }
+
+                                        Button {
+                                            multipleExposureMode = "additive"
+                                            updateMultipleExposureMode("additive")
+                                        } label: {
+                                            VStack(alignment: .leading, spacing: 4) {
+                                                Text("ADDITIVE")
+                                                    .font(.system(size: 12, weight: .bold, design: .monospaced))
+                                                Text("加算合成（星の軌跡）")
+                                                    .font(.system(size: 9, weight: .medium))
+                                                    .foregroundColor(.secondary)
+                                            }
+                                            .padding(.horizontal, 14)
+                                            .padding(.vertical, 10)
+                                            .background(
+                                                RoundedRectangle(cornerRadius: 10)
+                                                    .fill(multipleExposureMode == "additive" ? Color.orange.opacity(0.85) : Color.gray.opacity(0.15))
+                                            )
+                                            .foregroundColor(multipleExposureMode == "additive" ? .white : .primary)
+                                        }
+                                    }
+                                }
+                            }
+                            .padding(20)
+                            .liquidGlassStyle(radius: 16)
                         }
 
                         Button {
@@ -1319,6 +1376,7 @@ struct ContentView: View {
         selectedWhiteBalance = WhiteBalanceOption.from(settings.whiteBalance)
         detectionThreshold = Double(settings.detectionThreshold)
         enableMultipleExposure = settings.enableMultipleExposure
+        multipleExposureMode = settings.multipleExposureMode
         enable2in1Composition = settings.enable2in1Composition
         enableTimestamp = settings.enableTimestamp
         manualModeEnabled = !settings.monitoringEnabled
@@ -1531,6 +1589,15 @@ struct ContentView: View {
                 composition2in1: composition2in1,
                 timestamp: timestamp
             )
+        }
+    }
+
+    private func updateMultipleExposureMode(_ mode: String) {
+        performSettingUpdate(
+            label: "多重露光モード",
+            validate: { $0.multipleExposureMode == mode }
+        ) { api in
+            try await api.updateSettings(["multiple_exposure_mode": mode], temporary: false)
         }
     }
 
