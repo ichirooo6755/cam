@@ -2,6 +2,12 @@
 """
 省電力カメラサービス
 光検知時のみカメラを起動して撮影
+
+Camera: Raspberry Pi Camera Module HQ (12.3MP)
+Sensor: Sony IMX477 (7.9mm diagonal, 1.55μm pixel)
+Resolution: 4056x3040 (native), supports up to 4056x3040
+ISO Range: 100-16000 (推奨: 100-6400)
+Shutter: 13μs - 670s (推奨: 100μs - 1s)
 """
 
 import os
@@ -164,7 +170,10 @@ def _apply_camera_controls(camera: Picamera2, settings: dict) -> None:
 
     if iso_value != 'auto':
         try:
-            controls['AnalogueGain'] = max(1.0, int(iso_value) / 100.0)
+            # PiCamera HQ: ISO 100-16000対応（AnalogueGain 1.0-160.0）
+            # 推奨範囲: ISO 100-6400 (Gain 1.0-64.0)
+            gain = int(iso_value) / 100.0
+            controls['AnalogueGain'] = max(1.0, min(160.0, gain))
         except ValueError:
             logger.warning(f"Invalid ISO value: {iso_value}")
 
@@ -443,8 +452,8 @@ def main():
 
                         cam = Picamera2()
                         camera_mode = str(settings.get('camera_mode', 'standard') or 'standard').strip().lower()
-                        # REACTIONモードは最小loresで最速検知
-                        lores_size = (64, 48) if camera_mode == 'reaction' else (160, 120)
+                        # PiCamera HQ: loresサイズを大きめに（HQセンサーの特性）
+                        lores_size = (128, 96) if camera_mode == 'reaction' else (320, 240)
                         config = cam.create_still_configuration(
                             main={"size": desired_size},
                             lores={"size": lores_size},

@@ -3,6 +3,13 @@
 ## 基本方針
 日本語応対。調査はサブエージェント活用。
 
+## ハードウェア
+**Camera**: Raspberry Pi Camera Module HQ (12.3MP)
+**Sensor**: Sony IMX477 (7.9mm diagonal, 1.55μm pixel)
+**Resolution**: 4056x3040 native
+**ISO**: 100-16000 (推奨100-6400)
+**Shutter**: 13μs-670s
+
 ## アーキテクチャ
 iOS(SwiftUI)→HTTP:8001→Pi(Python)。Pi側: `api_server.py`(HTTP), `camera_service.py`(PiCamera2), `wifi_manager.py`(AP/tethering)。IPC: JSON files。
 

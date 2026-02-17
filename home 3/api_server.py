@@ -514,20 +514,22 @@ def _wifi_recovery_watchdog_loop():
 
 CAMERA_MODE_PRESETS = {
     'reaction': {
-        'quality': 75,               # 画質を下げて処理時間短縮
-        'width': 1280,
-        'height': 720,
-        'detection_interval': 0.05,  # 撮影間隔: 50ms（物理限界に挑戦）
-        'check_interval': 0.01,      # 光検知間隔: 10ms（最速ポーリング）
-        'capture_cooldown': 0.05,    # 最短撮影クールダウン: 50ms
+        # PiCamera HQ反応モード（HQは高速撮影に最適化されていない）
+        'quality': 75,
+        'width': 1920,   # HQの解像度を活かしつつバランス
+        'height': 1080,
+        'detection_interval': 0.1,   # 100ms（HQの読み出し速度を考慮）
+        'check_interval': 0.02,      # 20ms光検知
+        'capture_cooldown': 0.1,     # 100ms
         'monitoring_enabled': True,
         'enable_multiple_exposure': False,
         'enable_2in1_composition': False,
         'enable_timestamp': False,
-        'denoise_mode': 'cdn_fast',  # 高速ノイズ除去（OFF→FASTでバランス）
-        'sharpness': 0.5,            # 最小限のシャープネス
+        'denoise_mode': 'cdn_fast',
+        'sharpness': 1.0,  # HQレンズのシャープネスを活用
     },
     'quality': {
+        # PiCamera HQ最高画質モード（12.3MP native）
         'quality': 100,
         'width': 4056,
         'height': 3040,
@@ -535,6 +537,8 @@ CAMERA_MODE_PRESETS = {
         'check_interval': 0.25,
         'capture_cooldown': 0.25,
         'monitoring_enabled': True,
+        'denoise_mode': 'cdn_hq',  # HQ専用高品質ノイズ除去
+        'sharpness': 1.0,  # HQレンズの鋭さを活かす
     },
     'standard': {
         'quality': 90,
@@ -563,15 +567,15 @@ CAMERA_MODE_PRESETS = {
         'monitoring_enabled': False,
     },
     'raw': {
-        # RAWモード: DNG撮影、高画質優先、全自動処理OFF
+        # RAWモード: PiCamera HQ DNG撮影、ピュアRAW
         'raw_mode': True,
         'quality': 100,
-        'width': 4056,
+        'width': 4056,   # HQ native 12.3MP
         'height': 3040,
-        'denoise_mode': 'off',  # ノイズ除去OFF
-        'sharpness': 0.0,  # シャープネスOFF
-        'stabilization': False,  # 手ぶれ補正OFF
-        'monitoring_enabled': False,  # 手動撮影専用
+        'denoise_mode': 'off',  # RAWは完全生データ
+        'sharpness': 0.0,  # レンズ本来の特性を維持
+        'stabilization': False,
+        'monitoring_enabled': False,
         'enable_multiple_exposure': False,
         'enable_2in1_composition': False,
         'enable_timestamp': False,

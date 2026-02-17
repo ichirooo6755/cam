@@ -257,11 +257,11 @@ struct ContentView: View {
                                     HStack {
                                         Image(systemName: "camera.aperture")
                                             .foregroundColor(.blue)
-                                        Text("RAWモード")
+                                        Text("RAWモード（PiCamera HQ）")
                                             .font(.caption.weight(.bold))
                                             .foregroundColor(.primary)
                                     }
-                                    Text("• DNG形式で撮影（最大4056x3040）\n• ノイズ除去・シャープネス・手ぶれ補正OFF\n• 手動撮影専用（光検知無効）\n• 編集で最大限の調整が可能")
+                                    Text("• DNG形式（12.3MP: 4056x3040）\n• Sony IMX477センサー生データ\n• 全自動処理OFF（ピュアRAW）\n• ISO 100-16000対応\n• 手動撮影専用（光検知無効）")
                                         .font(.caption2)
                                         .foregroundColor(.secondary)
                                         .lineSpacing(4)
