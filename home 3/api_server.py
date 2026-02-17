@@ -806,6 +806,8 @@ class APIHandler(BaseHTTPRequestHandler):
             self.serve_wifi_status()
         elif parsed.path == '/api/sensor/status':
             self.serve_sensor_status()
+        elif parsed.path == '/api/focus_peaking':
+            self.serve_focus_peaking()
         elif parsed.path.startswith('/photos/'):
             self.serve_photo_file(parsed.path)
         else:
@@ -867,6 +869,44 @@ class APIHandler(BaseHTTPRequestHandler):
             self.send_header('Content-Type', 'application/json')
             self.end_headers()
             self.wfile.write(json.dumps({'success': False, 'error': str(e)}).encode())
+
+    def serve_focus_peaking(self):
+        """フォーカスピーキングプレビューを返す"""
+        try:
+            from camera_service import apply_focus_peaking
+            from picamera2 import Picamera2
+            from urllib.parse import parse_qs
+
+            # クエリパラメータ取得
+            query_params = parse_qs(urlparse(self.path).query)
+            color = query_params.get('color', ['red'])[0]
+            threshold = int(query_params.get('threshold', ['30'])[0])
+
+            # カメラ初期化
+            camera = Picamera2()
+            config = camera.create_preview_configuration(main={"size": (1920, 1080)})
+            camera.configure(config)
+            camera.start()
+
+            try:
+                # フォーカスピーキング画像生成
+                jpeg_data = apply_focus_peaking(camera, color=color, threshold=threshold)
+
+                if jpeg_data:
+                    self.send_response(200)
+                    self.send_header('Content-Type', 'image/jpeg')
+                    self.send_header('Content-Length', str(len(jpeg_data)))
+                    self.end_headers()
+                    self.wfile.write(jpeg_data)
+                else:
+                    self.send_error(500, "Failed to generate focus peaking image")
+            finally:
+                camera.stop()
+                camera.close()
+
+        except Exception as e:
+            logger.error(f"Error serving focus peaking: {e}")
+            self.send_error(500, str(e))
 
     def serve_metering_recommendation(self):
         try:

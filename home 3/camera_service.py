@@ -593,5 +593,75 @@ def main():
             camera.stop()
             camera.close()
 
+def apply_focus_peaking(camera, color: str = 'red', threshold: int = 30) -> bytes:
+    """
+    フォーカスピーキング: エッジ検出して色オーバーレイ
+
+    Args:
+        camera: Picamera2インスタンス
+        color: ピーキング色 ('red', 'green', 'blue', 'yellow')
+        threshold: エッジ検出閾値（0-255、デフォルト30）
+
+    Returns:
+        JPEG画像データ（bytes）
+    """
+    try:
+        # 低解像度でキャプチャ（プレビュー用）
+        array = camera.capture_array("main")
+
+        if array is None or len(array.shape) < 2:
+            logger.warning("Failed to capture array for focus peaking")
+            return b''
+
+        # グレースケール化
+        if len(array.shape) == 3:
+            gray = np.mean(array, axis=2).astype(np.uint8)
+        else:
+            gray = array.astype(np.uint8)
+
+        # Sobelエッジ検出
+        from scipy import ndimage
+        sobel_x = ndimage.sobel(gray, axis=1)
+        sobel_y = ndimage.sobel(gray, axis=0)
+        edges = np.hypot(sobel_x, sobel_y)
+
+        # 正規化とthreshold適用
+        edges = (edges / edges.max() * 255).astype(np.uint8)
+        edge_mask = edges > threshold
+
+        # 元画像をRGBに変換
+        if len(array.shape) == 2:
+            rgb_image = np.stack([array, array, array], axis=-1)
+        else:
+            rgb_image = array.copy()
+
+        # 色オーバーレイ
+        color_map = {
+            'red': (255, 0, 0),
+            'green': (0, 255, 0),
+            'blue': (0, 0, 255),
+            'yellow': (255, 255, 0)
+        }
+        overlay_color = color_map.get(color, (255, 0, 0))
+
+        # エッジ部分に色を適用
+        for i in range(3):
+            rgb_image[:, :, i] = np.where(edge_mask, overlay_color[i], rgb_image[:, :, i])
+
+        # JPEGエンコード
+        if Image is not None:
+            img = Image.fromarray(rgb_image.astype(np.uint8))
+            import io
+            buffer = io.BytesIO()
+            img.save(buffer, format='JPEG', quality=85)
+            return buffer.getvalue()
+        else:
+            logger.warning("PIL not available, cannot encode focus peaking image")
+            return b''
+
+    except Exception as e:
+        logger.error(f"Focus peaking error: {e}")
+        return b''
+
 if __name__ == '__main__':
     main()

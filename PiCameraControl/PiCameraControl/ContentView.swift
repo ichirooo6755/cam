@@ -168,6 +168,9 @@ struct ContentView: View {
     @State private var enableTimestamp: Bool = false
     @State private var enableStabilization: Bool = true
     @State private var enableRawMode: Bool = false
+    @State private var enableFocusPeaking: Bool = false
+    @State private var focusPeakingColor: String = "red"
+    @State private var focusPeakingImage: UIImage?
     @State private var manualModeEnabled: Bool = false
     @State private var selectedPhotoItem: PhotosPickerItem?
     @State private var importedImage: UIImage?
@@ -357,6 +360,13 @@ struct ContentView: View {
                                     } catch {
                                         print("RAWモードの更新に失敗: \(error)")
                                     }
+                                }
+                            }
+                            GlassToggle(title: "フォーカスピーキング", isOn: $enableFocusPeaking) {
+                                if enableFocusPeaking {
+                                    fetchFocusPeaking()
+                                } else {
+                                    focusPeakingImage = nil
                                 }
                             }
                         }
@@ -582,6 +592,52 @@ struct ContentView: View {
         let image: UIImage
     }
 
+    private func fetchFocusPeaking() {
+        isLoading = true
+        let apiClient = api
+        let color = focusPeakingColor
+
+        Task {
+            do {
+                guard let url = URL(string: "http://\(serverIP):8001/api/focus_peaking?color=\(color)&threshold=30") else {
+                    await MainActor.run {
+                        errorMessage = "無効なURL"
+                        isLoading = false
+                    }
+                    return
+                }
+
+                let (data, response) = try await URLSession.shared.data(from: url)
+
+                guard let httpResponse = response as? HTTPURLResponse,
+                      httpResponse.statusCode == 200 else {
+                    await MainActor.run {
+                        errorMessage = "フォーカスピーキングの取得に失敗"
+                        isLoading = false
+                    }
+                    return
+                }
+
+                if let image = UIImage(data: data) {
+                    await MainActor.run {
+                        focusPeakingImage = image
+                        isLoading = false
+                    }
+                } else {
+                    await MainActor.run {
+                        errorMessage = "画像の読み込みに失敗"
+                        isLoading = false
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    errorMessage = error.localizedDescription
+                    isLoading = false
+                }
+            }
+        }
+    }
+
     private func runMetering() {
         isMetering = true
         errorMessage = nil
@@ -726,7 +782,21 @@ struct ContentView: View {
 
     private var previewArea: some View {
         ZStack {
-            if let image = capturedImage {
+            if enableFocusPeaking, let image = focusPeakingImage {
+                // フォーカスピーキングプレビュー
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 300)
+                    .background(Color.black.opacity(0.12))
+                    .clipShape(RoundedRectangle(cornerRadius: 30))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 30)
+                            .stroke(.white.opacity(0.2), lineWidth: 1)
+                    )
+                    .contentShape(RoundedRectangle(cornerRadius: 30))
+            } else if let image = capturedImage {
                 Image(uiImage: image)
                     .resizable()
                     .scaledToFit()

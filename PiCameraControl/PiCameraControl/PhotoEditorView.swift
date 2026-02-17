@@ -82,15 +82,6 @@ struct SplitToningSettings: Codable, Hashable {
     )
 }
 
-// MARK: - レンズ補正
-
-struct LensCorrectionSettings: Codable, Hashable {
-    var distortion: Double        // 歪曲収差（-1.0〜+1.0）
-    var chromaticAberration: Double // 色収差（0〜1.0）
-
-    static let `default` = LensCorrectionSettings(distortion: 0, chromaticAberration: 0)
-}
-
 struct PhotoEditorSettings: Codable, Hashable {
     var exposureEV: Double
     var contrast: Double
@@ -115,7 +106,6 @@ struct PhotoEditorSettings: Codable, Hashable {
     var radialMask: RadialMaskSettings
     var hsl: HSLSettings  // HSL調整（8色チャンネル）
     var splitToning: SplitToningSettings  // スプリットトーニング
-    var lensCorrection: LensCorrectionSettings  // レンズ補正
 
     static let `default` = PhotoEditorSettings(
         exposureEV: 0,
@@ -140,8 +130,7 @@ struct PhotoEditorSettings: Codable, Hashable {
         crop: .full,
         radialMask: .default,
         hsl: .default,
-        splitToning: .default,
-        lensCorrection: .default
+        splitToning: .default
     )
 }
 
@@ -668,9 +657,6 @@ private enum PhotoEditorRenderer {
         // スプリットトーニング
         output = applySplitToning(to: output, settings: settings.splitToning)
 
-        // レンズ補正
-        output = applyLensCorrection(to: output, settings: settings.lensCorrection)
-
         let rect = output.extent.integral
         guard let cg = context.createCGImage(output, from: rect) else { return nil }
         return UIImage(cgImage: cg, scale: image.scale, orientation: .up)
@@ -1086,35 +1072,6 @@ private enum PhotoEditorRenderer {
         return (r + m, g + m, b + m)
     }
 
-    /// レンズ補正適用
-    private static func applyLensCorrection(to image: CIImage, settings: LensCorrectionSettings) -> CIImage {
-        var output = image
-
-        // 歪曲収差補正
-        if abs(settings.distortion) > 0.0001 {
-            let center = CIVector(x: image.extent.midX, y: image.extent.midY)
-            let radius = max(image.extent.width, image.extent.height) / 2
-
-            let distortion = CIFilter(name: "CIBumpDistortion", parameters: [
-                kCIInputImageKey: output,
-                kCIInputCenterKey: center,
-                "inputRadius": radius,
-                "inputScale": Float(-settings.distortion * 0.5)
-            ])
-            output = distortion?.outputImage ?? output
-        }
-
-        // 色収差補正（簡易実装）
-        if abs(settings.chromaticAberration) > 0.0001 {
-            let blur = CIFilter.gaussianBlur()
-            blur.inputImage = output
-            blur.radius = Float(settings.chromaticAberration * 2.0)
-            output = blur.outputImage ?? output
-        }
-
-        return output
-    }
-
     private static func clamp(_ value: Double, _ minValue: Double, _ maxValue: Double) -> Double {
         min(max(value, minValue), maxValue)
     }
@@ -1127,7 +1084,6 @@ struct PhotoEditorView: View {
         case effects
         case hsl
         case splitToning
-        case lens
         case crop
         case radial
         case presets
@@ -1141,7 +1097,6 @@ struct PhotoEditorView: View {
             case .effects: return "エフェクト"
             case .hsl: return "HSL"
             case .splitToning: return "スプリット"
-            case .lens: return "レンズ"
             case .crop: return "トリミング"
             case .radial: return "ラジアル"
             case .presets: return "プリセット"
@@ -1420,9 +1375,6 @@ struct PhotoEditorView: View {
         case .splitToning:
             splitToningControls
 
-        case .lens:
-            lensControls
-
         case .crop:
             cropControls
 
@@ -1533,18 +1485,6 @@ struct PhotoEditorView: View {
                 .padding(.vertical, 8)
 
             sliderRow(title: "バランス", value: stBinding.balance, range: -100...100, step: 1)
-        }
-    }
-
-    private var lensControls: some View {
-        let lensBinding = Binding(get: { settings.lensCorrection }, set: { settings.lensCorrection = $0 })
-        return VStack(alignment: .leading, spacing: 12) {
-            Text("レンズ補正")
-                .font(.caption.weight(.semibold))
-                .foregroundColor(.secondary)
-
-            sliderRow(title: "歪曲収差", value: lensBinding.distortion, range: -1...1, step: 0.01)
-            sliderRow(title: "色収差", value: lensBinding.chromaticAberration, range: 0...1, step: 0.01)
         }
     }
 
