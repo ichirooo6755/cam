@@ -5,31 +5,17 @@ import CoreLocation
     import UIKit
 #endif
 
-// MARK: - Liquid Glass Styles
+// MARK: - Nikon 35Ti Styles
 
 struct LiquidGlassModifier: ViewModifier {
     var radius: CGFloat = 20
 
     func body(content: Content) -> some View {
         content
-            .background(.ultraThinMaterial)
-            .cornerRadius(radius)
-            .shadow(color: Color.black.opacity(0.1), radius: 10, x: 0, y: 5)
-            .overlay(
+            .background(
                 RoundedRectangle(cornerRadius: radius)
-                    .stroke(
-                        LinearGradient(
-                            colors: [
-                                .white.opacity(0.5),
-                                .white.opacity(0.05),
-                                .black.opacity(0.05),
-                                .black.opacity(0.2),
-                            ],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        ),
-                        lineWidth: 1
-                    )
+                    .fill(Color(red: 0.15, green: 0.15, blue: 0.17))
+                    .shadow(color: .black.opacity(0.3), radius: 10, y: 5)
             )
     }
 }
@@ -229,9 +215,16 @@ struct ContentView: View {
     var body: some View {
         NavigationView {
             ZStack {
-                // Liquid Background
-                backgroundGradient
-                    .ignoresSafeArea()
+                // Nikon 35Ti Style Background
+                LinearGradient(
+                    colors: [
+                        Color(red: 0.1, green: 0.1, blue: 0.12),
+                        Color(red: 0.05, green: 0.05, blue: 0.08),
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+                .ignoresSafeArea()
 
                 ScrollView(showsIndicators: false) {
                     VStack(spacing: 24) {
@@ -243,14 +236,41 @@ struct ContentView: View {
 
                         monitoringQuickSection
 
-                        // Camera Controls
+                        // Camera Controls (Nikon 35Ti Style)
                         VStack(spacing: 24) {
-                            pickerModule(
-                                title: "MODE", selection: $selectedCameraMode,
-                                options: CameraModeOption.allCases
-                            ) { opt in
-                                updateCameraMode(opt)
+                            // MODE Picker
+                            VStack(alignment: .leading, spacing: 14) {
+                                Text("MODE")
+                                    .font(.system(size: 11, weight: .bold, design: .monospaced))
+                                    .foregroundColor(Color.gray.opacity(0.9))
+                                    .tracking(1.5)
+                                    .padding(.horizontal, 4)
+
+                                ScrollView(.horizontal, showsIndicators: false) {
+                                    HStack(spacing: 10) {
+                                        ForEach(CameraModeOption.allCases) { mode in
+                                            Button {
+                                                withAnimation(.easeInOut(duration: 0.15)) {
+                                                    selectedCameraMode = mode
+                                                    updateCameraMode(mode)
+                                                }
+                                            } label: {
+                                                Text(mode.label)
+                                                    .font(.system(size: 14, weight: selectedCameraMode == mode ? .bold : .medium, design: .monospaced))
+                                                    .foregroundColor(selectedCameraMode == mode ? .white : Color.gray.opacity(0.9))
+                                                    .padding(.horizontal, 18)
+                                                    .padding(.vertical, 12)
+                                                    .background(
+                                                        RoundedRectangle(cornerRadius: 10)
+                                                            .fill(selectedCameraMode == mode ? Color.red.opacity(0.85) : Color.gray.opacity(0.15))
+                                                    )
+                                            }
+                                        }
+                                    }
+                                }
                             }
+                            .padding(20)
+                            .liquidGlassStyle(radius: 16)
 
                             if selectedCameraMode == .raw {
                                 VStack(alignment: .leading, spacing: 8) {
