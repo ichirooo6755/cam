@@ -38,6 +38,14 @@ struct PhotoEditorSettings: Codable, Hashable {
     var highlightRecovery: Double
     var shadowBoost: Double
     var temperature: Double
+    var tint: Double  // グリーン/マゼンタ補正
+    var vibrance: Double  // 彩度（Vibrance: 肌色保護）
+    var clarity: Double  // 明瞭度
+    var sharpness: Double  // シャープネス
+    var noiseReduction: Double  // ノイズ除去
+    var vignette: Double  // ヴィネット（周辺光量）
+    var grain: Double  // フィルムグレイン
+    var autoWhiteBalance: Bool  // 自動ホワイトバランス補正
     var irAutoCorrect: Bool
     var irCorrectionStrength: Double
     var monochrome: Double
@@ -51,6 +59,14 @@ struct PhotoEditorSettings: Codable, Hashable {
         highlightRecovery: 0,
         shadowBoost: 0,
         temperature: 0,
+        tint: 0,
+        vibrance: 0,
+        clarity: 0,
+        sharpness: 0,
+        noiseReduction: 0,
+        vignette: 0,
+        grain: 0,
+        autoWhiteBalance: false,
         irAutoCorrect: false,
         irCorrectionStrength: 0.75,
         monochrome: 0,
@@ -125,12 +141,62 @@ private enum PhotoEditorRenderer {
             output = f.outputImage ?? output
         }
 
-        if abs(settings.temperature) > 0.0001 {
+        // 自動ホワイトバランス補正
+        if settings.autoWhiteBalance {
+            output = applyAutoWhiteBalance(to: output)
+        }
+
+        // 色温度とティント調整
+        if abs(settings.temperature) > 0.0001 || abs(settings.tint) > 0.0001 {
             let f = CIFilter.temperatureAndTint()
             f.inputImage = output
             f.neutral = CIVector(x: 6500, y: 0)
-            f.targetNeutral = CIVector(x: 6500 + settings.temperature, y: 0)
+            f.targetNeutral = CIVector(x: 6500 + settings.temperature, y: settings.tint)
             output = f.outputImage ?? output
+        }
+
+        // Vibrance（彩度・肌色保護）
+        if abs(settings.vibrance) > 0.0001 {
+            let f = CIFilter.vibrance()
+            f.inputImage = output
+            f.amount = Float(settings.vibrance)
+            output = f.outputImage ?? output
+        }
+
+        // Clarity（明瞭度）
+        if abs(settings.clarity) > 0.0001 {
+            output = applyClarity(to: output, amount: settings.clarity)
+        }
+
+        // ノイズ除去
+        if abs(settings.noiseReduction) > 0.0001 {
+            let f = CIFilter.noiseReduction()
+            f.inputImage = output
+            f.noiseLevel = Float(settings.noiseReduction * 0.1)
+            f.sharpness = Float(max(0, 1 - settings.noiseReduction * 0.3))
+            output = f.outputImage ?? output
+        }
+
+        // シャープネス
+        if abs(settings.sharpness) > 0.0001 {
+            let f = CIFilter.sharpenLuminance()
+            f.inputImage = output
+            f.sharpness = Float(settings.sharpness)
+            output = f.outputImage ?? output
+        }
+
+        // ヴィネット
+        if abs(settings.vignette) > 0.0001 {
+            let f = CIFilter.vignette()
+            f.inputImage = output
+            f.intensity = Float(settings.vignette)
+            f.radius = 1.5
+            output = f.outputImage ?? output
+        }
+
+        // フィルムグレイン
+        if abs(settings.grain) > 0.0001 {
+            output = applyGrain(to: output, intensity: settings.grain)
         }
 
         output = applyRadialMask(to: output, radial: settings.radialMask)
@@ -231,6 +297,112 @@ private enum PhotoEditorRenderer {
         return output
     }
 
+    /// 自動ホワイトバランス補正（色かぶり除去）
+    private static func applyAutoWhiteBalance(to image: CIImage) -> CIImage {
+        // 画像全体の平均色を計算
+        let extent = image.extent
+        let averageFilter = CIFilter(name: "CIAreaAverage", parameters: [
+            kCIInputImageKey: image,
+            kCIInputExtentKey: CIVector(cgRect: extent)
+        ])
+
+        guard let outputImage = averageFilter?.outputImage else { return image }
+
+        var bitmap = [UInt8](repeating: 0, count: 4)
+        context.render(outputImage, toBitmap: &bitmap, rowBytes: 4, bounds: CGRect(x: 0, y: 0, width: 1, height: 1), format: .RGBA8, colorSpace: nil)
+
+        let r = Double(bitmap[0]) / 255.0
+        let g = Double(bitmap[1]) / 255.0
+        let b = Double(bitmap[2]) / 255.0
+
+        // グレーポイント（理想的には0.5）からのズレを計算
+        let grayPoint = 0.5
+        let rGain = grayPoint / max(r, 0.01)
+        let gGain = grayPoint / max(g, 0.01)
+        let bGain = grayPoint / max(b, 0.01)
+
+        // ゲインを正規化
+        let maxGain = max(rGain, gGain, bGain)
+        let normalizedR = rGain / maxGain
+        let normalizedG = gGain / maxGain
+        let normalizedB = bGain / maxGain
+
+        // カラーマトリクスで補正
+        let matrix = CIFilter.colorMatrix()
+        matrix.inputImage = image
+        matrix.rVector = CIVector(x: normalizedR, y: 0, z: 0, w: 0)
+        matrix.gVector = CIVector(x: 0, y: normalizedG, z: 0, w: 0)
+        matrix.bVector = CIVector(x: 0, y: 0, z: normalizedB, w: 0)
+        matrix.biasVector = CIVector(x: 0, y: 0, z: 0, w: 0)
+
+        return matrix.outputImage ?? image
+    }
+
+    /// Clarity（明瞭度）適用
+    private static func applyClarity(to image: CIImage, amount: Double) -> CIImage {
+        guard abs(amount) > 0.0001 else { return image }
+
+        // ガウシアンブラーでソフトな画像を生成
+        let blur = CIFilter.gaussianBlur()
+        blur.inputImage = image
+        blur.radius = 5.0
+        guard let blurred = blur.outputImage else { return image }
+
+        // ハイパス: 元画像 - ブラー
+        let subtract = CIFilter(name: "CISubtractBlendMode", parameters: [
+            kCIInputImageKey: image,
+            kCIInputBackgroundImageKey: blurred
+        ])
+        guard let highpass = subtract?.outputImage else { return image }
+
+        // ハイパスをオーバーレイ合成
+        let overlay = CIFilter(name: "CIOverlayBlendMode", parameters: [
+            kCIInputImageKey: highpass,
+            kCIInputBackgroundImageKey: image
+        ])
+        guard let clarified = overlay?.outputImage else { return image }
+
+        // amount に応じてブレンド
+        if amount < 1.0 {
+            let blend = CIFilter(name: "CIBlendWithMask", parameters: [
+                kCIInputImageKey: clarified,
+                kCIInputBackgroundImageKey: image,
+                kCIInputMaskImageKey: CIImage(color: CIColor(red: CGFloat(amount), green: CGFloat(amount), blue: CGFloat(amount)))
+            ])
+            return blend?.outputImage ?? image
+        }
+
+        return clarified
+    }
+
+    /// フィルムグレイン適用
+    private static func applyGrain(to image: CIImage, intensity: Double) -> CIImage {
+        guard abs(intensity) > 0.0001 else { return image }
+
+        let noise = CIFilter.randomGenerator()
+        guard var noiseImage = noise.outputImage else { return image }
+
+        // ノイズをグレインらしく調整
+        let whiten = CIFilter.colorMatrix()
+        whiten.inputImage = noiseImage
+        whiten.rVector = CIVector(x: 0.3, y: 0.3, z: 0.3, w: 0)
+        whiten.gVector = CIVector(x: 0.3, y: 0.3, z: 0.3, w: 0)
+        whiten.bVector = CIVector(x: 0.3, y: 0.3, z: 0.3, w: 0)
+        whiten.aVector = CIVector(x: 0, y: 0, z: 0, w: CGFloat(intensity * 0.3))
+        noiseImage = whiten.outputImage ?? noiseImage
+
+        // 画像範囲に合わせてクロップ
+        noiseImage = noiseImage.cropped(to: image.extent)
+
+        // スクリーンブレンド
+        let blend = CIFilter(name: "CIScreenBlendMode", parameters: [
+            kCIInputImageKey: noiseImage,
+            kCIInputBackgroundImageKey: image
+        ])
+
+        return blend?.outputImage ?? image
+    }
+
     private static func clamp(_ value: Double, _ minValue: Double, _ maxValue: Double) -> Double {
         min(max(value, minValue), maxValue)
     }
@@ -240,6 +412,7 @@ struct PhotoEditorView: View {
     private enum Panel: String, CaseIterable, Identifiable {
         case light
         case color
+        case effects
         case crop
         case radial
         case presets
@@ -250,6 +423,7 @@ struct PhotoEditorView: View {
             switch self {
             case .light: return "ライト"
             case .color: return "カラー"
+            case .effects: return "エフェクト"
             case .crop: return "トリミング"
             case .radial: return "ラジアル"
             case .presets: return "プリセット"
@@ -315,6 +489,17 @@ struct PhotoEditorView: View {
 
                 ToolbarItem(placement: .navigationBarTrailing) {
                     HStack(spacing: 14) {
+                        Button {
+                            settings.autoWhiteBalance.toggle()
+                            if settings.autoWhiteBalance {
+                                settings.temperature = 0
+                                settings.tint = 0
+                            }
+                        } label: {
+                            Image(systemName: settings.autoWhiteBalance ? "wand.and.stars.inverse" : "wand.and.stars")
+                                .foregroundColor(settings.autoWhiteBalance ? .blue : .primary)
+                        }
+
                         Button {
                             resetAll()
                         } label: {
@@ -429,16 +614,52 @@ struct PhotoEditorView: View {
             sliderRow(title: "シャドウ", value: $settings.shadowBoost, range: 0...1, step: 0.02)
 
         case .color:
+            HStack {
+                Button(action: {
+                    settings.autoWhiteBalance.toggle()
+                    if settings.autoWhiteBalance {
+                        // Auto WB適用時に温度/ティントをリセット
+                        settings.temperature = 0
+                        settings.tint = 0
+                    }
+                }) {
+                    HStack {
+                        Image(systemName: settings.autoWhiteBalance ? "wand.and.stars" : "wand.and.stars.inverse")
+                            .font(.caption.weight(.bold))
+                        Text("自動ホワイトバランス")
+                            .font(.caption.weight(.semibold))
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(settings.autoWhiteBalance ? Color.blue : Color.gray.opacity(0.2))
+                    .foregroundColor(settings.autoWhiteBalance ? .white : .primary)
+                    .cornerRadius(8)
+                }
+                Spacer()
+            }
+
+            sliderRow(title: "色温度", value: $settings.temperature, range: -2000...2000, step: 25)
+            sliderRow(title: "ティント", value: $settings.tint, range: -150...150, step: 5)
+            sliderRow(title: "彩度", value: $settings.saturation, range: 0...2, step: 0.02)
+            sliderRow(title: "自然な彩度", value: $settings.vibrance, range: -1...1, step: 0.02)
+            sliderRow(title: "モノクロ", value: $settings.monochrome, range: 0...1, step: 0.02)
+
             Toggle("IR赤み自動補正", isOn: $settings.irAutoCorrect)
                 .toggleStyle(SwitchToggleStyle(tint: .blue))
-            sliderRow(title: "IR補正強度", value: $settings.irCorrectionStrength, range: 0...1, step: 0.02)
+            if settings.irAutoCorrect {
+                sliderRow(title: "IR補正強度", value: $settings.irCorrectionStrength, range: 0...1, step: 0.02)
+            }
             Button("IR補正プリセット") {
                 applyInfraredPreset()
             }
             .font(.caption.weight(.bold))
-            sliderRow(title: "彩度", value: $settings.saturation, range: 0...2, step: 0.02)
-            sliderRow(title: "色温度", value: $settings.temperature, range: -2000...2000, step: 25)
-            sliderRow(title: "モノクロ", value: $settings.monochrome, range: 0...1, step: 0.02)
+
+        case .effects:
+            sliderRow(title: "明瞭度", value: $settings.clarity, range: 0...2, step: 0.05)
+            sliderRow(title: "シャープネス", value: $settings.sharpness, range: 0...2, step: 0.05)
+            sliderRow(title: "ノイズ除去", value: $settings.noiseReduction, range: 0...1, step: 0.02)
+            sliderRow(title: "ヴィネット", value: $settings.vignette, range: -1...1, step: 0.02)
+            sliderRow(title: "フィルムグレイン", value: $settings.grain, range: 0...1, step: 0.02)
 
         case .crop:
             cropControls

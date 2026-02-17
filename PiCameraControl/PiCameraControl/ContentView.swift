@@ -196,6 +196,9 @@ struct ContentView: View {
     @State private var isLoading: Bool = false
     @State private var isCapturing: Bool = false
     @State private var isSwitchingWiFi: Bool = false
+    @State private var isScanning: Bool = false
+    @State private var scannedNetworks: [WiFiNetwork] = []
+    @State private var scanError: String? = nil
     @State private var errorMessage: String? = nil
     @State private var syncState: SyncState = .idle
     @State private var isApplyingRemoteSettings: Bool = false
@@ -247,6 +250,25 @@ struct ContentView: View {
                                 options: CameraModeOption.allCases
                             ) { opt in
                                 updateCameraMode(opt)
+                            }
+
+                            if selectedCameraMode == .raw {
+                                VStack(alignment: .leading, spacing: 8) {
+                                    HStack {
+                                        Image(systemName: "camera.aperture")
+                                            .foregroundColor(.blue)
+                                        Text("RAWモード")
+                                            .font(.caption.weight(.bold))
+                                            .foregroundColor(.primary)
+                                    }
+                                    Text("• DNG形式で撮影（最大4056x3040）\n• ノイズ除去・シャープネス・手ぶれ補正OFF\n• 手動撮影専用（光検知無効）\n• 編集で最大限の調整が可能")
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                        .lineSpacing(4)
+                                }
+                                .padding(12)
+                                .background(Color.blue.opacity(0.1))
+                                .cornerRadius(12)
                             }
 
                             isoQuickModule
@@ -1133,9 +1155,53 @@ struct ContentView: View {
                         .font(.caption)
                         .foregroundColor(.secondary)
                 } else {
-                    TextField("家Wi-Fi SSID", text: $homeSSIDInput)
-                        .textFieldStyle(GlassTextFieldStyle())
-                        .disabled(isSwitchingWiFi)
+                    HStack {
+                        TextField("家Wi-Fi SSID", text: $homeSSIDInput)
+                            .textFieldStyle(GlassTextFieldStyle())
+                            .disabled(isSwitchingWiFi)
+
+                        Button {
+                            scanWiFiNetworks()
+                        } label: {
+                            Image(systemName: "antenna.radiowaves.left.and.right")
+                                .font(.caption.weight(.bold))
+                                .padding(12)
+                                .background(Color.blue.opacity(0.2))
+                                .foregroundColor(.blue)
+                                .cornerRadius(10)
+                        }
+                        .disabled(isSwitchingWiFi || isScanning)
+                    }
+
+                    if isScanning {
+                        HStack(spacing: 8) {
+                            ProgressView().scaleEffect(0.8)
+                            Text("Wi-Fiネットワークをスキャン中...")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+
+                    if !scannedNetworks.isEmpty {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("検出されたネットワーク")
+                                .font(.caption2.weight(.black))
+                                .foregroundColor(.secondary)
+
+                            ScrollView(.vertical, showsIndicators: true) {
+                                VStack(spacing: 6) {
+                                    ForEach(scannedNetworks) { network in
+                                        wifiNetworkRow(network)
+                                    }
+                                }
+                            }
+                            .frame(maxHeight: 200)
+                        }
+                        .padding(12)
+                        .background(Color.primary.opacity(0.05))
+                        .cornerRadius(14)
+                    }
+
                     SecureField("家Wi-Fi PASSWORD", text: $homePasswordInput)
                         .textFieldStyle(GlassTextFieldStyle())
                         .disabled(isSwitchingWiFi)
@@ -1545,6 +1611,90 @@ struct ContentView: View {
             }
             .padding(14)
             .liquidGlassStyle(radius: 20)
+        }
+    }
+
+    // MARK: - Wi-Fi Scan Helpers
+
+    private func wifiNetworkRow(_ network: WiFiNetwork) -> some View {
+        Button {
+            homeSSIDInput = network.ssid
+        } label: {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(network.ssid)
+                        .font(.caption.weight(.semibold))
+                        .foregroundColor(.primary)
+
+                    HStack(spacing: 4) {
+                        Image(systemName: network.isSecure ? "lock.fill" : "lock.open.fill")
+                            .font(.caption2)
+                        Text(network.security ?? "Open")
+                            .font(.caption2)
+                    }
+                    .foregroundColor(.secondary)
+                }
+
+                Spacer()
+
+                HStack(spacing: 4) {
+                    Image(systemName: signalIcon(network.signal))
+                        .foregroundColor(signalColor(network.signal))
+                    Text(network.signalStrength)
+                        .font(.caption2.weight(.medium))
+                        .monospacedDigit()
+                        .foregroundColor(.secondary)
+                }
+            }
+            .padding(.vertical, 8)
+            .padding(.horizontal, 10)
+            .background(
+                homeSSIDInput == network.ssid
+                    ? Color.blue.opacity(0.2)
+                    : Color.clear
+            )
+            .cornerRadius(8)
+        }
+    }
+
+    private func signalIcon(_ signal: Int?) -> String {
+        guard let signal = signal else { return "wifi.slash" }
+        if signal >= 75 { return "wifi" }
+        if signal >= 50 { return "wifi" }
+        if signal >= 25 { return "wifi" }
+        return "wifi"
+    }
+
+    private func signalColor(_ signal: Int?) -> Color {
+        guard let signal = signal else { return .red }
+        if signal >= 75 { return .green }
+        if signal >= 50 { return .orange }
+        return .red
+    }
+
+    private func scanWiFiNetworks() {
+        isScanning = true
+        scanError = nil
+        let apiClient = api
+        Task {
+            do {
+                let response = try await apiClient.scanWiFiNetworks()
+                await MainActor.run {
+                    if response.success {
+                        scannedNetworks = response.networks
+                    } else {
+                        scanError = response.message ?? "スキャンに失敗しました"
+                        errorMessage = scanError
+                    }
+                    isScanning = false
+                }
+            } catch {
+                await MainActor.run {
+                    scanError = error.localizedDescription
+                    errorMessage = "Wi-Fiスキャンエラー: \(scanError ?? "")"
+                    isScanning = false
+                }
+            }
         }
     }
 }

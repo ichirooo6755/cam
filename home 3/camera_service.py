@@ -65,6 +65,10 @@ DEFAULT_SETTINGS = {
     'enable_timestamp': False,
     'monitoring_enabled': True,
     'quality': 90,
+    'raw_mode': False,  # RAW（DNG）撮影モード
+    'denoise_mode': 'auto',  # off/auto/cdn_off/cdn_fast/cdn_hq
+    'sharpness': 1.0,  # 0.0-16.0
+    'stabilization': True,  # 手ぶれ補正（電子式）
 }
 
 os.makedirs(PHOTOS_DIR, exist_ok=True)
@@ -191,6 +195,26 @@ def _apply_camera_controls(camera: Picamera2, settings: dict) -> None:
                 logger.warning("AwbModeEnum.Shade not available. Falling back to Auto.")
             controls['AwbMode'] = wb_map.get(wb_value, libcamera.controls.AwbModeEnum.Auto)
 
+    # ノイズ除去モード
+    denoise_value = settings.get('denoise_mode', 'auto')
+    if libcamera is not None and hasattr(libcamera.controls, 'draft'):
+        denoise_map = {
+            'off': libcamera.controls.draft.NoiseReductionModeEnum.Off,
+            'cdn_off': libcamera.controls.draft.NoiseReductionModeEnum.Minimal,
+            'cdn_fast': libcamera.controls.draft.NoiseReductionModeEnum.Fast,
+            'cdn_hq': libcamera.controls.draft.NoiseReductionModeEnum.HighQuality,
+        }
+        if denoise_value != 'auto' and denoise_value in denoise_map:
+            controls['NoiseReductionMode'] = denoise_map[denoise_value]
+
+    # シャープネス（0.0-16.0）
+    sharpness_value = settings.get('sharpness', 1.0)
+    try:
+        sharpness_float = float(sharpness_value)
+        controls['Sharpness'] = max(0.0, min(16.0, sharpness_float))
+    except (ValueError, TypeError):
+        pass
+
     if controls:
         camera.set_controls(controls)
 
@@ -217,18 +241,35 @@ def capture_photo(camera, settings: dict, composition_state: dict, detected_at: 
     写真を撮影して保存
     """
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
-    filepath = os.path.join(PHOTOS_DIR, f'photo_{timestamp}.jpg')
+    raw_mode = settings.get('raw_mode', False)
+
+    if raw_mode:
+        # RAWモード: DNGファイルを保存
+        filepath = os.path.join(PHOTOS_DIR, f'photo_{timestamp}.dng')
+    else:
+        filepath = os.path.join(PHOTOS_DIR, f'photo_{timestamp}.jpg')
 
     try:
         quality = settings.get('quality', 90)
         camera.options["quality"] = quality
         capture_start = time.time()
         _apply_camera_controls(camera, settings)
-        try:
-            camera.capture_file(filepath)
-        except Exception as capture_error:
-            logger.warning(f"capture_file failed, fallback to switch_mode: {capture_error}")
-            camera.switch_mode_and_capture_file(camera.still_configuration, filepath)
+
+        if raw_mode:
+            # RAW撮影: capture_file with format='dng'
+            try:
+                camera.capture_file(filepath, format='dng')
+            except Exception as capture_error:
+                logger.warning(f"RAW capture failed, fallback to switch_mode: {capture_error}")
+                camera.switch_mode_and_capture_file(camera.still_configuration, filepath, format='dng')
+        else:
+            # 通常のJPEG撮影
+            try:
+                camera.capture_file(filepath)
+            except Exception as capture_error:
+                logger.warning(f"capture_file failed, fallback to switch_mode: {capture_error}")
+                camera.switch_mode_and_capture_file(camera.still_configuration, filepath)
+
         capture_end = time.time()
         if detected_at is not None:
             detect_delay = capture_end - detected_at
@@ -401,9 +442,12 @@ def main():
                             camera = None
 
                         cam = Picamera2()
+                        camera_mode = str(settings.get('camera_mode', 'standard') or 'standard').strip().lower()
+                        # REACTIONモードは最小loresで最速検知
+                        lores_size = (64, 48) if camera_mode == 'reaction' else (160, 120)
                         config = cam.create_still_configuration(
                             main={"size": desired_size},
-                            lores={"size": (160, 120)},
+                            lores={"size": lores_size},
                         )
                         cam.configure(config)
                         cam.start()
@@ -471,9 +515,10 @@ def main():
                             threshold,
                             change_percent,
                         )
+                        detected_at = time.time()
                         sensor_state['last_detected_at'] = datetime.now().isoformat()
-                        if capture_photo(camera, settings, composition_state, detected_at=current_time):
-                            last_capture_time = current_time
+                        if capture_photo(camera, settings, composition_state, detected_at=detected_at):
+                            last_capture_time = time.time()
                             sensor_state['last_capture_at'] = datetime.now().isoformat()
                             sensor_state['last_detect_to_capture_ms'] = composition_state.get('last_detect_to_capture_ms')
 

@@ -81,9 +81,13 @@ ALLOWED_SETTINGS_KEYS = {
     'enable_2in1_composition',
     'enable_timestamp',
     'monitoring_enabled',
+    'raw_mode',
+    'denoise_mode',
+    'sharpness',
+    'stabilization',
 }
 
-ALLOWED_WHITE_BALANCE = {'auto', 'daylight', 'cloudy', 'tungsten', 'fluorescent'}
+ALLOWED_WHITE_BALANCE = {'auto', 'daylight', 'cloudy', 'tungsten', 'fluorescent', 'shade'}
 DEFAULT_SETTINGS = {
     'camera_mode': 'standard',
     'brightness_threshold': 30,
@@ -220,7 +224,7 @@ def _sanitize_settings_patch(patch):
         if key == 'camera_mode':
             mode = str(value).strip().lower()
             if mode not in CAMERA_MODE_PRESETS:
-                errors.append('camera_mode must be one of reaction/quality/standard/battery')
+                errors.append('camera_mode must be one of reaction/quality/standard/battery/manual/raw')
             else:
                 sanitized[key] = mode
             continue
@@ -306,7 +310,7 @@ def _sanitize_settings_patch(patch):
         if key == 'white_balance':
             wb = str(value).strip().lower()
             if wb not in ALLOWED_WHITE_BALANCE:
-                errors.append('white_balance must be auto/daylight/cloudy/tungsten/fluorescent')
+                errors.append('white_balance must be auto/daylight/cloudy/tungsten/fluorescent/shade')
             else:
                 sanitized[key] = wb
             continue
@@ -393,7 +397,7 @@ def _is_mode_operational(mode):
 
     if mode == 'tethering':
         try:
-            return wifi_manager.check_tethering_connection(timeout=12)
+            return wifi_manager.check_tethering_connection(timeout=25)
         except Exception as e:
             logger.warning(f"Failed to check tethering operational status: {e}")
             return False
@@ -510,16 +514,18 @@ def _wifi_recovery_watchdog_loop():
 
 CAMERA_MODE_PRESETS = {
     'reaction': {
-        'quality': 80,
+        'quality': 75,               # 画質を下げて処理時間短縮
         'width': 1280,
         'height': 720,
-        'detection_interval': 0.1,
-        'check_interval': 0.1,
-        'capture_cooldown': 0.1,
+        'detection_interval': 0.05,  # 撮影間隔: 50ms（物理限界に挑戦）
+        'check_interval': 0.01,      # 光検知間隔: 10ms（最速ポーリング）
+        'capture_cooldown': 0.05,    # 最短撮影クールダウン: 50ms
         'monitoring_enabled': True,
         'enable_multiple_exposure': False,
         'enable_2in1_composition': False,
         'enable_timestamp': False,
+        'denoise_mode': 'cdn_fast',  # 高速ノイズ除去（OFF→FASTでバランス）
+        'sharpness': 0.5,            # 最小限のシャープネス
     },
     'quality': {
         'quality': 100,
@@ -547,6 +553,25 @@ CAMERA_MODE_PRESETS = {
         'check_interval': 1.0,
         'capture_cooldown': 0.0,
         'monitoring_enabled': False,
+        'enable_multiple_exposure': False,
+        'enable_2in1_composition': False,
+        'enable_timestamp': False,
+    },
+    'manual': {
+        # MANUALモード: 全パラメータをユーザー指定
+        # monitoring_enabledはFalseで手動撮影専用
+        'monitoring_enabled': False,
+    },
+    'raw': {
+        # RAWモード: DNG撮影、高画質優先、全自動処理OFF
+        'raw_mode': True,
+        'quality': 100,
+        'width': 4056,
+        'height': 3040,
+        'denoise_mode': 'off',  # ノイズ除去OFF
+        'sharpness': 0.0,  # シャープネスOFF
+        'stabilization': False,  # 手ぶれ補正OFF
+        'monitoring_enabled': False,  # 手動撮影専用
         'enable_multiple_exposure': False,
         'enable_2in1_composition': False,
         'enable_timestamp': False,
@@ -784,6 +809,8 @@ class APIHandler(BaseHTTPRequestHandler):
             self.write_wpa_settings()
         elif parsed.path == '/api/wifi/switch':
             self.switch_wifi_mode()
+        elif parsed.path == '/api/wifi/scan':
+            self.scan_wifi_networks()
         elif parsed.path == '/api/metering':
             self.serve_metering_recommendation()
         else:
@@ -1203,7 +1230,8 @@ class APIHandler(BaseHTTPRequestHandler):
             if 'brightness_threshold' in settings and 'detection_threshold' not in settings:
                 settings['detection_threshold'] = settings['brightness_threshold']
 
-            settings.pop('ap_password', None)
+            for internal_key in ('ap_password', 'ap_ssid', 'wifi_mode'):
+                settings.pop(internal_key, None)
 
             self.send_response(200)
             self.send_header('Content-Type', 'application/json')
@@ -1351,6 +1379,43 @@ class APIHandler(BaseHTTPRequestHandler):
             self.send_header('Content-Type', 'application/json')
             self.end_headers()
             self.wfile.write(json.dumps({'success': False, 'message': str(e)}).encode())
+
+    def scan_wifi_networks(self):
+        """周辺Wi-Fiネットワークをスキャン"""
+        try:
+            # Wi-Fi切替中はスキャンを拒否
+            if _is_wifi_switching():
+                self.send_response(409)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({
+                    'success': False,
+                    'message': 'Wi-Fi切替中のためスキャンできません'
+                }).encode())
+                return
+
+            data = _read_json_body(self)
+            max_results = 25
+            rescan = True
+            if data:
+                max_results = int(data.get('max_results', 25))
+                rescan = bool(data.get('rescan', True))
+
+            result = wifi_manager.scan_wifi_networks(max_results=max_results, rescan=rescan)
+
+            self.send_response(200 if result.get('success') else 500)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps(result).encode())
+        except Exception as e:
+            logger.error(f"scan_wifi_networks error: {e}")
+            self.send_response(500)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({
+                'success': False,
+                'message': 'Wi-Fiスキャンに失敗しました'
+            }).encode())
 
     def switch_wifi_mode(self):
         """Wi-Fiモード切り替え"""

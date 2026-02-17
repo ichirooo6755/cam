@@ -240,6 +240,21 @@ struct SafeFilename: Hashable {
     let value: String
 }
 
+/// 写真ファイル名のサニタイズ（CameraAPI / SimpleCameraAPI 共通）
+func sanitizePhotoFilename(_ filename: String) -> String? {
+    let trimmed = filename.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return nil }
+
+    let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "._-"))
+    guard trimmed.rangeOfCharacter(from: allowed.inverted) == nil else { return nil }
+
+    let lower = trimmed.lowercased()
+    guard lower.hasSuffix(".jpg") || lower.hasSuffix(".jpeg") || lower.hasSuffix(".png") else {
+        return nil
+    }
+    return trimmed
+}
+
 /// 設定更新のレスポンス
 struct SettingsResponse: Codable {
     let success: Bool
@@ -253,13 +268,11 @@ struct WiFiStatus: Codable {
     let ip: String?
     let ipAddress: String?
     let apSsid: String?
-    let apPassword: String?
 
     enum CodingKeys: String, CodingKey {
         case mode, ssid, ip
         case ipAddress = "ip_address"
         case apSsid = "ap_ssid"
-        case apPassword = "ap_password"
     }
 
     init(from decoder: Decoder) throws {
@@ -269,7 +282,6 @@ struct WiFiStatus: Codable {
         ip = try container.decodeIfPresent(String.self, forKey: .ip)
         ipAddress = try container.decodeIfPresent(String.self, forKey: .ipAddress)
         apSsid = try container.decodeIfPresent(String.self, forKey: .apSsid)
-        apPassword = try container.decodeIfPresent(String.self, forKey: .apPassword)
     }
 
     var resolvedIP: String? {
@@ -277,6 +289,34 @@ struct WiFiStatus: Codable {
         if let ipAddress, !ipAddress.isEmpty { return ipAddress }
         return nil
     }
+}
+
+/// Wi-Fiネットワーク情報
+struct WiFiNetwork: Codable, Identifiable {
+    let ssid: String
+    let signal: Int?
+    let security: String?
+
+    var id: String { ssid }
+
+    var signalStrength: String {
+        guard let signal = signal else { return "-" }
+        return "\(signal)%"
+    }
+
+    var isSecure: Bool {
+        guard let security = security else { return false }
+        return !security.lowercased().contains("open")
+    }
+}
+
+/// Wi-Fiスキャン結果レスポンス
+struct WiFiScanResponse: Codable {
+    let success: Bool
+    let networks: [WiFiNetwork]
+    let source: String?
+    let iface: String?
+    let message: String?
 }
 
 /// Wi-Fiモード切り替えレスポンス
@@ -395,6 +435,8 @@ enum CameraModeOption: String, CaseIterable, Identifiable, Hashable, Labelable {
     case quality
     case standard
     case battery
+    case manual
+    case raw
 
     var id: String { rawValue }
 
@@ -404,6 +446,8 @@ enum CameraModeOption: String, CaseIterable, Identifiable, Hashable, Labelable {
         case .quality: return "QUALITY"
         case .standard: return "STANDARD"
         case .battery: return "BATTERY"
+        case .manual: return "MANUAL"
+        case .raw: return "RAW (DNG)"
         }
     }
 

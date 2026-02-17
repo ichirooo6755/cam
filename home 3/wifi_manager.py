@@ -17,12 +17,37 @@ import hashlib
 
 logger = logging.getLogger(__name__)
 
+def _resolve_executable(name):
+    text = str(name)
+    if os.path.isabs(text) and os.path.exists(text):
+        return text
+
+    extra_paths = (
+        '/usr/local/sbin',
+        '/usr/local/bin',
+        '/usr/sbin',
+        '/usr/bin',
+        '/sbin',
+        '/bin',
+    )
+
+    env_path = os.environ.get('PATH', '')
+    combined = [p for p in env_path.split(os.pathsep) if p]
+    for p in extra_paths:
+        if p not in combined:
+            combined.append(p)
+
+    search_path = os.pathsep.join(combined)
+    path = shutil.which(text, path=search_path)
+    return path or text
+
 # 設定ファイルパス
 SETTINGS_FILE = '/home/pi/camera_settings.json'
 WPA_SUPPLICANT_CONF = '/etc/wpa_supplicant/wpa_supplicant.conf'
 
 # APモード時の想定固定IP（Raspberry Pi OSのデフォルト範囲: 192.168.4.1）
 AP_IP = '192.168.4.1'
+AP_IP_PREFIXES = ('192.168.4.', '10.42.0.')
 
 # 環境変数または設定ファイルからデフォルト値を取得（ハードコード回避）
 def _get_default_ap_ssid():
@@ -80,29 +105,58 @@ def _get_ipv4_addrs_for_interface(iface):
     except Exception:
         return []
 
+def _is_ap_ipv4(ip_address):
+    ip_text = str(ip_address or '').strip()
+    if not ip_text:
+        return False
+    return any(ip_text.startswith(prefix) for prefix in AP_IP_PREFIXES)
+
+def _is_valid_client_ipv4(ip_address):
+    ip_text = str(ip_address or '').strip()
+    if not ip_text:
+        return False
+    if ip_text.startswith('127.') or ip_text.startswith('169.254.'):
+        return False
+    if _is_ap_ipv4(ip_text):
+        return False
+    return True
+
+def _has_default_route_on_interface(iface):
+    res = _run(['ip', 'route', 'show', 'default'], timeout=10)
+    if res['returncode'] != 0 or not res['stdout']:
+        return False
+
+    for line in res['stdout'].splitlines():
+        parts = line.split()
+        for idx, part in enumerate(parts):
+            if part == 'dev' and idx + 1 < len(parts) and parts[idx + 1] == iface:
+                return True
+    return False
+
+def _get_iw_link_info(iface):
+    iw_cmd = _resolve_executable('iw')
+    res = _run([iw_cmd, 'dev', iface, 'link'], timeout=10)
+    if res['returncode'] != 0 or not res['stdout']:
+        return False, None
+
+    text = res['stdout']
+    if 'Not connected' in text:
+        return False, None
+    if 'Connected to' not in text:
+        return False, None
+
+    ssid = None
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith('SSID:'):
+            ssid = line.split(':', 1)[1].strip()
+            break
+    return True, ssid
+
 def has_nmcli():
     """Check if nmcli is available"""
     nmcli_cmd = _resolve_executable('nmcli')
     return os.path.isabs(nmcli_cmd) and os.path.exists(nmcli_cmd)
-
-def _resolve_executable(name, extra_candidates=None):
-    path = shutil.which(name)
-    if path:
-        return path
-
-    candidates = list(extra_candidates or [])
-    candidates.extend([
-        f'/sbin/{name}',
-        f'/usr/sbin/{name}',
-        f'/usr/bin/{name}',
-        f'/bin/{name}',
-    ])
-
-    for candidate in candidates:
-        if os.path.exists(candidate):
-            return candidate
-
-    return name
 
 def _is_networkmanager_running():
     if not has_nmcli():
@@ -150,10 +204,29 @@ def _detect_wifi_interface():
         iw_cmd = _resolve_executable('iw')
         res = _run([iw_cmd, 'dev'])
         if res['returncode'] == 0 and res['stdout']:
+            interfaces = []
             for line in res['stdout'].splitlines():
                 line = line.strip()
-                if line.startswith('Interface '):
-                    return line.split('Interface ', 1)[1].strip()
+                if not line.startswith('Interface '):
+                    continue
+                name = line.split('Interface ', 1)[1].strip()
+                if name:
+                    interfaces.append(name)
+
+            if interfaces:
+                for preferred in ('wlan0', 'wlan1'):
+                    if preferred in interfaces:
+                        return preferred
+
+                for name in interfaces:
+                    if name.startswith('wlan') and 'p2p' not in name:
+                        return name
+
+                for name in interfaces:
+                    if 'p2p' not in name:
+                        return name
+
+                return interfaces[0]
     except Exception:
         pass
 
@@ -475,17 +548,34 @@ def configure_wpa_supplicant(ssid, psk):
         logger.error(f"Failed to configure wpa_supplicant: {e}")
         return {'success': False, 'message': str(e)}
 
-def check_tethering_connection(timeout=15):
+def check_tethering_connection(timeout=25):
     """
     テザリングモードで実際に接続できているか確認
     Returns: True if connected, False otherwise
     """
     start_time = time.time()
     iface = _detect_wifi_interface()
-    
+    last_snapshot = {
+        'iface': iface,
+        'wpa_state': None,
+        'ssid': None,
+        'iw_connected': None,
+        'iw_ssid': None,
+        'ips': None,
+        'default_route': None,
+    }
+
     while time.time() - start_time < timeout:
         try:
-            status = _run_wpa_cli(['status'], iface=iface, timeout=10)
+            ip_candidates = [
+                ip
+                for ip in _get_ipv4_addrs_for_interface(iface)
+                if _is_valid_client_ipv4(ip)
+            ]
+
+            state = None
+            ssid = None
+            status = _run_wpa_cli_readonly(['status'], iface=iface, timeout=10)
             if status['returncode'] == 0 and status['stdout']:
                 fields = {}
                 for line in status['stdout'].splitlines():
@@ -493,30 +583,37 @@ def check_tethering_connection(timeout=15):
                         continue
                     key, value = line.split('=', 1)
                     fields[key.strip()] = value.strip()
-
-                ssid = fields.get('ssid')
                 state = fields.get('wpa_state')
-                if state == 'COMPLETED' and ssid:
-                    logger.info(f"Connected to SSID: {ssid}")
+                ssid = fields.get('ssid')
 
-                    ip_candidates = []
-                    for ip in _get_ipv4_addrs_for_interface(iface):
-                        if not ip or ip.startswith('127.') or ip.startswith('169.254.'):
-                            continue
-                        if ip.startswith('192.168.4.') or ip.startswith('10.42.0.'):
-                            continue
-                        ip_candidates.append(ip)
+            iw_connected, iw_ssid = _get_iw_link_info(iface)
+            default_route_ok = _has_default_route_on_interface(iface)
 
-                    if ip_candidates:
-                        ip = ip_candidates[0]
-                        logger.info(f"Tethering connection confirmed: IP={ip}")
-                        return True
+            last_snapshot = {
+                'iface': iface,
+                'wpa_state': state,
+                'ssid': ssid,
+                'iw_connected': iw_connected,
+                'iw_ssid': iw_ssid,
+                'ips': ip_candidates,
+                'default_route': default_route_ok,
+            }
+
+            # 強化: IPアドレス取得 AND デフォルトルート存在を必須条件に
+            if ip_candidates and default_route_ok and (state == 'COMPLETED' or iw_connected):
+                ip = ip_candidates[0]
+                chosen_ssid = ssid or iw_ssid
+                if chosen_ssid:
+                    logger.info(f"Tethering connection confirmed: SSID={chosen_ssid} IP={ip}")
+                else:
+                    logger.info(f"Tethering connection confirmed: IP={ip}")
+                return True
         except Exception as e:
-            logger.debug(f"Connection check error: {e}")
-        
+            logger.debug(f"Tethering connection check error: {e}")
+
         time.sleep(2)
-    
-    logger.warning("Tethering connection check failed")
+
+    logger.warning(f"Tethering connection check failed: {last_snapshot}")
     return False
 
 def get_current_mode():
@@ -585,6 +682,188 @@ def get_wifi_status():
         logger.error(f"Failed to get Wi-Fi status: {e}")
     
     return status
+
+
+def scan_wifi_networks(max_results=25, rescan=True, timeout=25):
+    iface = _detect_wifi_interface()
+    networks = []
+    nm_error = None
+
+    if has_nmcli():
+        nmcli_cmd = _resolve_executable('nmcli')
+        cmd = [
+            nmcli_cmd,
+            '-t',
+            '--separator',
+            '|',
+            '-f',
+            'SSID,SIGNAL,SECURITY',
+            'device',
+            'wifi',
+            'list',
+        ]
+        if rescan:
+            cmd += ['--rescan', 'yes']
+
+        try:
+            res = _run(cmd, timeout=timeout)
+            if res['returncode'] != 0:
+                sudo_res = _run(['sudo', '-n'] + cmd, timeout=timeout)
+                if sudo_res['returncode'] == 0:
+                    res = sudo_res
+
+            if res['returncode'] == 0 and res['stdout']:
+                seen = {}
+                for line in res['stdout'].splitlines():
+                    if not line:
+                        continue
+                    parts = line.split('|')
+                    if len(parts) < 3:
+                        continue
+                    ssid = (parts[0] or '').strip()
+                    if not ssid or ssid == '--':
+                        continue
+
+                    signal = None
+                    try:
+                        if (parts[1] or '').strip():
+                            signal = int((parts[1] or '').strip())
+                    except Exception:
+                        signal = None
+
+                    security = (parts[2] or '').strip() or None
+
+                    existing = seen.get(ssid)
+                    if existing is None:
+                        seen[ssid] = {
+                            'ssid': ssid,
+                            'signal': signal,
+                            'security': security,
+                        }
+                        continue
+
+                    if signal is not None:
+                        existing_signal = existing.get('signal')
+                        if existing_signal is None or signal > existing_signal:
+                            existing['signal'] = signal
+                    if (existing.get('security') in (None, '', '--')) and security not in (None, '', '--'):
+                        existing['security'] = security
+
+                networks = list(seen.values())
+                networks.sort(key=lambda x: (x.get('signal') or 0), reverse=True)
+                if max_results and len(networks) > max_results:
+                    networks = networks[:max_results]
+
+                return {
+                    'success': True,
+                    'networks': networks,
+                    'source': 'nmcli',
+                    'iface': iface,
+                }
+
+            nm_error = res['stderr'] or res['stdout'] or 'nmcli wifi list failed'
+        except subprocess.TimeoutExpired:
+            nm_error = 'nmcli wifi list timed out'
+        except Exception as e:
+            nm_error = str(e)
+
+    iw_cmd = _resolve_executable('iw')
+    iw_scan_cmd = [iw_cmd, 'dev', iface, 'scan']
+    iw_res = None
+    try:
+        iw_res = _run(iw_scan_cmd, timeout=timeout)
+        if iw_res['returncode'] != 0:
+            iw_res = _run(['sudo', '-n'] + iw_scan_cmd, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        iw_res = {'returncode': 124, 'stdout': '', 'stderr': 'iw scan timed out'}
+    except Exception as e:
+        iw_res = {'returncode': 1, 'stdout': '', 'stderr': str(e)}
+
+    if iw_res and iw_res.get('returncode') == 0 and iw_res.get('stdout'):
+        seen = {}
+        current = None
+
+        def _finalize_current():
+            if not current:
+                return
+            ssid_val = current.get('ssid')
+            if not ssid_val:
+                return
+            existing = seen.get(ssid_val)
+            if existing is None:
+                seen[ssid_val] = dict(current)
+                return
+            new_signal = current.get('signal')
+            if new_signal is not None:
+                existing_signal = existing.get('signal')
+                if existing_signal is None or new_signal > existing_signal:
+                    existing['signal'] = new_signal
+            if (existing.get('security') in (None, '', '--')) and current.get('security') not in (None, '', '--'):
+                existing['security'] = current.get('security')
+
+        for raw in (iw_res.get('stdout') or '').splitlines():
+            line = raw.strip()
+            if not line:
+                continue
+
+            if line.startswith('BSS '):
+                _finalize_current()
+                current = {'ssid': None, 'signal': None, 'security': None}
+                continue
+
+            if current is None:
+                continue
+
+            if line.startswith('signal:'):
+                parts = line.split()
+                if len(parts) >= 2:
+                    try:
+                        dbm = float(parts[1])
+                        signal_pct = int(min(max(2.0 * (dbm + 100.0), 0.0), 100.0))
+                        current['signal'] = signal_pct
+                    except Exception:
+                        pass
+                continue
+
+            if line.startswith('SSID:'):
+                ssid_val = line.split('SSID:', 1)[1].strip()
+                if ssid_val:
+                    current['ssid'] = ssid_val
+                continue
+
+            lowered = line.lower()
+            if lowered.startswith('rsn:') or lowered.startswith('wpa:'):
+                current['security'] = 'WPA'
+                continue
+            if lowered.startswith('privacy:') and 'yes' in lowered and current.get('security') is None:
+                current['security'] = 'WEP'
+                continue
+
+        _finalize_current()
+
+        networks = list(seen.values())
+        networks.sort(key=lambda x: (x.get('signal') or 0), reverse=True)
+        if max_results and len(networks) > max_results:
+            networks = networks[:max_results]
+
+        return {
+            'success': True,
+            'networks': networks,
+            'source': 'iw',
+            'iface': iface,
+        }
+
+    err_message = None
+    if iw_res:
+        err_message = iw_res.get('stderr') or iw_res.get('stdout')
+    err_message = err_message or nm_error or 'Wi-Fi scan failed'
+    return {
+        'success': False,
+        'message': err_message,
+        'networks': [],
+        'source': 'scan',
+        'iface': iface,
+    }
 
 def ensure_ap_persistence(allow_recursive_ap_recovery=True):
     if not has_nmcli():
@@ -933,22 +1212,27 @@ def switch_to_tethering_mode(allow_ap_fallback=True):
 
         reconfigure = _run_wpa_cli(['reconfigure'], iface=iface)
         if reconfigure['returncode'] != 0 or 'FAIL' in reconfigure['stdout']:
+            logger.warning(f"wpa_cli reconfigure failed (continue): {reconfigure['stderr'] or reconfigure['stdout']}")
             _restart_wpa_supplicant_services(iface)
             time.sleep(2)
             reconfigure = _run_wpa_cli(['reconfigure'], iface=iface)
-
-        if reconfigure['returncode'] != 0 or 'FAIL' in reconfigure['stdout']:
-            return _fail_with_ap_fallback(
-                f"wpa_cli reconfigure failed: {reconfigure['stderr'] or reconfigure['stdout']}"
-            )
+            if reconfigure['returncode'] != 0 or 'FAIL' in reconfigure['stdout']:
+                logger.warning(
+                    f"wpa_cli reconfigure retry failed (continue): {reconfigure['stderr'] or reconfigure['stdout']}"
+                )
 
         time.sleep(3)
 
         reconnect = _run_wpa_cli(['reconnect'], iface=iface)
         if reconnect['returncode'] != 0 or 'FAIL' in reconnect['stdout']:
-            return _fail_with_ap_fallback(
-                f"wpa_cli reconnect failed: {reconnect['stderr'] or reconnect['stdout']}"
-            )
+            logger.warning(f"wpa_cli reconnect failed (continue): {reconnect['stderr'] or reconnect['stdout']}")
+            _restart_wpa_supplicant_services(iface)
+            time.sleep(2)
+            reconnect = _run_wpa_cli(['reconnect'], iface=iface)
+            if reconnect['returncode'] != 0 or 'FAIL' in reconnect['stdout']:
+                logger.warning(
+                    f"wpa_cli reconnect retry failed (continue): {reconnect['stderr'] or reconnect['stdout']}"
+                )
         time.sleep(2)
 
         _run(['sudo', '-n', 'dhcpcd', '-n', iface])

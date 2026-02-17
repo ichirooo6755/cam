@@ -1,4 +1,5 @@
 import SwiftUI
+import CoreImage
 
 /// 軽量版カメラAPI（写真一覧中心）
 actor SimpleCameraAPI {
@@ -6,22 +7,7 @@ actor SimpleCameraAPI {
     private let session: URLSession
 
     private func sanitizeFilename(_ filename: String) -> String? {
-        let trimmed = filename.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
-            return nil
-        }
-
-        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "._-"))
-        guard trimmed.rangeOfCharacter(from: allowed.inverted) == nil else {
-            return nil
-        }
-
-        let lower = trimmed.lowercased()
-        guard lower.hasSuffix(".jpg") || lower.hasSuffix(".jpeg") || lower.hasSuffix(".png") else {
-            return nil
-        }
-
-        return trimmed
+        return sanitizePhotoFilename(filename)
     }
 
     init(baseURL: String = "http://192.168.4.1:8001") {
@@ -80,12 +66,21 @@ actor SimpleCameraAPI {
               httpResponse.statusCode == 200 else {
             throw APIError.downloadFailed
         }
-        
-        guard let image = UIImage(data: data) else {
-            throw APIError.invalidImageData
+
+        // RAW（DNG）ファイル対応: まずUIImageで読み込みを試行
+        if let image = UIImage(data: data) {
+            return image
         }
-        
-        return image
+
+        // UIImageで読めない場合はCoreImageでRAW読み込み（DNG対応）
+        if let ciImage = CIImage(data: data) {
+            let context = CIContext(options: nil)
+            if let cgImage = context.createCGImage(ciImage, from: ciImage.extent) {
+                return UIImage(cgImage: cgImage)
+            }
+        }
+
+        throw APIError.invalidImageData
     }
 
     func fetchPhotoMetadata(filename: String) async throws -> PhotoMetadata? {
