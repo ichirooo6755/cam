@@ -39,4 +39,23 @@
         <attribute name="temperature" attributeType="Double" defaultValueString="0.0" usesScalarValueType="YES"/>
         <attribute name="userRating" attributeType="Integer 16" defaultValueString="0" usesScalarValueType="YES"/>
     </entity>
+    <entity name="PhotoVersion" representedClassName="PhotoVersion" syncable="YES">
+        <attribute name="id" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="originalPhotoID" attributeType="String"/>
+        <attribute name="versionNumber" attributeType="Integer 32" defaultValueString="0" usesScalarValueType="YES"/>
+        <attribute name="imageData" optional="YES" attributeType="Binary" allowsExternalBinaryDataStorage="YES"/>
+        <attribute name="thumbnailData" optional="YES" attributeType="Binary"/>
+        <attribute name="settingsJSON" optional="YES" attributeType="String"/>
+        <attribute name="createdAt" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="updatedAt" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="userRating" attributeType="Integer 16" defaultValueString="0" usesScalarValueType="YES"/>
+        <attribute name="isOriginal" attributeType="Boolean" defaultValueString="NO" usesScalarValueType="YES"/>
+        <relationship name="group" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="PhotoGroup" inverseName="versions" inverseEntity="PhotoGroup"/>
+    </entity>
+    <entity name="PhotoGroup" representedClassName="PhotoGroup" syncable="YES">
+        <attribute name="id" attributeType="String"/>
+        <attribute name="serverMetadataJSON" optional="YES" attributeType="String"/>
+        <relationship name="latestVersion" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="PhotoVersion"/>
+        <relationship name="versions" optional="YES" toMany="YES" deletionRule="Cascade" destinationEntity="PhotoVersion" inverseName="group" inverseEntity="PhotoVersion"/>
+    </entity>
 </model>

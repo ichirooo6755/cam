@@ -20,11 +20,15 @@ struct CameraStatusView: View {
     var body: some View {
         NavigationView {
             ZStack {
-                // Nikon 35Tiスタイルの背景（黒地に赤アクセント）
+                // Minimal White Background
+                MinimalTheme.Background.primary
+                    .ignoresSafeArea()
+
                 LinearGradient(
                     colors: [
-                        Color(red: 0.1, green: 0.1, blue: 0.12),
-                        Color(red: 0.05, green: 0.05, blue: 0.08),
+                        Color.blue.opacity(0.06),
+                        Color.teal.opacity(0.04),
+                        Color.clear,
                     ],
                     startPoint: .topLeading,
                     endPoint: .bottomTrailing
@@ -248,7 +252,7 @@ struct CameraStatusView: View {
         .padding(20)
         .background(
             RoundedRectangle(cornerRadius: 16)
-                .fill(Color(red: 0.15, green: 0.15, blue: 0.17))
+                .fill(MinimalTheme.Background.surface)
                 .shadow(color: .black.opacity(0.3), radius: 10, y: 5)
         )
     }
@@ -283,7 +287,7 @@ struct CameraStatusView: View {
         .padding(20)
         .background(
             RoundedRectangle(cornerRadius: 16)
-                .fill(Color(red: 0.15, green: 0.15, blue: 0.17))
+                .fill(MinimalTheme.Background.surface)
                 .shadow(color: .black.opacity(0.3), radius: 10, y: 5)
         )
     }
@@ -323,7 +327,7 @@ struct CameraStatusView: View {
         .padding(20)
         .background(
             RoundedRectangle(cornerRadius: 16)
-                .fill(Color(red: 0.15, green: 0.15, blue: 0.17))
+                .fill(MinimalTheme.Background.surface)
                 .shadow(color: .black.opacity(0.3), radius: 10, y: 5)
         )
     }

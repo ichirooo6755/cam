@@ -25,8 +25,9 @@ struct PiCameraControlApp: App {
                         Label("設定", systemImage: "gearshape")
                     }
             }
+            .tint(MinimalTheme.Accent.primary)
             .environment(\.managedObjectContext, persistenceController.container.viewContext)
-            .preferredColorScheme(preferredColorScheme)
+            .preferredColorScheme(.light)
         }
     }
 
