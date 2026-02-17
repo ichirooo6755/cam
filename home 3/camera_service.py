@@ -535,8 +535,12 @@ def main():
                 logger.error(f"Detection error: {e}")
                 sensor_state['last_error'] = str(e)
 
+            # 省電力: センサーステータスは変更時のみ書き込み
             if current_time - last_sensor_status_write >= SENSOR_STATUS_WRITE_INTERVAL:
-                write_sensor_status(sensor_state)
+                # 前回と異なる場合のみ書き込み
+                if sensor_state != getattr(write_sensor_status, '_last_state', None):
+                    write_sensor_status(sensor_state)
+                    write_sensor_status._last_state = sensor_state.copy()
                 last_sensor_status_write = current_time
 
             time.sleep(check_interval)

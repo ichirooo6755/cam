@@ -454,6 +454,11 @@ def _wifi_recovery_watchdog_loop():
                     continue
 
             mode = wifi_manager.get_current_mode()
+
+            # 省電力: APモード時はwatchdog不要（ローカル接続のみ）
+            if mode == 'ap':
+                continue
+
             operational = _is_mode_operational(mode)
             now = time.time()
 
