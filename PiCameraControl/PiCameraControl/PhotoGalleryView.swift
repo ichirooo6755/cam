@@ -70,7 +70,7 @@ struct PhotoGalleryView: View {
                 loadPhotos()
             }
             .sheet(item: $selectedPhoto) { selection in
-                PhotoDetailView(
+                GalleryPhotoDetailView(
                     filename: selection.id,
                     serverIP: serverIP,
                     onDeleted: { deletedFilename in
@@ -420,7 +420,7 @@ struct PhotoThumbnail: View {
     }
 }
 
-struct PhotoDetailView: View {
+struct GalleryPhotoDetailView: View {
     let filename: String
     let serverIP: String
     let onDeleted: (String) -> Void
@@ -615,3 +615,4 @@ struct PhotoDetailView: View {
 struct SelectedPhoto: Identifiable {
     let id: String
 }
+

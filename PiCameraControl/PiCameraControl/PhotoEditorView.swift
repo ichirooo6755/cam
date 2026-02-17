@@ -2,6 +2,7 @@ import SwiftUI
 import CoreImage
 import CoreImage.CIFilterBuiltins
 import Foundation
+import CoreData
 
 #if canImport(UIKit)
 import UIKit
@@ -41,6 +42,8 @@ struct PhotoEditorSettings: Codable, Hashable {
     var tint: Double  // グリーン/マゼンタ補正
     var vibrance: Double  // 彩度（Vibrance: 肌色保護）
     var clarity: Double  // 明瞭度
+    var texture: Double  // テクスチャ（細かいディテール強調）
+    var dehaze: Double  // ディヘイズ（霞除去）
     var sharpness: Double  // シャープネス
     var noiseReduction: Double  // ノイズ除去
     var vignette: Double  // ヴィネット（周辺光量）
@@ -62,6 +65,8 @@ struct PhotoEditorSettings: Codable, Hashable {
         tint: 0,
         vibrance: 0,
         clarity: 0,
+        texture: 0,
+        dehaze: 0,
         sharpness: 0,
         noiseReduction: 0,
         vignette: 0,
@@ -549,6 +554,16 @@ private enum PhotoEditorRenderer {
             output = applyClarity(to: output, amount: settings.clarity)
         }
 
+        // Texture（テクスチャ・細かいディテール強調）
+        if abs(settings.texture) > 0.0001 {
+            output = applyTexture(to: output, amount: settings.texture)
+        }
+
+        // Dehaze（ディヘイズ・霞除去）
+        if abs(settings.dehaze) > 0.0001 {
+            output = applyDehaze(to: output, amount: settings.dehaze)
+        }
+
         // ノイズ除去
         if abs(settings.noiseReduction) > 0.0001 {
             let f = CIFilter.noiseReduction()
@@ -754,6 +769,76 @@ private enum PhotoEditorRenderer {
         }
 
         return clarified
+    }
+
+    /// テクスチャ適用（細かいディテール強調）
+    private static func applyTexture(to image: CIImage, amount: Double) -> CIImage {
+        guard abs(amount) > 0.0001 else { return image }
+
+        // Clarityより小さい半径でハイパスフィルター（細部強調）
+        let blur = CIFilter.gaussianBlur()
+        blur.inputImage = image
+        blur.radius = 2.0  // Clarityの5.0より小さい
+        guard let blurred = blur.outputImage else { return image }
+
+        // ハイパス: 元画像 - ブラー
+        let subtract = CIFilter(name: "CISubtractBlendMode", parameters: [
+            kCIInputImageKey: image,
+            kCIInputBackgroundImageKey: blurred
+        ])
+        guard let highpass = subtract?.outputImage else { return image }
+
+        // ハイパスをソフトライト合成（Overlayより柔らかい）
+        let softLight = CIFilter(name: "CISoftLightBlendMode", parameters: [
+            kCIInputImageKey: highpass,
+            kCIInputBackgroundImageKey: image
+        ])
+        guard let textured = softLight?.outputImage else { return image }
+
+        // amount に応じてブレンド
+        let normalizedAmount = clamp(amount, -1, 1)
+        let blendAmount = abs(normalizedAmount)
+
+        if blendAmount < 1.0 {
+            // Linear interpolation
+            let blend = CIFilter.blendWithAlphaMask()
+            blend.inputImage = textured
+            blend.backgroundImage = image
+            // alpha maskとして単色画像を使用
+            let maskColor = CIColor(red: CGFloat(blendAmount), green: CGFloat(blendAmount), blue: CGFloat(blendAmount))
+            blend.maskImage = CIImage(color: maskColor).cropped(to: image.extent)
+            return blend.outputImage ?? image
+        }
+
+        return normalizedAmount > 0 ? textured : image
+    }
+
+    /// ディヘイズ適用（霞除去）
+    private static func applyDehaze(to image: CIImage, amount: Double) -> CIImage {
+        guard abs(amount) > 0.0001 else { return image }
+
+        // ディヘイズ = コントラスト強化 + 彩度強化 + わずかな暗化
+        let normalizedAmount = clamp(amount, -1, 1)
+
+        var output = image
+
+        // コントラスト強化
+        let contrastFilter = CIFilter.colorControls()
+        contrastFilter.inputImage = output
+        contrastFilter.contrast = Float(1 + normalizedAmount * 0.3)  // +30%まで
+        contrastFilter.saturation = Float(1 + normalizedAmount * 0.2)  // +20%まで
+        contrastFilter.brightness = Float(-normalizedAmount * 0.05)  // わずかに暗化
+        output = contrastFilter.outputImage ?? output
+
+        // 露出補正（霞除去で暗くなりすぎないように）
+        if normalizedAmount > 0.5 {
+            let exposureFilter = CIFilter.exposureAdjust()
+            exposureFilter.inputImage = output
+            exposureFilter.ev = Float(normalizedAmount * 0.1)
+            output = exposureFilter.outputImage ?? output
+        }
+
+        return output
     }
 
     /// フィルムグレイン適用
@@ -1070,6 +1155,8 @@ struct PhotoEditorView: View {
 
         case .effects:
             sliderRow(title: "明瞭度", value: $settings.clarity, range: 0...2, step: 0.05)
+            sliderRow(title: "テクスチャ", value: $settings.texture, range: -1...1, step: 0.05)
+            sliderRow(title: "ディヘイズ", value: $settings.dehaze, range: -1...1, step: 0.05)
             sliderRow(title: "シャープネス", value: $settings.sharpness, range: 0...2, step: 0.05)
             sliderRow(title: "ノイズ除去", value: $settings.noiseReduction, range: 0...1, step: 0.02)
             sliderRow(title: "ヴィネット", value: $settings.vignette, range: -1...1, step: 0.02)
@@ -1443,3 +1530,4 @@ private extension UIImage.Orientation {
         }
     }
 }
+

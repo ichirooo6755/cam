@@ -21,6 +21,7 @@ struct CameraSettings: Codable {
     var multipleExposureCount: Int    // 多重露光の枚数（2-10）
     var enable2in1Composition: Bool
     var enableTimestamp: Bool
+    var stabilization: Bool  // 手ぶれ補正（電子式）
 
     enum CodingKeys: String, CodingKey {
         case cameraMode = "camera_mode"
@@ -38,6 +39,7 @@ struct CameraSettings: Codable {
         case multipleExposureCount = "multiple_exposure_count"
         case enable2in1Composition = "enable_2in1_composition"
         case enableTimestamp = "enable_timestamp"
+        case stabilization
     }
 
     init(from decoder: Decoder) throws {
@@ -71,6 +73,8 @@ struct CameraSettings: Codable {
             try container.decodeIfPresent(Bool.self, forKey: .enable2in1Composition) ?? false
         enableTimestamp =
             try container.decodeIfPresent(Bool.self, forKey: .enableTimestamp) ?? false
+        stabilization =
+            try container.decodeIfPresent(Bool.self, forKey: .stabilization) ?? true
     }
 }
 

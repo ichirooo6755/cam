@@ -165,6 +165,7 @@ struct ContentView: View {
     @State private var multipleExposureMode: String = "blend"  // "blend" or "additive"
     @State private var enable2in1Composition: Bool = false
     @State private var enableTimestamp: Bool = false
+    @State private var enableStabilization: Bool = true
     @State private var manualModeEnabled: Bool = false
 
     // Network
@@ -292,6 +293,19 @@ struct ContentView: View {
                                 .cornerRadius(12)
                             }
 
+                            // カメラモード別JPEG品質説明
+                            VStack(alignment: .leading, spacing: 4) {
+                                HStack {
+                                    Image(systemName: "photo")
+                                        .foregroundColor(.gray.opacity(0.7))
+                                        .font(.caption)
+                                    Text(qualityDescriptionForMode(selectedCameraMode))
+                                        .font(.caption2)
+                                        .foregroundColor(.gray.opacity(0.9))
+                                }
+                            }
+                            .padding(.horizontal, 16)
+
                             isoQuickModule
                             shutterPickerModule
 
@@ -323,6 +337,23 @@ struct ContentView: View {
                             GlassToggle(title: "日時刻印", isOn: $enableTimestamp) {
                                 updateToggle(timestamp: enableTimestamp)
                             }
+                            GlassToggle(title: "手ぶれ補正", isOn: $enableStabilization) {
+                                Task {
+                                    do {
+                                        try await api.updateStabilization(enableStabilization, temporary: false)
+                                    } catch {
+                                        print("手ぶれ補正の更新に失敗: \(error)")
+                                    }
+                                }
+                            }
+                        }
+
+                        // 手ぶれ補正の説明
+                        if enableStabilization {
+                            Text("⚠️ 手ぶれ補正ONで画質がわずかに劣化します")
+                                .font(.caption)
+                                .foregroundColor(.orange.opacity(0.8))
+                                .padding(.horizontal, 16)
                         }
 
                         // 多重露光モード選択
@@ -1379,6 +1410,7 @@ struct ContentView: View {
         multipleExposureMode = settings.multipleExposureMode
         enable2in1Composition = settings.enable2in1Composition
         enableTimestamp = settings.enableTimestamp
+        enableStabilization = settings.stabilization
         manualModeEnabled = !settings.monitoringEnabled
 
         DispatchQueue.main.async {
@@ -1757,6 +1789,23 @@ struct ContentView: View {
         if signal >= 75 { return .green }
         if signal >= 50 { return .orange }
         return .red
+    }
+
+    private func qualityDescriptionForMode(_ mode: CameraModeOption) -> String {
+        switch mode {
+        case .reaction:
+            return "JPEG品質: Q70（高速撮影優先）"
+        case .quality:
+            return "JPEG品質: Q100（最高画質）"
+        case .standard:
+            return "JPEG品質: Q90（標準）"
+        case .battery:
+            return "JPEG品質: Q80（省電力）"
+        case .manual:
+            return "JPEG品質: Q90（標準）"
+        case .raw:
+            return "JPEG品質: Q100（RAW+JPEG）"
+        }
     }
 
     private func scanWiFiNetworks() {

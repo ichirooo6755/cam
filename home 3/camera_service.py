@@ -55,6 +55,18 @@ SETTINGS_RELOAD_INTERVAL = 1.0
 SENSOR_STATUS_WRITE_INTERVAL = 1.0
 MIN_CHANGE_AMOUNT = 5
 
+# カメラモード別のJPEG品質プリセット
+QUALITY_PRESETS = {
+    'reaction': 70,    # 高速撮影優先
+    'quality': 100,    # 最高画質
+    'twilight': 95,    # 高画質（夜景・暗所）
+    'night': 95,       # 高画質（夜間）
+    'standard': 90,    # 標準
+    'manual': 90,      # 標準（マニュアル）
+    'raw': 100,        # RAWモード時はJPEGも最高画質
+    'battery': 80,     # 省電力（品質を抑えてファイルサイズ削減）
+}
+
 DEFAULT_SETTINGS = {
     'camera_mode': 'standard',
     'brightness_threshold': 30,
@@ -132,6 +144,17 @@ def load_settings() -> dict:
                 settings.update(overrides)
     except Exception as e:
         logger.warning(f"Failed to load session overrides: {e}")
+
+    # カメラモードに応じたJPEG品質の自動設定
+    camera_mode = settings.get('camera_mode', 'standard')
+    if camera_mode in QUALITY_PRESETS:
+        # ユーザーが明示的にqualityを設定していない場合のみ自動設定
+        # （session_overridesで個別設定されている場合は尊重）
+        if 'quality' not in settings or settings['quality'] == DEFAULT_SETTINGS['quality']:
+            auto_quality = QUALITY_PRESETS[camera_mode]
+            settings['quality'] = auto_quality
+            logger.info(f"Auto-adjusted quality to {auto_quality} for camera_mode '{camera_mode}'")
+
     return settings
 
 def write_sensor_status(state: dict) -> None:
@@ -226,6 +249,18 @@ def _apply_camera_controls(camera: Picamera2, settings: dict) -> None:
         controls['Sharpness'] = max(0.0, min(16.0, sharpness_float))
     except (ValueError, TypeError):
         pass
+
+    # 手ぶれ補正（VideoStabilisationMode）
+    stabilization_enabled = settings.get('stabilization', True)
+    if libcamera is not None:
+        try:
+            if stabilization_enabled:
+                controls['VideoStabilisationMode'] = libcamera.controls.draft.VideoStabilisationModeEnum.On
+            else:
+                controls['VideoStabilisationMode'] = libcamera.controls.draft.VideoStabilisationModeEnum.Off
+        except (AttributeError, KeyError):
+            # VideoStabilisationModeが利用できない場合はスキップ
+            logger.debug("VideoStabilisationMode not available on this platform")
 
     if controls:
         camera.set_controls(controls)

@@ -200,6 +200,11 @@ actor CameraAPI {
         try await updateSettings(["monitoring_enabled": enabled], temporary: temporary)
     }
 
+    /// 手ぶれ補正の有効/無効を更新
+    func updateStabilization(_ enabled: Bool, temporary: Bool = true) async throws {
+        try await updateSettings(["stabilization": enabled], temporary: temporary)
+    }
+
     /// トグル設定を更新
     func updateToggleSettings(
         multipleExposure: Bool? = nil,

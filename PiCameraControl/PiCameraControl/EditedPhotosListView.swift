@@ -205,7 +205,7 @@ struct PhotoDetailView: View {
                         }
 
                         // 日時
-                        Text(photo.createdAt.formatted(date: .long, time: .short))
+                        Text(photo.createdAt.formatted(date: .long, time: .shortened))
                             .font(.caption)
                             .foregroundColor(.secondary)
 
