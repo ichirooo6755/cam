@@ -1,0 +1,391 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		E0000001000000000000000A /* PiCameraControlApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0000001000000000000000B /* PiCameraControlApp.swift */; };
+		E0000001000000000000000C /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0000001000000000000000D /* ContentView.swift */; };
+		E0000001000000000000000E /* CameraAPI.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0000001000000000000000F /* CameraAPI.swift */; };
+		E00000010000000000000010 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = E00000010000000000000011 /* Models.swift */; };
+		E00000010000000000000012 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = E00000010000000000000013 /* Assets.xcassets */; };
+		E00000010000000000000024 /* PhotoGalleryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E00000010000000000000025 /* PhotoGalleryView.swift */; };
+		E00000010000000000000028 /* SimpleCameraAPI.swift in Sources */ = {isa = PBXBuildFile; fileRef = E00000010000000000000029 /* SimpleCameraAPI.swift */; };
+		E0000001000000000000002A /* PhotoEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0000001000000000000002B /* PhotoEditorView.swift */; };
+		E0000001000000000000002C /* PersistenceController.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0000001000000000000002D /* PersistenceController.swift */; };
+		E0000001000000000000002E /* CoreDataModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0000001000000000000002F /* CoreDataModels.swift */; };
+		E00000010000000000000030 /* EditedPhotosListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E00000010000000000000031 /* EditedPhotosListView.swift */; };
+		E00000010000000000000032 /* PiCameraData.xcdatamodeld in Sources */ = {isa = PBXBuildFile; fileRef = E00000010000000000000033 /* PiCameraData.xcdatamodeld */; };
+		F5B8D66C2F44588500000E1A /* CameraStatusView 2.swift in Sources */ = {isa = PBXBuildFile; fileRef = F5B8D66B2F44588500000E1A /* CameraStatusView 2.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		E0000001000000000000000B /* PiCameraControlApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiCameraControlApp.swift; sourceTree = "<group>"; };
+		E0000001000000000000000D /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		E0000001000000000000000F /* CameraAPI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraAPI.swift; sourceTree = "<group>"; };
+		E00000010000000000000011 /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
+		E00000010000000000000013 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		E00000010000000000000015 /* PiCameraControl.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PiCameraControl.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		E00000010000000000000025 /* PhotoGalleryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoGalleryView.swift; sourceTree = "<group>"; };
+		E00000010000000000000029 /* SimpleCameraAPI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimpleCameraAPI.swift; sourceTree = "<group>"; };
+		E0000001000000000000002B /* PhotoEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoEditorView.swift; sourceTree = "<group>"; };
+		E0000001000000000000002D /* PersistenceController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistenceController.swift; sourceTree = "<group>"; };
+		E0000001000000000000002F /* CoreDataModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoreDataModels.swift; sourceTree = "<group>"; };
+		E00000010000000000000031 /* EditedPhotosListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditedPhotosListView.swift; sourceTree = "<group>"; };
+		E00000010000000000000034 /* PiCameraData.xcdatamodel */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcdatamodel; path = PiCameraData.xcdatamodel; sourceTree = "<group>"; };
+		F5B8D66B2F44588500000E1A /* CameraStatusView 2.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "CameraStatusView 2.swift"; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		E00000010000000000000016 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		E00000010000000000000017 /* PiCameraControl */ = {
+			isa = PBXGroup;
+			children = (
+				E0000001000000000000000B /* PiCameraControlApp.swift */,
+				E0000001000000000000000D /* ContentView.swift */,
+				E0000001000000000000000F /* CameraAPI.swift */,
+				E00000010000000000000011 /* Models.swift */,
+				E00000010000000000000025 /* PhotoGalleryView.swift */,
+				E0000001000000000000002B /* PhotoEditorView.swift */,
+				E00000010000000000000031 /* EditedPhotosListView.swift */,
+				E00000010000000000000029 /* SimpleCameraAPI.swift */,
+				E0000001000000000000002D /* PersistenceController.swift */,
+				E0000001000000000000002F /* CoreDataModels.swift */,
+				E00000010000000000000033 /* PiCameraData.xcdatamodeld */,
+				E00000010000000000000013 /* Assets.xcassets */,
+				F5B8D66B2F44588500000E1A /* CameraStatusView 2.swift */,
+			);
+			path = PiCameraControl;
+			sourceTree = "<group>";
+		};
+		E00000010000000000000018 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				E00000010000000000000015 /* PiCameraControl.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		E00000010000000000000019 = {
+			isa = PBXGroup;
+			children = (
+				E00000010000000000000017 /* PiCameraControl */,
+				E00000010000000000000018 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		E0000001000000000000001A /* PiCameraControl */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = E0000001000000000000001B /* Build configuration list for PBXNativeTarget "PiCameraControl" */;
+			buildPhases = (
+				E0000001000000000000001C /* Sources */,
+				E00000010000000000000016 /* Frameworks */,
+				E0000001000000000000001D /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = PiCameraControl;
+			productName = PiCameraControl;
+			productReference = E00000010000000000000015 /* PiCameraControl.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		E0000001000000000000001E /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 1500;
+				LastUpgradeCheck = 1500;
+				TargetAttributes = {
+					E0000001000000000000001A = {
+						CreatedOnToolsVersion = 15.0;
+					};
+				};
+			};
+			buildConfigurationList = E0000001000000000000001F /* Build configuration list for PBXProject "PiCameraControl" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = ja;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+				ja,
+			);
+			mainGroup = E00000010000000000000019;
+			productRefGroup = E00000010000000000000018 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				E0000001000000000000001A /* PiCameraControl */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		E0000001000000000000001D /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				E00000010000000000000012 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		E0000001000000000000001C /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				E0000001000000000000000A /* PiCameraControlApp.swift in Sources */,
+				F5B8D66C2F44588500000E1A /* CameraStatusView 2.swift in Sources */,
+				E0000001000000000000000C /* ContentView.swift in Sources */,
+				E0000001000000000000000E /* CameraAPI.swift in Sources */,
+				E00000010000000000000010 /* Models.swift in Sources */,
+				E00000010000000000000024 /* PhotoGalleryView.swift in Sources */,
+				E0000001000000000000002A /* PhotoEditorView.swift in Sources */,
+				E00000010000000000000028 /* SimpleCameraAPI.swift in Sources */,
+				E0000001000000000000002C /* PersistenceController.swift in Sources */,
+				E0000001000000000000002E /* CoreDataModels.swift in Sources */,
+				E00000010000000000000030 /* EditedPhotosListView.swift in Sources */,
+				E00000010000000000000032 /* PiCameraData.xcdatamodeld in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		E00000010000000000000020 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		E00000010000000000000021 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		E00000010000000000000022 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = K5D7GVJFG7;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = PiCameraControl/Info.plist;
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.example.PiCameraControl;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		E00000010000000000000023 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = K5D7GVJFG7;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = PiCameraControl/Info.plist;
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.example.PiCameraControl;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		E0000001000000000000001B /* Build configuration list for PBXNativeTarget "PiCameraControl" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				E00000010000000000000022 /* Debug */,
+				E00000010000000000000023 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		E0000001000000000000001F /* Build configuration list for PBXProject "PiCameraControl" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				E00000010000000000000020 /* Debug */,
+				E00000010000000000000021 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCVersionGroup section */
+		E00000010000000000000033 /* PiCameraData.xcdatamodeld */ = {
+			isa = XCVersionGroup;
+			children = (
+				E00000010000000000000034 /* PiCameraData.xcdatamodel */,
+			);
+			currentVersion = E00000010000000000000034 /* PiCameraData.xcdatamodel */;
+			path = PiCameraData.xcdatamodeld;
+			sourceTree = "<group>";
+			versionGroupType = wrapper.xcdatamodel;
+		};
+/* End XCVersionGroup section */
+	};
+	rootObject = E0000001000000000000001E /* Project object */;
+}

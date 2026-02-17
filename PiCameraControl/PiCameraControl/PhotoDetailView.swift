@@ -77,7 +77,7 @@ struct PhotoDetailView: View {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Menu {
                         Button {
-                            if let image = currentVersion?.image {
+                            if currentVersion?.image != nil {
                                 showEditor = true
                             }
                         } label: {

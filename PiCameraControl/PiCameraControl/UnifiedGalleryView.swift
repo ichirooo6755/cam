@@ -204,7 +204,7 @@ struct UnifiedGalleryView: View {
             let fetchRequest: NSFetchRequest<PhotoGroup> = PhotoGroup.fetchRequest()
             fetchRequest.predicate = NSPredicate(format: "id == %@", filename)
 
-            if let existingGroup = try? viewContext.fetch(fetchRequest).first {
+            if (try? viewContext.fetch(fetchRequest).first) != nil {
                 // 既存のグループは何もしない
                 continue
             }

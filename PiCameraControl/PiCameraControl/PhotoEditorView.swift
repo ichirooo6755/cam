@@ -972,7 +972,7 @@ private enum PhotoEditorRenderer {
 
         var output = image
 
-        for (channel, targetHue) in channels {
+        for (channel, _) in channels {
             // このチャンネルに変更があるかチェック
             guard abs(channel.hue) > 0.01 || abs(channel.saturation) > 0.01 || abs(channel.luminance) > 0.01 else {
                 continue
@@ -1089,10 +1089,10 @@ private enum PhotoEditorRenderer {
 
         // CIColorCurvesフィルターを使用
         // 各チャンネルのポイントをCIVectorに変換
-        let masterPoints = createCurveVector(from: settings.master.points)
-        let redPoints = createCurveVector(from: settings.red.points)
-        let greenPoints = createCurveVector(from: settings.green.points)
-        let bluePoints = createCurveVector(from: settings.blue.points)
+        _ = createCurveVector(from: settings.master.points)
+        _ = createCurveVector(from: settings.red.points)
+        _ = createCurveVector(from: settings.green.points)
+        _ = createCurveVector(from: settings.blue.points)
 
         guard let filter = CIFilter(name: "CIToneCurve") else { return image }
         filter.setValue(image, forKey: kCIInputImageKey)

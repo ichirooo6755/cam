@@ -84,20 +84,26 @@ final class CaptureLocationProvider: NSObject, ObservableObject, CLLocationManag
         }
     }
 
-    func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
-        authorization = manager.authorizationStatus
-        if authorization == .authorizedAlways || authorization == .authorizedWhenInUse {
-            manager.startUpdatingLocation()
+    nonisolated func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+        Task { @MainActor in
+            authorization = manager.authorizationStatus
+            if authorization == .authorizedAlways || authorization == .authorizedWhenInUse {
+                manager.startUpdatingLocation()
+            }
         }
     }
 
-    func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
-        latestLocation = locations.last
-        lastLocationError = nil
+    nonisolated func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
+        Task { @MainActor in
+            latestLocation = locations.last
+            lastLocationError = nil
+        }
     }
 
-    func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
-        lastLocationError = error.localizedDescription
+    nonisolated func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
+        Task { @MainActor in
+            lastLocationError = error.localizedDescription
+        }
     }
 }
 
@@ -598,7 +604,6 @@ struct ContentView: View {
 
     private func fetchFocusPeaking() {
         isLoading = true
-        let apiClient = api
         let color = focusPeakingColor
 
         Task {
