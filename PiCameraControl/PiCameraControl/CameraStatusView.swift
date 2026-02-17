@@ -85,76 +85,40 @@ struct CameraStatusView: View {
         }
     }
 
-    // MARK: - ステータスメーター（Nikon 35Tiスタイル）
+    // MARK: - ステータスメーター（Nikon 35Ti風）
 
     private var statusMetersSection: some View {
-        VStack(spacing: 20) {
+        VStack(spacing: MinimalSpacing.md) {
             Text("EXPOSURE METER")
-                .font(.system(size: 11, weight: .bold, design: .monospaced))
-                .foregroundColor(.red.opacity(0.7))
+                .font(MinimalTypography.labelMedium)
+                .foregroundColor(MinimalTheme.Text.tertiary)
                 .tracking(2)
 
-            HStack(spacing: 30) {
-                // ISO メーター
-                VStack(spacing: 8) {
-                    Text("ISO")
-                        .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                        .foregroundColor(.gray)
-
-                    if let recommendation = meteringRecommendation {
-                        analogMeter(
-                            value: Double(recommendation.recommendedISO),
-                            range: 100...3200,
-                            label: "\(recommendation.recommendedISO)"
-                        )
-                    } else {
-                        analogMeter(value: 400, range: 100...3200, label: "---")
-                    }
-                }
-
-                // シャッタースピード メーター
-                VStack(spacing: 8) {
-                    Text("SHUTTER")
-                        .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                        .foregroundColor(.gray)
-
-                    if let recommendation = meteringRecommendation,
-                       let label = recommendation.recommendedShutterLabel {
-                        analogMeter(
-                            value: log2(Double(recommendation.recommendedShutterUs)),
-                            range: 10...20,
-                            label: label
-                        )
-                    } else {
-                        analogMeter(value: 14, range: 10...20, label: "---")
-                    }
-                }
-
-                // フォーカス距離 メーター
-                VStack(spacing: 8) {
-                    Text("FOCUS")
-                        .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                        .foregroundColor(.gray)
-
-                    if let recommendation = meteringRecommendation,
-                       let focusM = recommendation.recommendedFocusM {
-                        analogMeter(
-                            value: focusM,
-                            range: 0.5...10.0,
-                            label: String(format: "%.1fm", focusM)
-                        )
-                    } else {
-                        analogMeter(value: 3.0, range: 0.5...10.0, label: "---")
-                    }
-                }
+            if let recommendation = meteringRecommendation {
+                Nikon35TiMeterView(
+                    aperture: 2.8,  // TODO: 実際のf値
+                    shutterSpeedUs: recommendation.recommendedShutterUs,
+                    iso: recommendation.recommendedISO,
+                    exposureCompensation: 0  // TODO: 実際の露出補正
+                )
+            } else if let settings = currentSettings {
+                Nikon35TiMeterView(
+                    aperture: 2.8,  // TODO: 実際のf値
+                    shutterSpeedUs: settings.shutterSpeed.microseconds ?? 4000,
+                    iso: settings.iso.value ?? 400,
+                    exposureCompensation: 0  // TODO: 実際の露出補正
+                )
+            } else {
+                Nikon35TiMeterView(
+                    aperture: 2.8,
+                    shutterSpeedUs: 4000,
+                    iso: 400,
+                    exposureCompensation: 0
+                )
             }
         }
-        .padding(24)
-        .background(
-            RoundedRectangle(cornerRadius: 16)
-                .fill(Color(red: 0.15, green: 0.15, blue: 0.17))
-                .shadow(color: .black.opacity(0.3), radius: 10, y: 5)
-        )
+        .padding(MinimalSpacing.lg)
+        .minimalCard()
     }
 
     // MARK: - アナログメーター（Nikon 35Tiスタイル）

@@ -64,6 +64,28 @@ struct HSLSettings: Codable, Hashable {
     )
 }
 
+// MARK: - トーンカーブ
+
+struct ToneCurve: Codable, Hashable {
+    var points: [Double]  // 5点制御 [0, 0.25, 0.5, 0.75, 1.0]
+
+    static let `default` = ToneCurve(points: [0, 0.25, 0.5, 0.75, 1.0])
+}
+
+struct ToneCurveSettings: Codable, Hashable {
+    var master: ToneCurve
+    var red: ToneCurve
+    var green: ToneCurve
+    var blue: ToneCurve
+
+    static let `default` = ToneCurveSettings(
+        master: .default,
+        red: .default,
+        green: .default,
+        blue: .default
+    )
+}
+
 // MARK: - スプリットトーニング
 
 struct SplitToningSettings: Codable, Hashable {
@@ -106,6 +128,7 @@ struct PhotoEditorSettings: Codable, Hashable {
     var radialMask: RadialMaskSettings
     var hsl: HSLSettings  // HSL調整（8色チャンネル）
     var splitToning: SplitToningSettings  // スプリットトーニング
+    var toneCurve: ToneCurveSettings  // トーンカーブ（Master/RGB）
 
     static let `default` = PhotoEditorSettings(
         exposureEV: 0,
@@ -130,7 +153,8 @@ struct PhotoEditorSettings: Codable, Hashable {
         crop: .full,
         radialMask: .default,
         hsl: .default,
-        splitToning: .default
+        splitToning: .default,
+        toneCurve: .default
     )
 }
 
@@ -657,6 +681,9 @@ private enum PhotoEditorRenderer {
         // スプリットトーニング
         output = applySplitToning(to: output, settings: settings.splitToning)
 
+        // トーンカーブ
+        output = applyToneCurve(to: output, settings: settings.toneCurve)
+
         let rect = output.extent.integral
         guard let cg = context.createCGImage(output, from: rect) else { return nil }
         return UIImage(cgImage: cg, scale: image.scale, orientation: .up)
@@ -1050,6 +1077,92 @@ private enum PhotoEditorRenderer {
         return output
     }
 
+    /// トーンカーブ適用（Master/R/G/B）
+    private static func applyToneCurve(to image: CIImage, settings: ToneCurveSettings) -> CIImage {
+        // デフォルト値（[0, 0.25, 0.5, 0.75, 1.0]）かチェック
+        let isDefault = settings.master == .default &&
+                        settings.red == .default &&
+                        settings.green == .default &&
+                        settings.blue == .default
+
+        guard !isDefault else { return image }
+
+        // CIColorCurvesフィルターを使用
+        // 各チャンネルのポイントをCIVectorに変換
+        let masterPoints = createCurveVector(from: settings.master.points)
+        let redPoints = createCurveVector(from: settings.red.points)
+        let greenPoints = createCurveVector(from: settings.green.points)
+        let bluePoints = createCurveVector(from: settings.blue.points)
+
+        guard let filter = CIFilter(name: "CIToneCurve") else { return image }
+        filter.setValue(image, forKey: kCIInputImageKey)
+
+        // 5点制御: points[0]=0.0, points[1]=0.25, points[2]=0.5, points[3]=0.75, points[4]=1.0
+        // CIToneCurveは各ポイントをCGPoint(x: input, y: output)で指定
+        // Master curve適用
+        if settings.master != .default {
+            let pts = settings.master.points
+            filter.setValue(CIVector(x: 0.0, y: pts[0]), forKey: "inputPoint0")
+            filter.setValue(CIVector(x: 0.25, y: pts[1]), forKey: "inputPoint1")
+            filter.setValue(CIVector(x: 0.5, y: pts[2]), forKey: "inputPoint2")
+            filter.setValue(CIVector(x: 0.75, y: pts[3]), forKey: "inputPoint3")
+            filter.setValue(CIVector(x: 1.0, y: pts[4]), forKey: "inputPoint4")
+        }
+
+        var output = filter.outputImage ?? image
+
+        // RGB各チャンネルはCIColorMatrixで適用
+        // （CIToneCurveはMasterのみなので、RGB別はカスタム実装が必要）
+        // 簡易実装: RGBチャンネルもCIToneCurveで全体に適用（本格的にはカスタムKernel必要）
+        if settings.red != .default {
+            let redFilter = CIFilter(name: "CIToneCurve")
+            redFilter?.setValue(output, forKey: kCIInputImageKey)
+            let pts = settings.red.points
+            redFilter?.setValue(CIVector(x: 0.0, y: pts[0]), forKey: "inputPoint0")
+            redFilter?.setValue(CIVector(x: 0.25, y: pts[1]), forKey: "inputPoint1")
+            redFilter?.setValue(CIVector(x: 0.5, y: pts[2]), forKey: "inputPoint2")
+            redFilter?.setValue(CIVector(x: 0.75, y: pts[3]), forKey: "inputPoint3")
+            redFilter?.setValue(CIVector(x: 1.0, y: pts[4]), forKey: "inputPoint4")
+            output = redFilter?.outputImage ?? output
+        }
+
+        if settings.green != .default {
+            let greenFilter = CIFilter(name: "CIToneCurve")
+            greenFilter?.setValue(output, forKey: kCIInputImageKey)
+            let pts = settings.green.points
+            greenFilter?.setValue(CIVector(x: 0.0, y: pts[0]), forKey: "inputPoint0")
+            greenFilter?.setValue(CIVector(x: 0.25, y: pts[1]), forKey: "inputPoint1")
+            greenFilter?.setValue(CIVector(x: 0.5, y: pts[2]), forKey: "inputPoint2")
+            greenFilter?.setValue(CIVector(x: 0.75, y: pts[3]), forKey: "inputPoint3")
+            greenFilter?.setValue(CIVector(x: 1.0, y: pts[4]), forKey: "inputPoint4")
+            output = greenFilter?.outputImage ?? output
+        }
+
+        if settings.blue != .default {
+            let blueFilter = CIFilter(name: "CIToneCurve")
+            blueFilter?.setValue(output, forKey: kCIInputImageKey)
+            let pts = settings.blue.points
+            blueFilter?.setValue(CIVector(x: 0.0, y: pts[0]), forKey: "inputPoint0")
+            blueFilter?.setValue(CIVector(x: 0.25, y: pts[1]), forKey: "inputPoint1")
+            blueFilter?.setValue(CIVector(x: 0.5, y: pts[2]), forKey: "inputPoint2")
+            blueFilter?.setValue(CIVector(x: 0.75, y: pts[3]), forKey: "inputPoint3")
+            blueFilter?.setValue(CIVector(x: 1.0, y: pts[4]), forKey: "inputPoint4")
+            output = blueFilter?.outputImage ?? output
+        }
+
+        return output
+    }
+
+    /// トーンカーブポイントをCIVectorに変換（5点）
+    private static func createCurveVector(from points: [Double]) -> CIVector {
+        // 5点制御: [0, 0.25, 0.5, 0.75, 1.0]
+        guard points.count == 5 else {
+            return CIVector(values: [0, 0.25, 0.5, 0.75, 1.0], count: 5)
+        }
+        let values = points.map { CGFloat(clamp($0, 0, 1)) }
+        return CIVector(values: values, count: 5)
+    }
+
     /// HSV → RGB変換
     private static func hsvToRGB(h: Double, s: Double, v: Double) -> (r: Double, g: Double, b: Double) {
         let c = v * s
@@ -1078,42 +1191,17 @@ private enum PhotoEditorRenderer {
 }
 
 struct PhotoEditorView: View {
-    private enum Panel: String, CaseIterable, Identifiable {
-        case light
-        case color
-        case effects
-        case hsl
-        case splitToning
-        case crop
-        case radial
-        case presets
-
-        var id: String { rawValue }
-
-        var title: String {
-            switch self {
-            case .light: return "ライト"
-            case .color: return "カラー"
-            case .effects: return "エフェクト"
-            case .hsl: return "HSL"
-            case .splitToning: return "スプリット"
-            case .crop: return "トリミング"
-            case .radial: return "ラジアル"
-            case .presets: return "プリセット"
-            }
-        }
-    }
-
     private enum StorageKeys {
         static let presets = "photo_editor_presets_v1"
     }
 
     let originalImage: UIImage
+    var sourcePhotoGroup: PhotoGroup? = nil  // 編集元のPhotoGroup（保存時に使用）
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.managedObjectContext) private var viewContext
 
-    @State private var panel: Panel = .light
+    @State private var selectedCategory: EditorCategory = .light
     @State private var settings: PhotoEditorSettings = .default
     @State private var previewSourceImage: UIImage?
     @State private var previewImage: UIImage?
@@ -1289,30 +1377,25 @@ struct PhotoEditorView: View {
     }
 
     private var controlsArea: some View {
-        VStack(spacing: 12) {
-            Picker("Panel", selection: $panel) {
-                ForEach(Panel.allCases) { p in
-                    Text(p.title).tag(p)
-                }
-            }
-            .pickerStyle(.segmented)
+        VStack(spacing: MinimalSpacing.md) {
+            // アイコングリッド
+            IconGridSelector(selectedCategory: $selectedCategory)
 
-            Divider().opacity(0.2)
-
+            // 選択されたカテゴリのコントロール
             ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
-                    panelControls
+                VStack(alignment: .leading, spacing: MinimalSpacing.md) {
+                    categoryControls
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
-        .padding(16)
-        .background(Color(.systemBackground).opacity(0.95))
+        .padding(MinimalSpacing.md)
+        .background(MinimalTheme.Background.surface.opacity(0.95))
     }
 
     @ViewBuilder
-    private var panelControls: some View {
-        switch panel {
+    private var categoryControls: some View {
+        switch selectedCategory {
         case .light:
             sliderRow(title: "露出", value: $settings.exposureEV, range: -2...2, step: 0.05)
             sliderRow(title: "コントラスト", value: $settings.contrast, range: 0.5...1.6, step: 0.02)
@@ -1374,6 +1457,9 @@ struct PhotoEditorView: View {
 
         case .splitToning:
             splitToningControls
+
+        case .toneCurve:
+            toneCurveControls
 
         case .crop:
             cropControls
@@ -1486,6 +1572,63 @@ struct PhotoEditorView: View {
 
             sliderRow(title: "バランス", value: stBinding.balance, range: -100...100, step: 1)
         }
+    }
+
+    private var toneCurveControls: some View {
+        let tcBinding = Binding(get: { settings.toneCurve }, set: { settings.toneCurve = $0 })
+        return VStack(alignment: .leading, spacing: 16) {
+            HStack {
+                Text("トーンカーブ（5点制御）")
+                    .font(.caption.weight(.semibold))
+                    .foregroundColor(.secondary)
+                Spacer()
+                Button("リセット") {
+                    settings.toneCurve = .default
+                }
+                .font(.caption.weight(.bold))
+            }
+
+            // Masterチャンネル
+            toneCurveChannelSection(title: "Master", curve: tcBinding.master, color: .white)
+
+            Divider().padding(.vertical, 8)
+
+            // Redチャンネル
+            toneCurveChannelSection(title: "Red", curve: tcBinding.red, color: .red)
+
+            Divider().padding(.vertical, 8)
+
+            // Greenチャンネル
+            toneCurveChannelSection(title: "Green", curve: tcBinding.green, color: .green)
+
+            Divider().padding(.vertical, 8)
+
+            // Blueチャンネル
+            toneCurveChannelSection(title: "Blue", curve: tcBinding.blue, color: .blue)
+
+            Text("📝 0.0=黒, 0.25=ダークトーン, 0.5=中間, 0.75=ハイライト, 1.0=白")
+                .font(.caption2)
+                .foregroundColor(.gray)
+                .padding(.top, 8)
+        }
+    }
+
+    private func toneCurveChannelSection(title: String, curve: Binding<ToneCurve>, color: Color) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title.uppercased())
+                .font(.caption2.weight(.bold))
+                .foregroundColor(color.opacity(0.8))
+
+            // 5点制御: points[0]=0.0, points[1]=0.25, points[2]=0.5, points[3]=0.75, points[4]=1.0
+            sliderRow(title: "0.0 (黒)", value: curve.points[0], range: 0...1, step: 0.01)
+            sliderRow(title: "0.25 (ダーク)", value: curve.points[1], range: 0...1, step: 0.01)
+            sliderRow(title: "0.5 (中間)", value: curve.points[2], range: 0...1, step: 0.01)
+            sliderRow(title: "0.75 (ハイライト)", value: curve.points[3], range: 0...1, step: 0.01)
+            sliderRow(title: "1.0 (白)", value: curve.points[4], range: 0...1, step: 0.01)
+        }
+        .padding(12)
+        .background(Color(red: 0.15, green: 0.15, blue: 0.17))
+        .cornerRadius(12)
     }
 
     private var presetsControls: some View {

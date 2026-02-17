@@ -224,11 +224,15 @@ struct ContentView: View {
     var body: some View {
         NavigationView {
             ZStack {
-                // Nikon 35Ti Style Background
+                // Minimal White Background
+                MinimalTheme.Background.primary
+                    .ignoresSafeArea()
+
                 LinearGradient(
                     colors: [
-                        Color(red: 0.1, green: 0.1, blue: 0.12),
-                        Color(red: 0.05, green: 0.05, blue: 0.08),
+                        Color.blue.opacity(0.06),
+                        Color.teal.opacity(0.04),
+                        Color.clear,
                     ],
                     startPoint: .topLeading,
                     endPoint: .bottomTrailing

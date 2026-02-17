@@ -15,14 +15,9 @@ struct PiCameraControlApp: App {
                         Label("ステータス", systemImage: "gauge.with.needle")
                     }
 
-                PhotoGalleryView()
+                UnifiedGalleryView()
                     .tabItem {
-                        Label("写真", systemImage: "photo.on.rectangle")
-                    }
-
-                EditedPhotosListView()
-                    .tabItem {
-                        Label("編集済み", systemImage: "photo.badge.checkmark")
+                        Label("ギャラリー", systemImage: "photo.on.rectangle.angled")
                     }
 
                 ContentView()
