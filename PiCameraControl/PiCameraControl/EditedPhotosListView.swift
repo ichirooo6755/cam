@@ -14,7 +14,8 @@ struct EditedPhotosListView: View {
     private var photos: FetchedResults<EditedPhoto>
 
     @State private var selectedPhoto: EditedPhoto?
-    @State private var showPhotoEditor: Bool = false
+    @State private var showPhotoDetail: Bool = false
+    @State private var detailPhoto: EditedPhoto?
 
     var body: some View {
         NavigationView {
@@ -31,6 +32,12 @@ struct EditedPhotosListView: View {
         .sheet(item: $selectedPhoto) { photo in
             if let image = photo.image {
                 PhotoEditorView(originalImage: image)
+                    .environment(\.managedObjectContext, viewContext)
+            }
+        }
+        .sheet(isPresented: $showPhotoDetail) {
+            if let photo = detailPhoto {
+                PhotoDetailView(photo: photo)
                     .environment(\.managedObjectContext, viewContext)
             }
         }
@@ -114,7 +121,8 @@ struct EditedPhotosListView: View {
         }
         .contentShape(Rectangle())
         .onTapGesture {
-            selectedPhoto = photo
+            detailPhoto = photo
+            showPhotoDetail = true
         }
         .contextMenu {
             Button(role: .destructive) {
@@ -147,6 +155,159 @@ struct EditedPhotosListView: View {
     private func saveToPhotoLibrary(_ image: UIImage) {
         UIImageWriteToSavedPhotosAlbum(image, nil, nil, nil)
     }
+}
+
+// MARK: - PhotoDetailView
+
+struct PhotoDetailView: View {
+    @Environment(\.managedObjectContext) private var viewContext
+    @Environment(\.dismiss) private var dismiss
+
+    @ObservedObject var photo: EditedPhoto
+    @State private var showShareSheet = false
+    @State private var imageToShare: UIImage?
+
+    var body: some View {
+        NavigationView {
+            ZStack {
+                Color.black.ignoresSafeArea()
+
+                VStack(spacing: 0) {
+                    // 画像表示
+                    if let image = photo.image {
+                        Image(uiImage: image)
+                            .resizable()
+                            .aspectRatio(contentMode: .fit)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
+
+                    // 評価・情報エリア
+                    VStack(spacing: 16) {
+                        Divider()
+
+                        // 評価（星）
+                        VStack(spacing: 8) {
+                            Text("この編集を評価")
+                                .font(.caption.weight(.semibold))
+                                .foregroundColor(.secondary)
+
+                            HStack(spacing: 12) {
+                                ForEach(1...5, id: \.self) { index in
+                                    Button {
+                                        updateRating(index)
+                                    } label: {
+                                        Image(systemName: index <= photo.userRating ? "star.fill" : "star")
+                                            .font(.title2)
+                                            .foregroundColor(index <= photo.userRating ? .yellow : .gray)
+                                    }
+                                }
+                            }
+                        }
+
+                        // 日時
+                        Text(photo.createdAt.formatted(date: .long, time: .short))
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+
+                        // 設定プレビュー
+                        if let settings = photo.settings {
+                            ScrollView(.horizontal, showsIndicators: false) {
+                                HStack(spacing: 12) {
+                                    settingBadge("露出", String(format: "%.2f", settings.exposureEV))
+                                    settingBadge("コントラスト", String(format: "%.2f", settings.contrast))
+                                    settingBadge("彩度", String(format: "%.2f", settings.saturation))
+                                    if abs(settings.temperature) > 0.01 {
+                                        settingBadge("色温度", String(format: "%.0f", settings.temperature))
+                                    }
+                                }
+                                .padding(.horizontal)
+                            }
+                        }
+                    }
+                    .padding(.vertical, 16)
+                    .background(Color(.systemBackground).opacity(0.95))
+                }
+            }
+            .navigationTitle("写真詳細")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("閉じる") {
+                        dismiss()
+                    }
+                }
+
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    HStack(spacing: 14) {
+                        Button {
+                            if let image = photo.image {
+                                imageToShare = image
+                                showShareSheet = true
+                            }
+                        } label: {
+                            Image(systemName: "square.and.arrow.up")
+                        }
+
+                        Button(role: .destructive) {
+                            deletePhoto()
+                        } label: {
+                            Image(systemName: "trash")
+                        }
+                    }
+                }
+            }
+        }
+        .sheet(isPresented: $showShareSheet) {
+            if let image = imageToShare {
+                ShareSheet(items: [image])
+            }
+        }
+    }
+
+    private func settingBadge(_ title: String, _ value: String) -> some View {
+        VStack(spacing: 2) {
+            Text(title)
+                .font(.caption2)
+                .foregroundColor(.secondary)
+            Text(value)
+                .font(.caption.weight(.semibold))
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(Color(.secondarySystemBackground))
+        .cornerRadius(8)
+    }
+
+    private func updateRating(_ rating: Int) {
+        photo.userRating = Int16(rating)
+        do {
+            try viewContext.save()
+        } catch {
+            print("Failed to update rating: \(error)")
+        }
+    }
+
+    private func deletePhoto() {
+        viewContext.delete(photo)
+        do {
+            try viewContext.save()
+            dismiss()
+        } catch {
+            print("Failed to delete photo: \(error)")
+        }
+    }
+}
+
+// MARK: - ShareSheet
+
+struct ShareSheet: UIViewControllerRepresentable {
+    let items: [Any]
+
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: items, applicationActivities: nil)
+    }
+
+    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }
 
 // MARK: - Preview

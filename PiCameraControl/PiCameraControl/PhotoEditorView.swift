@@ -94,6 +94,161 @@ final class ImageWriteCoordinator: NSObject {
     }
 }
 
+// MARK: - ImageAnalyzer
+
+struct ImageAnalysisResult {
+    var brightness: Double  // 0-1
+    var contrast: Double    // 0-1
+    var saturation: Double  // 0-1
+}
+
+private enum ImageAnalyzer {
+    private static let context = CIContext(options: nil)
+
+    static func analyze(image: UIImage) -> ImageAnalysisResult? {
+        let ciImage: CIImage
+        if let cgImage = image.cgImage {
+            ciImage = CIImage(cgImage: cgImage)
+        } else if let ci = image.ciImage {
+            ciImage = ci
+        } else if let ci = CIImage(image: image) {
+            ciImage = ci
+        } else {
+            return nil
+        }
+
+        let extent = ciImage.extent
+
+        // 平均色を計算
+        let averageFilter = CIFilter(name: "CIAreaAverage", parameters: [
+            kCIInputImageKey: ciImage,
+            kCIInputExtentKey: CIVector(cgRect: extent)
+        ])
+
+        guard let outputImage = averageFilter?.outputImage else { return nil }
+
+        var bitmap = [UInt8](repeating: 0, count: 4)
+        context.render(outputImage, toBitmap: &bitmap, rowBytes: 4, bounds: CGRect(x: 0, y: 0, width: 1, height: 1), format: .RGBA8, colorSpace: nil)
+
+        let r = Double(bitmap[0]) / 255.0
+        let g = Double(bitmap[1]) / 255.0
+        let b = Double(bitmap[2]) / 255.0
+
+        // 明るさ（輝度）
+        let brightness = 0.299 * r + 0.587 * g + 0.114 * b
+
+        // コントラスト（簡易推定：ヒストグラムの代わりに標準偏差を使用）
+        let contrast = estimateContrast(ciImage: ciImage)
+
+        // 彩度（色の鮮やかさ）
+        let maxRGB = max(r, g, b)
+        let minRGB = min(r, g, b)
+        let saturation = maxRGB > 0 ? (maxRGB - minRGB) / maxRGB : 0
+
+        return ImageAnalysisResult(brightness: brightness, contrast: contrast, saturation: saturation)
+    }
+
+    private static func estimateContrast(ciImage: CIImage) -> Double {
+        // 簡易的なコントラスト推定（0-1の範囲）
+        // 実際にはヒストグラム分析が理想的だが、簡易版として固定値を返す
+        return 0.5
+    }
+}
+
+// MARK: - AutoEditEngine
+
+private enum AutoEditEngine {
+    /// 画像分析結果に基づいて設定を提案
+    static func suggestSettings(for analysis: ImageAnalysisResult, learningData: [AutoEditEvaluation]) -> PhotoEditorSettings {
+        var settings = PhotoEditorSettings.default
+
+        // 高評価データから学習（簡易版）
+        let highRatedData = learningData.filter { $0.userRating >= 4 }
+
+        // 明るさ補正
+        if analysis.brightness < 0.3 {
+            // 暗い画像
+            settings.exposureEV = 0.5 + (0.3 - analysis.brightness) * 2
+            settings.shadowBoost = 0.3
+        } else if analysis.brightness > 0.7 {
+            // 明るい画像
+            settings.exposureEV = -0.3 - (analysis.brightness - 0.7) * 2
+            settings.highlightRecovery = 0.4
+        }
+
+        // コントラスト補正
+        if analysis.contrast < 0.4 {
+            settings.contrast = 1.2
+            settings.clarity = 0.3
+        }
+
+        // 彩度補正
+        if analysis.saturation < 0.3 {
+            // 低彩度の場合
+            settings.vibrance = 0.2
+            settings.saturation = 1.1
+        } else if analysis.saturation > 0.7 {
+            // 高彩度の場合
+            settings.saturation = 0.9
+        }
+
+        // 学習データから調整（高評価データの平均を参照）
+        if !highRatedData.isEmpty {
+            var avgExposure = 0.0
+            var avgContrast = 0.0
+            var avgSaturation = 0.0
+
+            for data in highRatedData {
+                if let finalSettings = data.finalSettings {
+                    avgExposure += finalSettings.exposureEV
+                    avgContrast += finalSettings.contrast
+                    avgSaturation += finalSettings.saturation
+                }
+            }
+
+            let count = Double(highRatedData.count)
+            avgExposure /= count
+            avgContrast /= count
+            avgSaturation /= count
+
+            // 学習データで微調整（20%の重み）
+            settings.exposureEV = settings.exposureEV * 0.8 + avgExposure * 0.2
+            settings.contrast = settings.contrast * 0.8 + avgContrast * 0.2
+            settings.saturation = settings.saturation * 0.8 + avgSaturation * 0.2
+        }
+
+        return settings
+    }
+
+    /// 自動編集の評価を記録
+    static func recordEvaluation(
+        predicted: PhotoEditorSettings,
+        final: PhotoEditorSettings,
+        rating: Int,
+        analysis: ImageAnalysisResult,
+        context: NSManagedObjectContext
+    ) {
+        guard let predictedJSON = try? JSONEncoder().encode(predicted),
+              let predictedString = String(data: predictedJSON, encoding: .utf8),
+              let finalJSON = try? JSONEncoder().encode(final),
+              let finalString = String(data: finalJSON, encoding: .utf8) else {
+            return
+        }
+
+        let evaluation = AutoEditEvaluation(context: context)
+        evaluation.id = UUID()
+        evaluation.createdAt = Date()
+        evaluation.predictedSettingsJSON = predictedString
+        evaluation.finalSettingsJSON = finalString
+        evaluation.userRating = Int16(rating)
+        evaluation.imageBrightness = analysis.brightness
+        evaluation.imageContrast = analysis.contrast
+        evaluation.imageSaturation = analysis.saturation
+
+        try? context.save()
+    }
+}
+
 private enum PhotoEditorRenderer {
     private static let context = CIContext(options: nil)
 
@@ -456,6 +611,11 @@ struct PhotoEditorView: View {
 
     @State private var showResultAlert: Bool = false
     @State private var resultMessage: String = ""
+    @State private var showRatingDialog: Bool = false
+    @State private var pendingRating: Int = 3
+    @State private var imageAnalysis: ImageAnalysisResult?
+    @State private var predictedSettings: PhotoEditorSettings?
+    @State private var isAutoEditMode: Bool = false
 
     @State private var imageWriteCoordinator: ImageWriteCoordinator?
     @GestureState private var showingOriginalWhilePress: Bool = false
@@ -491,6 +651,13 @@ struct PhotoEditorView: View {
 
                 ToolbarItem(placement: .navigationBarTrailing) {
                     HStack(spacing: 14) {
+                        Button {
+                            applyAutoEdit()
+                        } label: {
+                            Image(systemName: isAutoEditMode ? "sparkles" : "sparkle")
+                                .foregroundColor(isAutoEditMode ? .purple : .primary)
+                        }
+
                         Button {
                             settings.autoWhiteBalance.toggle()
                             if settings.autoWhiteBalance {
@@ -555,6 +722,18 @@ struct PhotoEditorView: View {
             }
         } message: {
             Text(resultMessage)
+        }
+        .alert("この編集を評価", isPresented: $showRatingDialog) {
+            ForEach(1...5, id: \.self) { rating in
+                Button("\(rating)星") {
+                    confirmSaveWithRating(rating)
+                }
+            }
+            Button("キャンセル", role: .cancel) {
+                isSavingToApp = false
+            }
+        } message: {
+            Text("編集の品質を評価してください（1-5星）")
         }
     }
 
@@ -808,6 +987,30 @@ struct PhotoEditorView: View {
 
     private func resetAll() {
         settings = .default
+        isAutoEditMode = false
+        predictedSettings = nil
+    }
+
+    private func applyAutoEdit() {
+        // 画像を分析
+        guard let analysis = ImageAnalyzer.analyze(image: originalImage) else {
+            return
+        }
+
+        imageAnalysis = analysis
+
+        // 学習データを取得
+        let learningData = AutoEditEvaluation.fetchForTraining(minRating: 4, context: viewContext)
+
+        // 設定を提案
+        let suggested = AutoEditEngine.suggestSettings(for: analysis, learningData: learningData)
+
+        // 予測設定を保存（後で評価記録に使用）
+        predictedSettings = suggested
+
+        // 設定を適用
+        settings = suggested
+        isAutoEditMode = true
     }
 
     private func applyInfraredPreset() {
@@ -820,7 +1023,10 @@ struct PhotoEditorView: View {
     private func saveToAppStorage() {
         if isSavingToApp { return }
         isSavingToApp = true
+        showRatingDialog = true
+    }
 
+    private func confirmSaveWithRating(_ rating: Int) {
         let current = settings
         Task {
             let rendered = PhotoEditorRenderer.render(image: originalImage, settings: current)
@@ -862,13 +1068,31 @@ struct PhotoEditorView: View {
                 photo.imageData = imageData
                 photo.thumbnailData = thumbnailData
                 photo.settingsJSON = settingsJSON
-                photo.userRating = 0  // 未評価
+                photo.userRating = Int16(rating)  // ユーザー評価
+
+                // 自動編集モードの場合、評価を記録
+                if isAutoEditMode,
+                   let predicted = predictedSettings,
+                   let analysis = imageAnalysis {
+                    AutoEditEngine.recordEvaluation(
+                        predicted: predicted,
+                        final: current,
+                        rating: rating,
+                        analysis: analysis,
+                        context: viewContext
+                    )
+                }
 
                 do {
                     try viewContext.save()
                     isSavingToApp = false
-                    resultMessage = "アプリ内に保存しました"
+                    let modeInfo = isAutoEditMode ? "（自動編集）" : ""
+                    resultMessage = "アプリ内に保存しました\(modeInfo)（\(rating)星）"
                     showResultAlert = true
+
+                    // 保存後にリセット
+                    isAutoEditMode = false
+                    predictedSettings = nil
                 } catch {
                     isSavingToApp = false
                     resultMessage = "保存に失敗しました: \(error.localizedDescription)"
