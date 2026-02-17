@@ -1,5 +1,6 @@
 import SwiftUI
 import CoreLocation
+import PhotosUI
 
 #if canImport(UIKit)
     import UIKit
@@ -166,7 +167,10 @@ struct ContentView: View {
     @State private var enable2in1Composition: Bool = false
     @State private var enableTimestamp: Bool = false
     @State private var enableStabilization: Bool = true
+    @State private var enableRawMode: Bool = false
     @State private var manualModeEnabled: Bool = false
+    @State private var selectedPhotoItem: PhotosPickerItem?
+    @State private var importedImage: UIImage?
 
     // Network
     @State private var wifiMode: String = "取得中..."
@@ -346,6 +350,15 @@ struct ContentView: View {
                                     }
                                 }
                             }
+                            GlassToggle(title: "RAWモード", isOn: $enableRawMode) {
+                                Task {
+                                    do {
+                                        try await api.updateSettings(["raw_mode": enableRawMode], temporary: false)
+                                    } catch {
+                                        print("RAWモードの更新に失敗: \(error)")
+                                    }
+                                }
+                            }
                         }
 
                         // 手ぶれ補正の説明
@@ -353,6 +366,14 @@ struct ContentView: View {
                             Text("⚠️ 手ぶれ補正ONで画質がわずかに劣化します")
                                 .font(.caption)
                                 .foregroundColor(.orange.opacity(0.8))
+                                .padding(.horizontal, 16)
+                        }
+
+                        // RAWモードの説明
+                        if enableRawMode {
+                            Text("📷 RAWモード: DNG形式で保存（12.3MP）")
+                                .font(.caption)
+                                .foregroundColor(.blue.opacity(0.8))
                                 .padding(.horizontal, 16)
                         }
 
@@ -536,7 +557,29 @@ struct ContentView: View {
                 captureLocationProvider.requestAuthorizationAndStart()
                 loadAllSettings()
             }
+            .onChange(of: selectedPhotoItem) { oldItem, newItem in
+                Task {
+                    if let newItem = newItem,
+                       let data = try? await newItem.loadTransferable(type: Data.self),
+                       let uiImage = UIImage(data: data) {
+                        await MainActor.run {
+                            importedImage = uiImage
+                        }
+                    }
+                }
+            }
+            .sheet(item: Binding(
+                get: { importedImage.map { ImportedImageWrapper(image: $0) } },
+                set: { importedImage = $0?.image }
+            )) { wrapper in
+                PhotoEditorView(originalImage: wrapper.image)
+            }
         }
+    }
+
+    private struct ImportedImageWrapper: Identifiable {
+        let id = UUID()
+        let image: UIImage
     }
 
     private func runMetering() {
@@ -711,13 +754,26 @@ struct ContentView: View {
                         }
                     }
             } else {
-                VStack(spacing: 12) {
+                VStack(spacing: 16) {
                     Image(systemName: "camera.shutter.button")
                         .font(.system(size: 40, weight: .light))
                         .foregroundColor(.primary.opacity(0.3))
                     Text("NO PREVIEW")
                         .font(.system(size: 10, weight: .black))
                         .foregroundColor(.primary.opacity(0.2))
+
+                    PhotosPicker(selection: $selectedPhotoItem, matching: .images) {
+                        HStack(spacing: 8) {
+                            Image(systemName: "photo.on.rectangle.angled")
+                            Text("写真を編集")
+                        }
+                        .font(.caption.weight(.semibold))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 20)
+                        .padding(.vertical, 10)
+                        .background(Color.blue.opacity(0.8))
+                        .cornerRadius(20)
+                    }
                 }
                 .frame(maxWidth: .infinity)
                 .frame(height: 300)
@@ -1411,6 +1467,7 @@ struct ContentView: View {
         enable2in1Composition = settings.enable2in1Composition
         enableTimestamp = settings.enableTimestamp
         enableStabilization = settings.stabilization
+        enableRawMode = settings.rawMode
         manualModeEnabled = !settings.monitoringEnabled
 
         DispatchQueue.main.async {

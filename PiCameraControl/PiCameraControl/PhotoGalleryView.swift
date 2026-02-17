@@ -1,4 +1,5 @@
 import SwiftUI
+import PhotosUI
 
 #if canImport(UIKit)
     import UIKit
@@ -15,7 +16,9 @@ struct PhotoGalleryView: View {
     @State private var actionMessage: String?
     @State private var showActionAlert: Bool = false
     @State private var showDeleteConfirmation: Bool = false
-    
+    @State private var selectedPhotoItem: PhotosPickerItem?
+    @State private var importedImage: UIImage?
+
     private var api: SimpleCameraAPI {
         SimpleCameraAPI(baseURL: "http://\(serverIP):8001")
     }
@@ -58,11 +61,18 @@ struct PhotoGalleryView: View {
                     }
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button {
-                        loadPhotos()
-                    } label: {
-                        Image(systemName: "arrow.clockwise")
-                            .foregroundColor(.primary)
+                    HStack(spacing: 16) {
+                        PhotosPicker(selection: $selectedPhotoItem, matching: .images) {
+                            Image(systemName: "photo.on.rectangle.angled")
+                                .foregroundColor(.primary)
+                        }
+
+                        Button {
+                            loadPhotos()
+                        } label: {
+                            Image(systemName: "arrow.clockwise")
+                                .foregroundColor(.primary)
+                        }
                     }
                 }
             }
@@ -99,7 +109,29 @@ struct PhotoGalleryView: View {
                     selectionActionBar
                 }
             }
+            .onChange(of: selectedPhotoItem) { oldItem, newItem in
+                Task {
+                    if let newItem = newItem,
+                       let data = try? await newItem.loadTransferable(type: Data.self),
+                       let uiImage = UIImage(data: data) {
+                        await MainActor.run {
+                            importedImage = uiImage
+                        }
+                    }
+                }
+            }
+            .sheet(item: Binding(
+                get: { importedImage.map { ImportedImageWrapper(image: $0) } },
+                set: { importedImage = $0?.image }
+            )) { wrapper in
+                PhotoEditorView(originalImage: wrapper.image)
+            }
         }
+    }
+
+    private struct ImportedImageWrapper: Identifiable {
+        let id = UUID()
+        let image: UIImage
     }
     
     private var emptyState: some View {
