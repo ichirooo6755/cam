@@ -10,6 +10,11 @@ struct PiCameraControlApp: App {
     var body: some Scene {
         WindowGroup {
             TabView {
+                CameraStatusView()
+                    .tabItem {
+                        Label("ステータス", systemImage: "gauge.with.needle")
+                    }
+
                 PhotoGalleryView()
                     .tabItem {
                         Label("写真", systemImage: "photo.on.rectangle")

@@ -737,10 +737,20 @@ def _calc_metering_recommendation(sensor_status, settings, target_iso=None, targ
     refined_shutter = max(2500, min(20_000_000, refined_shutter))
     recommended_shutter_us = _nearest_stop(METERING_SHUTTER_US_STOPS, refined_shutter)
 
+    # フォーカス距離の推奨（簡易版：被写界深度を考慮した推奨値）
+    # ISO値に基づいて推奨距離を計算（低ISO=遠景、高ISO=近景の傾向）
+    if recommended_iso <= 200:
+        recommended_focus_m = 10.0  # 遠景（風景向け）
+    elif recommended_iso <= 800:
+        recommended_focus_m = 3.0   # 中距離（一般撮影）
+    else:
+        recommended_focus_m = 1.5   # 近距離（暗所/近接撮影）
+
     return {
         'recommended_iso': int(recommended_iso),
         'recommended_shutter_us': int(recommended_shutter_us),
         'recommended_shutter_label': _format_shutter_label(recommended_shutter_us),
+        'recommended_focus_m': round(recommended_focus_m, 1),
         'base_iso': int(base_iso),
         'base_shutter_us': int(base_shutter_us),
         'base_shutter_label': _format_shutter_label(base_shutter_us),

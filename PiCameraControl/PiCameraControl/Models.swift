@@ -396,6 +396,7 @@ struct MeteringRecommendation: Codable {
     let recommendedISO: Int
     let recommendedShutterUs: Int
     let recommendedShutterLabel: String?
+    let recommendedFocusM: Double?
     let baseISO: Int?
     let baseShutterUs: Int?
     let baseShutterLabel: String?
@@ -408,6 +409,7 @@ struct MeteringRecommendation: Codable {
         case recommendedISO = "recommended_iso"
         case recommendedShutterUs = "recommended_shutter_us"
         case recommendedShutterLabel = "recommended_shutter_label"
+        case recommendedFocusM = "recommended_focus_m"
         case baseISO = "base_iso"
         case baseShutterUs = "base_shutter_us"
         case baseShutterLabel = "base_shutter_label"
