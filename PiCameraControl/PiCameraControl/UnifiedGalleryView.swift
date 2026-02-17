@@ -25,6 +25,7 @@ struct UnifiedGalleryView: View {
     @State private var importedImage: UIImage?
     @State private var actionMessage: String?
     @State private var showActionAlert = false
+    @State private var hasLoadedOnce = false
     // @State private var showHDRComposer = false // TODO: HDRComposerView追加後に有効化
 
     private var api: SimpleCameraAPI {
@@ -79,7 +80,10 @@ struct UnifiedGalleryView: View {
                 }
             }
             .onAppear {
-                loadPhotosFromServer()
+                if !hasLoadedOnce {
+                    loadPhotosFromServer()
+                    hasLoadedOnce = true
+                }
             }
             .sheet(isPresented: $showPhotoDetail) {
                 if let group = selectedGroup {
