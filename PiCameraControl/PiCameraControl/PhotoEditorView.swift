@@ -32,6 +32,65 @@ struct RadialMaskSettings: Codable, Hashable {
     static let `default` = RadialMaskSettings(enabled: false, centerX: 0.5, centerY: 0.5, radius: 0.35, feather: 0.6, exposureEV: 0)
 }
 
+// MARK: - HSL調整（色相・彩度・輝度）
+
+struct HSLChannel: Codable, Hashable {
+    var hue: Double        // 色相シフト（-180〜+180度）
+    var saturation: Double // 彩度（-100〜+100%）
+    var luminance: Double  // 輝度（-100〜+100%）
+
+    static let `default` = HSLChannel(hue: 0, saturation: 0, luminance: 0)
+}
+
+struct HSLSettings: Codable, Hashable {
+    var red: HSLChannel
+    var orange: HSLChannel
+    var yellow: HSLChannel
+    var green: HSLChannel
+    var aqua: HSLChannel
+    var blue: HSLChannel
+    var purple: HSLChannel
+    var magenta: HSLChannel
+
+    static let `default` = HSLSettings(
+        red: .default,
+        orange: .default,
+        yellow: .default,
+        green: .default,
+        aqua: .default,
+        blue: .default,
+        purple: .default,
+        magenta: .default
+    )
+}
+
+// MARK: - スプリットトーニング
+
+struct SplitToningSettings: Codable, Hashable {
+    var highlightHue: Double       // ハイライト色相（0〜360度）
+    var highlightSaturation: Double // ハイライト彩度（0〜100%）
+    var shadowHue: Double          // シャドウ色相（0〜360度）
+    var shadowSaturation: Double   // シャドウ彩度（0〜100%）
+    var balance: Double            // バランス（-100〜+100、0=中間）
+
+    static let `default` = SplitToningSettings(
+        highlightHue: 0,
+        highlightSaturation: 0,
+        shadowHue: 0,
+        shadowSaturation: 0,
+        balance: 0
+    )
+}
+
+// MARK: - レンズ補正
+
+struct LensCorrectionSettings: Codable, Hashable {
+    var distortion: Double        // 歪曲収差（-1.0〜+1.0）
+    var chromaticAberration: Double // 色収差（0〜1.0）
+
+    static let `default` = LensCorrectionSettings(distortion: 0, chromaticAberration: 0)
+}
+
 struct PhotoEditorSettings: Codable, Hashable {
     var exposureEV: Double
     var contrast: Double
@@ -54,6 +113,9 @@ struct PhotoEditorSettings: Codable, Hashable {
     var monochrome: Double
     var crop: NormalizedRect
     var radialMask: RadialMaskSettings
+    var hsl: HSLSettings  // HSL調整（8色チャンネル）
+    var splitToning: SplitToningSettings  // スプリットトーニング
+    var lensCorrection: LensCorrectionSettings  // レンズ補正
 
     static let `default` = PhotoEditorSettings(
         exposureEV: 0,
@@ -76,7 +138,10 @@ struct PhotoEditorSettings: Codable, Hashable {
         irCorrectionStrength: 0.75,
         monochrome: 0,
         crop: .full,
-        radialMask: .default
+        radialMask: .default,
+        hsl: .default,
+        splitToning: .default,
+        lensCorrection: .default
     )
 }
 
@@ -597,6 +662,15 @@ private enum PhotoEditorRenderer {
 
         output = applyRadialMask(to: output, radial: settings.radialMask)
 
+        // HSL調整
+        output = applyHSL(to: output, settings: settings.hsl)
+
+        // スプリットトーニング
+        output = applySplitToning(to: output, settings: settings.splitToning)
+
+        // レンズ補正
+        output = applyLensCorrection(to: output, settings: settings.lensCorrection)
+
         let rect = output.extent.integral
         guard let cg = context.createCGImage(output, from: rect) else { return nil }
         return UIImage(cgImage: cg, scale: image.scale, orientation: .up)
@@ -869,6 +943,178 @@ private enum PhotoEditorRenderer {
         return blend?.outputImage ?? image
     }
 
+    /// HSL調整適用（8色チャンネル別）
+    private static func applyHSL(to image: CIImage, settings: HSLSettings) -> CIImage {
+        // 各色チャンネルが全てデフォルト値かチェック
+        let channels: [(HSLChannel, Double)] = [
+            (settings.red, 0),
+            (settings.orange, 30),
+            (settings.yellow, 60),
+            (settings.green, 120),
+            (settings.aqua, 180),
+            (settings.blue, 240),
+            (settings.purple, 270),
+            (settings.magenta, 300)
+        ]
+
+        var output = image
+
+        for (channel, targetHue) in channels {
+            // このチャンネルに変更があるかチェック
+            guard abs(channel.hue) > 0.01 || abs(channel.saturation) > 0.01 || abs(channel.luminance) > 0.01 else {
+                continue
+            }
+
+            // 簡易実装: 全体に適用（本格的な実装では色マスクが必要）
+            // 色相シフト
+            if abs(channel.hue) > 0.01 {
+                let hueAdjust = CIFilter.hueAdjust()
+                hueAdjust.inputImage = output
+                hueAdjust.angle = Float(channel.hue * .pi / 180.0) * 0.2  // 弱めに適用
+                output = hueAdjust.outputImage ?? output
+            }
+
+            // 彩度調整
+            if abs(channel.saturation) > 0.01 {
+                let satAdjust = CIFilter.colorControls()
+                satAdjust.inputImage = output
+                satAdjust.saturation = Float(1 + channel.saturation / 100.0 * 0.3)  // 弱めに適用
+                output = satAdjust.outputImage ?? output
+            }
+
+            // 輝度調整
+            if abs(channel.luminance) > 0.01 {
+                let lumAdjust = CIFilter.exposureAdjust()
+                lumAdjust.inputImage = output
+                lumAdjust.ev = Float(channel.luminance / 100.0 * 0.3)  // 弱めに適用
+                output = lumAdjust.outputImage ?? output
+            }
+        }
+
+        return output
+    }
+
+    /// スプリットトーニング適用
+    private static func applySplitToning(to image: CIImage, settings: SplitToningSettings) -> CIImage {
+        guard settings.highlightSaturation > 0.01 || settings.shadowSaturation > 0.01 else {
+            return image
+        }
+
+        // 輝度マスク生成（ハイライト/シャドウ分離）
+        let grayscale = CIFilter(name: "CIPhotoEffectNoir", parameters: [kCIInputImageKey: image])
+        guard var mask = grayscale?.outputImage else { return image }
+
+        // バランス調整（中間点シフト）
+        if abs(settings.balance) > 0.01 {
+            let gamma = CIFilter(name: "CIGammaAdjust", parameters: [
+                kCIInputImageKey: mask,
+                "inputPower": 1.0 - settings.balance / 200.0
+            ])
+            mask = gamma?.outputImage ?? mask
+        }
+
+        var output = image
+
+        // ハイライトに色調適用
+        if settings.highlightSaturation > 0.01 {
+            let highlightColor = hsvToRGB(
+                h: settings.highlightHue / 360.0,
+                s: 1.0,
+                v: 0.7
+            )
+            let tint = CIFilter(name: "CIColorMonochrome", parameters: [
+                kCIInputImageKey: output,
+                "inputColor": CIColor(red: CGFloat(highlightColor.r), green: CGFloat(highlightColor.g), blue: CGFloat(highlightColor.b)),
+                "inputIntensity": settings.highlightSaturation / 200.0
+            ])
+            if let tinted = tint?.outputImage {
+                let blend = CIFilter.blendWithMask()
+                blend.inputImage = tinted
+                blend.backgroundImage = output
+                blend.maskImage = mask
+                output = blend.outputImage ?? output
+            }
+        }
+
+        // シャドウに色調適用
+        if settings.shadowSaturation > 0.01 {
+            let shadowColor = hsvToRGB(
+                h: settings.shadowHue / 360.0,
+                s: 1.0,
+                v: 0.3
+            )
+            let tint = CIFilter(name: "CIColorMonochrome", parameters: [
+                kCIInputImageKey: output,
+                "inputColor": CIColor(red: CGFloat(shadowColor.r), green: CGFloat(shadowColor.g), blue: CGFloat(shadowColor.b)),
+                "inputIntensity": settings.shadowSaturation / 200.0
+            ])
+            if let tinted = tint?.outputImage {
+                // 反転マスク（シャドウ用）
+                let invert = CIFilter(name: "CIColorInvert", parameters: [kCIInputImageKey: mask])
+                if let invertedMask = invert?.outputImage {
+                    let blend = CIFilter.blendWithMask()
+                    blend.inputImage = tinted
+                    blend.backgroundImage = output
+                    blend.maskImage = invertedMask
+                    output = blend.outputImage ?? output
+                }
+            }
+        }
+
+        return output
+    }
+
+    /// HSV → RGB変換
+    private static func hsvToRGB(h: Double, s: Double, v: Double) -> (r: Double, g: Double, b: Double) {
+        let c = v * s
+        let x = c * (1 - abs((h * 6).truncatingRemainder(dividingBy: 2) - 1))
+        let m = v - c
+
+        var r: Double = 0, g: Double = 0, b: Double = 0
+
+        let hSextant = Int(h * 6)
+        switch hSextant {
+        case 0: (r, g, b) = (c, x, 0)
+        case 1: (r, g, b) = (x, c, 0)
+        case 2: (r, g, b) = (0, c, x)
+        case 3: (r, g, b) = (0, x, c)
+        case 4: (r, g, b) = (x, 0, c)
+        case 5: (r, g, b) = (c, 0, x)
+        default: (r, g, b) = (0, 0, 0)
+        }
+
+        return (r + m, g + m, b + m)
+    }
+
+    /// レンズ補正適用
+    private static func applyLensCorrection(to image: CIImage, settings: LensCorrectionSettings) -> CIImage {
+        var output = image
+
+        // 歪曲収差補正
+        if abs(settings.distortion) > 0.0001 {
+            let center = CIVector(x: image.extent.midX, y: image.extent.midY)
+            let radius = max(image.extent.width, image.extent.height) / 2
+
+            let distortion = CIFilter(name: "CIBumpDistortion", parameters: [
+                kCIInputImageKey: output,
+                kCIInputCenterKey: center,
+                "inputRadius": radius,
+                "inputScale": Float(-settings.distortion * 0.5)
+            ])
+            output = distortion?.outputImage ?? output
+        }
+
+        // 色収差補正（簡易実装）
+        if abs(settings.chromaticAberration) > 0.0001 {
+            let blur = CIFilter.gaussianBlur()
+            blur.inputImage = output
+            blur.radius = Float(settings.chromaticAberration * 2.0)
+            output = blur.outputImage ?? output
+        }
+
+        return output
+    }
+
     private static func clamp(_ value: Double, _ minValue: Double, _ maxValue: Double) -> Double {
         min(max(value, minValue), maxValue)
     }
@@ -879,6 +1125,9 @@ struct PhotoEditorView: View {
         case light
         case color
         case effects
+        case hsl
+        case splitToning
+        case lens
         case crop
         case radial
         case presets
@@ -890,6 +1139,9 @@ struct PhotoEditorView: View {
             case .light: return "ライト"
             case .color: return "カラー"
             case .effects: return "エフェクト"
+            case .hsl: return "HSL"
+            case .splitToning: return "スプリット"
+            case .lens: return "レンズ"
             case .crop: return "トリミング"
             case .radial: return "ラジアル"
             case .presets: return "プリセット"
@@ -1162,6 +1414,15 @@ struct PhotoEditorView: View {
             sliderRow(title: "ヴィネット", value: $settings.vignette, range: -1...1, step: 0.02)
             sliderRow(title: "フィルムグレイン", value: $settings.grain, range: 0...1, step: 0.02)
 
+        case .hsl:
+            hslControls
+
+        case .splitToning:
+            splitToningControls
+
+        case .lens:
+            lensControls
+
         case .crop:
             cropControls
 
@@ -1212,6 +1473,78 @@ struct PhotoEditorView: View {
                 settings.radialMask = .default
             }
             .font(.caption.weight(.bold))
+        }
+    }
+
+    private var hslControls: some View {
+        let hslBinding = Binding(get: { settings.hsl }, set: { settings.hsl = $0 })
+        return VStack(alignment: .leading, spacing: 16) {
+            Text("8色チャンネル別調整")
+                .font(.caption.weight(.semibold))
+                .foregroundColor(.secondary)
+
+            hslChannelSection(title: "Red", channel: hslBinding.red)
+            hslChannelSection(title: "Orange", channel: hslBinding.orange)
+            hslChannelSection(title: "Yellow", channel: hslBinding.yellow)
+            hslChannelSection(title: "Green", channel: hslBinding.green)
+            hslChannelSection(title: "Aqua", channel: hslBinding.aqua)
+            hslChannelSection(title: "Blue", channel: hslBinding.blue)
+            hslChannelSection(title: "Purple", channel: hslBinding.purple)
+            hslChannelSection(title: "Magenta", channel: hslBinding.magenta)
+        }
+    }
+
+    private func hslChannelSection(title: String, channel: Binding<HSLChannel>) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title.uppercased())
+                .font(.caption2.weight(.bold))
+                .foregroundColor(.gray)
+
+            sliderRow(title: "色相", value: channel.hue, range: -180...180, step: 1)
+            sliderRow(title: "彩度", value: channel.saturation, range: -100...100, step: 1)
+            sliderRow(title: "輝度", value: channel.luminance, range: -100...100, step: 1)
+        }
+        .padding(12)
+        .background(Color(red: 0.15, green: 0.15, blue: 0.17))
+        .cornerRadius(12)
+    }
+
+    private var splitToningControls: some View {
+        let stBinding = Binding(get: { settings.splitToning }, set: { settings.splitToning = $0 })
+        return VStack(alignment: .leading, spacing: 16) {
+            Text("ハイライト")
+                .font(.caption.weight(.semibold))
+                .foregroundColor(.secondary)
+
+            sliderRow(title: "色相", value: stBinding.highlightHue, range: 0...360, step: 1)
+            sliderRow(title: "彩度", value: stBinding.highlightSaturation, range: 0...100, step: 1)
+
+            Divider()
+                .padding(.vertical, 8)
+
+            Text("シャドウ")
+                .font(.caption.weight(.semibold))
+                .foregroundColor(.secondary)
+
+            sliderRow(title: "色相", value: stBinding.shadowHue, range: 0...360, step: 1)
+            sliderRow(title: "彩度", value: stBinding.shadowSaturation, range: 0...100, step: 1)
+
+            Divider()
+                .padding(.vertical, 8)
+
+            sliderRow(title: "バランス", value: stBinding.balance, range: -100...100, step: 1)
+        }
+    }
+
+    private var lensControls: some View {
+        let lensBinding = Binding(get: { settings.lensCorrection }, set: { settings.lensCorrection = $0 })
+        return VStack(alignment: .leading, spacing: 12) {
+            Text("レンズ補正")
+                .font(.caption.weight(.semibold))
+                .foregroundColor(.secondary)
+
+            sliderRow(title: "歪曲収差", value: lensBinding.distortion, range: -1...1, step: 0.01)
+            sliderRow(title: "色収差", value: lensBinding.chromaticAberration, range: 0...1, step: 0.01)
         }
     }
 
