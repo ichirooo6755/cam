@@ -15,6 +15,10 @@
 		E00000010000000000000024 /* PhotoGalleryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E00000010000000000000025 /* PhotoGalleryView.swift */; };
 		E00000010000000000000028 /* SimpleCameraAPI.swift in Sources */ = {isa = PBXBuildFile; fileRef = E00000010000000000000029 /* SimpleCameraAPI.swift */; };
 		E0000001000000000000002A /* PhotoEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0000001000000000000002B /* PhotoEditorView.swift */; };
+		E0000001000000000000002C /* PersistenceController.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0000001000000000000002D /* PersistenceController.swift */; };
+		E0000001000000000000002E /* CoreDataModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0000001000000000000002F /* CoreDataModels.swift */; };
+		E00000010000000000000030 /* EditedPhotosListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E00000010000000000000031 /* EditedPhotosListView.swift */; };
+		E00000010000000000000032 /* PiCameraData.xcdatamodeld in Sources */ = {isa = PBXBuildFile; fileRef = E00000010000000000000033 /* PiCameraData.xcdatamodeld */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -27,6 +31,10 @@
 		E00000010000000000000025 /* PhotoGalleryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoGalleryView.swift; sourceTree = "<group>"; };
 		E00000010000000000000029 /* SimpleCameraAPI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimpleCameraAPI.swift; sourceTree = "<group>"; };
 		E0000001000000000000002B /* PhotoEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoEditorView.swift; sourceTree = "<group>"; };
+		E0000001000000000000002D /* PersistenceController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistenceController.swift; sourceTree = "<group>"; };
+		E0000001000000000000002F /* CoreDataModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoreDataModels.swift; sourceTree = "<group>"; };
+		E00000010000000000000031 /* EditedPhotosListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditedPhotosListView.swift; sourceTree = "<group>"; };
+		E00000010000000000000034 /* PiCameraData.xcdatamodel */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcdatamodel; path = PiCameraData.xcdatamodel; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -49,7 +57,11 @@
 				E00000010000000000000011 /* Models.swift */,
 				E00000010000000000000025 /* PhotoGalleryView.swift */,
 				E0000001000000000000002B /* PhotoEditorView.swift */,
+				E00000010000000000000031 /* EditedPhotosListView.swift */,
 				E00000010000000000000029 /* SimpleCameraAPI.swift */,
+				E0000001000000000000002D /* PersistenceController.swift */,
+				E0000001000000000000002F /* CoreDataModels.swift */,
+				E00000010000000000000033 /* PiCameraData.xcdatamodeld */,
 				E00000010000000000000013 /* Assets.xcassets */,
 			);
 			path = PiCameraControl;
@@ -148,6 +160,10 @@
 				E00000010000000000000024 /* PhotoGalleryView.swift in Sources */,
 				E0000001000000000000002A /* PhotoEditorView.swift in Sources */,
 				E00000010000000000000028 /* SimpleCameraAPI.swift in Sources */,
+				E0000001000000000000002C /* PersistenceController.swift in Sources */,
+				E0000001000000000000002E /* CoreDataModels.swift in Sources */,
+				E00000010000000000000030 /* EditedPhotosListView.swift in Sources */,
+				E00000010000000000000032 /* PiCameraData.xcdatamodeld in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -353,6 +369,19 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCVersionGroup section */
+		E00000010000000000000033 /* PiCameraData.xcdatamodeld */ = {
+			isa = XCVersionGroup;
+			children = (
+				E00000010000000000000034 /* PiCameraData.xcdatamodel */,
+			);
+			currentVersion = E00000010000000000000034 /* PiCameraData.xcdatamodel */;
+			path = PiCameraData.xcdatamodeld;
+			sourceTree = "<group>";
+			versionGroupType = wrapper.xcdatamodel;
+		};
+/* End XCVersionGroup section */
 	};
 	rootObject = E0000001000000000000001E /* Project object */;
 }

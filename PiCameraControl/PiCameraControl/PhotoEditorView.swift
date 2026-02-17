@@ -438,6 +438,7 @@ struct PhotoEditorView: View {
     let originalImage: UIImage
 
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.managedObjectContext) private var viewContext
 
     @State private var panel: Panel = .light
     @State private var settings: PhotoEditorSettings = .default
@@ -446,6 +447,7 @@ struct PhotoEditorView: View {
 
     @State private var isRendering: Bool = false
     @State private var isExporting: Bool = false
+    @State private var isSavingToApp: Bool = false
     @State private var renderTask: Task<Void, Never>?
 
     @State private var presets: [PhotoEditorPreset] = []
@@ -470,7 +472,7 @@ struct PhotoEditorView: View {
                     controlsArea
                 }
 
-                if isRendering || isExporting {
+                if isRendering || isExporting || isSavingToApp {
                     ProgressView()
                         .scaleEffect(1.2)
                         .padding(22)
@@ -505,6 +507,13 @@ struct PhotoEditorView: View {
                         } label: {
                             Image(systemName: "arrow.counterclockwise")
                         }
+
+                        Button {
+                            saveToAppStorage()
+                        } label: {
+                            Image(systemName: "internaldrive")
+                        }
+                        .disabled(isSavingToApp)
 
                         Button {
                             exportToPhotoLibrary()
@@ -806,6 +815,67 @@ struct PhotoEditorView: View {
         settings.irCorrectionStrength = 0.78
         settings.temperature = -850
         settings.highlightRecovery = max(settings.highlightRecovery, 0.18)
+    }
+
+    private func saveToAppStorage() {
+        if isSavingToApp { return }
+        isSavingToApp = true
+
+        let current = settings
+        Task {
+            let rendered = PhotoEditorRenderer.render(image: originalImage, settings: current)
+
+            await MainActor.run {
+                guard let rendered else {
+                    isSavingToApp = false
+                    resultMessage = "保存に失敗しました"
+                    showResultAlert = true
+                    return
+                }
+
+                // 画像をJPEGエンコード（80%品質）
+                guard let imageData = rendered.jpegData(compressionQuality: 0.8) else {
+                    isSavingToApp = false
+                    resultMessage = "画像のエンコードに失敗しました"
+                    showResultAlert = true
+                    return
+                }
+
+                // サムネイル生成（300x300）
+                let thumbnailSize = CGSize(width: 300, height: 300)
+                let thumbnail = rendered.preparingThumbnail(of: thumbnailSize)
+                let thumbnailData = thumbnail?.jpegData(compressionQuality: 0.7)
+
+                // 設定をJSONエンコード
+                guard let settingsData = try? JSONEncoder().encode(current),
+                      let settingsJSON = String(data: settingsData, encoding: .utf8) else {
+                    isSavingToApp = false
+                    resultMessage = "設定のエンコードに失敗しました"
+                    showResultAlert = true
+                    return
+                }
+
+                // Core Dataに保存
+                let photo = EditedPhoto(context: viewContext)
+                photo.id = UUID()
+                photo.createdAt = Date()
+                photo.imageData = imageData
+                photo.thumbnailData = thumbnailData
+                photo.settingsJSON = settingsJSON
+                photo.userRating = 0  // 未評価
+
+                do {
+                    try viewContext.save()
+                    isSavingToApp = false
+                    resultMessage = "アプリ内に保存しました"
+                    showResultAlert = true
+                } catch {
+                    isSavingToApp = false
+                    resultMessage = "保存に失敗しました: \(error.localizedDescription)"
+                    showResultAlert = true
+                }
+            }
+        }
     }
 
     private func exportToPhotoLibrary() {
