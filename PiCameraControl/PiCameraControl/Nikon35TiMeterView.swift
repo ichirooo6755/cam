@@ -1,215 +1,395 @@
 import SwiftUI
 
-/// Nikon 35Ti風アナログメーター（4本針）
+/// Nikon 35Ti ANALOG DISPLAY SYSTEM の完全再現
 struct Nikon35TiMeterView: View {
-    let aperture: Double           // f値 (1.4 ~ 22)
-    let shutterSpeedUs: Int        // シャッタースピード (μs)
-    let iso: Int                   // ISO (100 ~ 6400)
+    let aperture: Double            // f値 (2.8 ~ 22)
+    let shutterSpeedUs: Int         // シャッタースピード (μs)
+    let iso: Int                    // ISO (100 ~ 6400)
     let exposureCompensation: Double // 露出補正 (-2.0 ~ +2.0)
 
-    var body: some View {
-        VStack(spacing: MinimalSpacing.md) {
-            // アナログメーターパネル
-            meterPanel
+    @State private var animAperture: Double = 2.8
+    @State private var animShutterUs: Double = 4000
+    @State private var animExpComp: Double = 0
 
-            // デジタル表示
+    var body: some View {
+        VStack(spacing: 10) {
+            analogDial
             digitalReadout
         }
+        .onAppear { doAnimate() }
+        .onChange(of: aperture) { _, _ in doAnimate() }
+        .onChange(of: shutterSpeedUs) { _, _ in doAnimate() }
+        .onChange(of: exposureCompensation) { _, _ in doAnimate() }
     }
 
-    // MARK: - Meter Panel
+    private func doAnimate() {
+        withAnimation(.spring(response: 0.55, dampingFraction: 0.62)) {
+            animAperture = aperture
+            animShutterUs = Double(shutterSpeedUs)
+            animExpComp = exposureCompensation
+        }
+    }
 
-    private var meterPanel: some View {
+    // MARK: - アナログダイヤル全体
+
+    private var analogDial: some View {
         ZStack {
-            // 楕円形の枠
+            // 外枠（シルバーグラデーション）
             Capsule()
-                .strokeBorder(MinimalTheme.divider, lineWidth: 1)
-                .background(
-                    Capsule()
-                        .fill(MinimalTheme.Background.surface)
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            Color(red: 0.88, green: 0.88, blue: 0.88),
+                            Color(red: 0.68, green: 0.68, blue: 0.70),
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
                 )
-                .frame(width: 320, height: 160)
+                .shadow(color: .black.opacity(0.42), radius: 6, x: 0, y: 3)
 
-            // スケール
-            scales
+            // 内側の白い文字盤
+            Capsule()
+                .fill(Color(red: 0.965, green: 0.962, blue: 0.952))
+                .padding(5)
 
-            // 針（4本）
-            needles
+            // 内側境界線
+            Capsule()
+                .strokeBorder(Color(white: 0.52), lineWidth: 0.6)
+                .padding(5)
 
-            // 中央ロゴ
-            Text("Nikon 35Ti")
-                .font(.system(size: 10, weight: .medium, design: .serif))
-                .foregroundColor(MinimalTheme.Text.tertiary)
-                .offset(y: 40)
+            // ── コンテンツ ──
+            subDialZone          // 上部サブダイヤル
+            apertureScale        // 右 f値スケール
+            distanceScale        // 左 距離スケール
+            mainNeedles          // 2本のメイン針
+            needlePivotDot       // 回転軸ドット
+            nikonLogo            // Nikonロゴ
+            expCompBar           // 露出補正バー
+            bottomLabel          // 下部テキスト
         }
-        .frame(width: 340, height: 180)
+        .frame(width: 320, height: 160)
+        .clipShape(Capsule())
     }
 
-    // MARK: - Scales
+    // MARK: - 上部サブダイヤルゾーン
 
-    private var scales: some View {
+    private var subDialZone: some View {
         ZStack {
-            // 上部: f値スケール
-            HStack(spacing: 8) {
-                ForEach([2.8, 4, 5.6, 8, 11, 16, 22], id: \.self) { f in
-                    Text(String(format: "%.1f", f))
-                        .font(.system(size: 9, weight: .medium, design: .monospaced))
-                        .foregroundColor(MinimalTheme.Text.tertiary)
-                }
-            }
-            .offset(y: -60)
+            // 楕円背景
+            Ellipse()
+                .fill(Color(red: 0.930, green: 0.928, blue: 0.918))
+                .frame(width: 122, height: 56)
+            Ellipse()
+                .strokeBorder(Color(white: 0.52), lineWidth: 0.7)
+                .frame(width: 122, height: 56)
 
-            // 左側: シャッタースピードスケール（縦）
-            VStack(spacing: 4) {
-                ForEach([3, 7, 10, 2.6, 1.3, 0.7], id: \.self) { ss in
-                    Text(String(format: "%.1f", ss))
-                        .font(.system(size: 8, weight: .regular, design: .monospaced))
-                        .foregroundColor(MinimalTheme.Text.tertiary)
-                }
-            }
-            .offset(x: -140, y: 0)
-
-            // 右側: プログラムモードスケール
-            VStack(spacing: 4) {
+            // ラベル行: AF  L.T.  E  10  P
+            HStack(spacing: 0) {
+                Text("AF")
+                    .font(.system(size: 5.5, weight: .bold))
+                Spacer()
+                Text("L.T.")
+                    .font(.system(size: 5.5, weight: .bold))
+                Spacer()
+                Text("E")
+                    .font(.system(size: 5.5, weight: .bold))
+                Spacer()
+                Text("10")
+                    .font(.system(size: 5.5, weight: .regular))
+                Spacer()
                 Text("P")
-                ForEach([10, 20, 30], id: \.self) { p in
-                    Text("\(p)")
-                        .font(.system(size: 8, weight: .regular, design: .monospaced))
-                }
+                    .font(.system(size: 6.5, weight: .bold, design: .serif))
             }
-            .font(.system(size: 8, weight: .regular, design: .monospaced))
-            .foregroundColor(MinimalTheme.Text.tertiary)
-            .offset(x: 140, y: -10)
+            .foregroundColor(Color(white: 0.07))
+            .frame(width: 102)
+            .offset(y: -19)
 
-            // 上部中央: 露出補正スケール
-            HStack(spacing: 12) {
-                ForEach([-2, -1, 0, 1, 2], id: \.self) { ev in
-                    Text(ev == 0 ? "0" : "\(ev > 0 ? "+" : "")\(ev)")
-                        .font(.system(size: 8, weight: .semibold, design: .monospaced))
-                        .foregroundColor(MinimalTheme.Text.secondary)
+            // 目盛り数字（10 / 20 / 30）
+            HStack(spacing: 0) {
+                Text("10")
+                    .offset(x: -32)
+                Text("20")
+                Text("30")
+                    .offset(x: 32)
+            }
+            .font(.system(size: 5))
+            .foregroundColor(Color(white: 0.30))
+            .offset(y: -10)
+
+            // アイコン行（セルフタイマー + フラッシュ）
+            HStack(spacing: 20) {
+                ZStack {
+                    Circle()
+                        .strokeBorder(Color(white: 0.22), lineWidth: 0.8)
+                        .frame(width: 10, height: 10)
+                    Image(systemName: "timer")
+                        .font(.system(size: 5.5))
+                        .foregroundColor(Color(white: 0.22))
+                }
+                ZStack {
+                    Circle()
+                        .strokeBorder(Color(white: 0.22), lineWidth: 0.8)
+                        .frame(width: 10, height: 10)
+                    Image(systemName: "bolt.fill")
+                        .font(.system(size: 5))
+                        .foregroundColor(Color(white: 0.22))
                 }
             }
-            .offset(y: -45)
+            .offset(y: 5)
+
+            // サブ針（サブダイヤル内の小さい針）
+            Rectangle()
+                .fill(Color(white: 0.10))
+                .frame(width: 0.8, height: 16)
+                .offset(y: -8)
+                .rotationEffect(.degrees(subNeedleAngle), anchor: .bottom)
         }
+        .offset(y: -52)
     }
 
-    // MARK: - Needles
+    // MARK: - f値スケール（右側）
 
-    private var needles: some View {
+    // 各f値のy座標オフセット
+    private let fStops: [(label: String, y: CGFloat)] = [
+        ("2.8", -57), ("4", -41), ("5.6", -25),
+        ("8",    -6), ("11",  14), ("16",  34), ("22",  57),
+    ]
+
+    private var apertureScale: some View {
         ZStack {
-            // 1. 左の大きい針（f値）180度
-            Needle(
-                length: 50,
-                width: 2,
-                color: MinimalTheme.Text.primary,
-                angle: apertureAngle
-            )
-            .offset(x: -40)
-
-            // 2. 右の大きい針（シャッタースピード）180度
-            Needle(
-                length: 50,
-                width: 2,
-                color: MinimalTheme.Text.primary,
-                angle: shutterSpeedAngle
-            )
-            .offset(x: 40)
-
-            // 3. 中央上部の短い針（露出補正）70度
-            Needle(
-                length: 30,
-                width: 1.5,
-                color: MinimalTheme.Accent.warning,
-                angle: exposureCompAngle
-            )
-            .offset(y: -20)
-
-            // 4. 中央の小さい針（ISO）360度
-            Needle(
-                length: 20,
-                width: 1,
-                color: MinimalTheme.Accent.primary,
-                angle: isoAngle
-            )
-
-            // 中央ドット
-            Circle()
-                .fill(MinimalTheme.Text.primary)
-                .frame(width: 4, height: 4)
+            ForEach(fStops, id: \.label) { stop in
+                // 目盛り線
+                Rectangle()
+                    .fill(Color(white: 0.30))
+                    .frame(width: 5, height: 0.5)
+                    .offset(x: 134, y: stop.y)
+                // 数字ラベル
+                Text(stop.label)
+                    .font(.system(size: 8, weight: .medium))
+                    .foregroundColor(Color(white: 0.06))
+                    .frame(width: 24, alignment: .leading)
+                    .offset(x: 121, y: stop.y)
+            }
         }
     }
 
-    // MARK: - Digital Readout
+    // MARK: - 距離スケール（左側、m / ft 2列）
+
+    private let distanceStops: [(m: String, ft: String, y: CGFloat)] = [
+        ("5",    "17",    -57),
+        ("3",    "10",    -41),
+        ("2",    "6.6",   -25),
+        ("1",    "3.3",    -6),
+        ("0.7",  "2.3",   14),
+        ("0.4m", "1.3ft", 34),
+    ]
+
+    private var distanceScale: some View {
+        ZStack {
+            ForEach(distanceStops, id: \.m) { stop in
+                // 目盛り線
+                Rectangle()
+                    .fill(Color(white: 0.30))
+                    .frame(width: 5, height: 0.5)
+                    .offset(x: -134, y: stop.y)
+                // ラベル（m 右寄せ / ft 左寄せ）
+                HStack(spacing: 2) {
+                    Text(stop.m)
+                        .font(.system(size: 7.5, weight: .medium))
+                        .foregroundColor(Color(white: 0.06))
+                        .frame(width: 28, alignment: .trailing)
+                    Text(stop.ft)
+                        .font(.system(size: 6.0, weight: .light))
+                        .foregroundColor(Color(white: 0.42))
+                        .frame(width: 24, alignment: .leading)
+                }
+                .offset(x: -108, y: stop.y)
+            }
+        }
+    }
+
+    // MARK: - メイン針（2本、同じ回転軸）
+
+    private let needlePivotY: CGFloat = 22   // 回転軸のy座標（中心から下）
+    private let needleLen:    CGFloat = 70   // 針の長さ
+
+    private var mainNeedles: some View {
+        ZStack {
+            // 右針（f値スケールを指す）
+            thinNeedle(angle: apertureNeedleAngle)
+            // 左針（シャッタースピード/距離スケールを指す）
+            thinNeedle(angle: shutterNeedleAngle)
+        }
+        .offset(y: needlePivotY)
+    }
+
+    @ViewBuilder
+    private func thinNeedle(angle: Double) -> some View {
+        NeedleTriangle()
+            .fill(
+                LinearGradient(
+                    colors: [Color(white: 0.05), Color(white: 0.38)],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+            )
+            .frame(width: 4, height: needleLen)
+            .offset(y: -(needleLen / 2))
+            .rotationEffect(.degrees(angle))
+    }
+
+    private var needlePivotDot: some View {
+        Circle()
+            .fill(Color(white: 0.08))
+            .frame(width: 6, height: 6)
+            .offset(y: needlePivotY)
+    }
+
+    // MARK: - Nikonロゴ
+
+    private var nikonLogo: some View {
+        Text("Nikon")
+            .font(.system(size: 13, weight: .ultraLight, design: .serif))
+            .italic()
+            .foregroundColor(Color(white: 0.18))
+            .offset(y: 26)
+    }
+
+    // MARK: - 露出補正バー（チェッカーパターン + 動くインジケーター）
+
+    private var expCompBar: some View {
+        VStack(spacing: 2) {
+            // スケールラベル: +2  +1  ▼  -1  -2
+            HStack(spacing: 0) {
+                Text("+2").frame(maxWidth: .infinity)
+                Text("+1").frame(maxWidth: .infinity)
+                Image(systemName: "arrowtriangle.down.fill")
+                    .frame(maxWidth: .infinity)
+                    .foregroundColor(.red)
+                Text("-1").frame(maxWidth: .infinity)
+                Text("-2").frame(maxWidth: .infinity)
+            }
+            .font(.system(size: 6.5, weight: .medium))
+            .foregroundColor(Color(white: 0.13))
+            .frame(width: 88)
+
+            // チェッカーバー + 赤いインジケーター
+            ZStack {
+                Nikon35TiCheckerBar()
+                    .frame(width: 88, height: 6)
+                    .clipShape(RoundedRectangle(cornerRadius: 1))
+
+                Rectangle()
+                    .fill(.red)
+                    .frame(width: 3, height: 9)
+                    .offset(x: CGFloat(animExpComp) * 22.0)
+            }
+        }
+        .offset(y: 52)
+    }
+
+    // MARK: - 下部ラベル
+
+    private var bottomLabel: some View {
+        Text("NIKON ANALOG DISPLAY SYSTEM")
+            .font(.system(size: 4, weight: .regular, design: .monospaced))
+            .foregroundColor(Color(white: 0.44))
+            .tracking(0.8)
+            .offset(y: 68)
+    }
+
+    // MARK: - デジタル表示（ダイヤル下）
 
     private var digitalReadout: some View {
         HStack(spacing: 8) {
-            Text("F\(String(format: "%.1f", aperture))")
-            Text("•")
-            Text(shutterSpeedLabel)
-            Text("•")
-            Text("ISO\(iso)")
-            Text("•")
-            Text(String(format: "%+.1fEV", exposureCompensation))
+            Text("f/\(apertureDisplay)")
+                .monospacedDigit()
+            Text("·").foregroundColor(.gray.opacity(0.5))
+            Text(shutterDisplay)
+                .monospacedDigit()
+            Text("·").foregroundColor(.gray.opacity(0.5))
+            Text("ISO \(iso)")
+                .monospacedDigit()
+            if abs(exposureCompensation) > 0.01 {
+                Text("·").foregroundColor(.gray.opacity(0.5))
+                Text(String(format: "%+.1fEV", exposureCompensation))
+                    .monospacedDigit()
+            }
         }
-        .font(.system(size: 12, weight: .medium, design: .monospaced))
-        .foregroundColor(MinimalTheme.Text.secondary)
+        .font(.system(size: 12, weight: .regular))
+        .foregroundColor(Color(white: 0.48))
     }
 
-    // MARK: - Angle Calculations
+    private var apertureDisplay: String {
+        aperture < 10
+            ? String(format: "%.1f", aperture)
+            : String(format: "%.0f", aperture)
+    }
 
-    /// f値の針角度（-90° to +90°）
-    private var apertureAngle: Double {
-        let stops = log2(aperture / 2.8)
+    private var shutterDisplay: String {
+        let sec = Double(shutterSpeedUs) / 1_000_000.0
+        if sec >= 1 { return String(format: "%.0fs", sec) }
+        let denom = Int(round(1.0 / sec))
+        return "1/\(denom)s"
+    }
+
+    // MARK: - 角度計算
+
+    /// f値針: f2.8 → -55°、f22 → +55°
+    private var apertureNeedleAngle: Double {
+        let stops = log2(animAperture / 2.8)
         let maxStops = log2(22.0 / 2.8)
-        return -90 + (stops / maxStops) * 180
+        return -55 + (stops / maxStops) * 110
     }
 
-    /// シャッタースピードの針角度（-90° to +90°）
-    private var shutterSpeedAngle: Double {
-        let log = log2(Double(shutterSpeedUs) / 125.0)
-        return -90 + (log / 13.0) * 180
+    /// SS針: 1/2000s(500μs) → +55°、1s(1000000μs) → -55°
+    private var shutterNeedleAngle: Double {
+        let minUs = 500.0, maxUs = 1_000_000.0
+        let clamped = max(minUs, min(maxUs, animShutterUs))
+        let t = log2(clamped / minUs) / log2(maxUs / minUs)
+        return 55 - t * 110
     }
 
-    /// 露出補正の針角度（-35° to +35°）
-    private var exposureCompAngle: Double {
-        return exposureCompensation * 17.5
-    }
+    /// サブ針（現在は中央固定）
+    private var subNeedleAngle: Double { 0 }
+}
 
-    /// ISOの針角度（0° to 360°、一周）
-    private var isoAngle: Double {
-        let log = log2(Double(iso) / 100.0)
-        return (log / 6.0) * 360
-    }
+// MARK: - 先端細の三角形針
 
-    /// シャッタースピードラベル
-    private var shutterSpeedLabel: String {
-        let seconds = Double(shutterSpeedUs) / 1_000_000.0
-
-        if seconds >= 1.0 {
-            return String(format: "%.0fs", seconds)
-        } else if seconds >= 0.1 {
-            return String(format: "1/%.0f", 1.0 / seconds)
-        } else {
-            return String(format: "1/%.0f", 1.0 / seconds)
-        }
+struct NeedleTriangle: Shape {
+    func path(in rect: CGRect) -> Path {
+        var p = Path()
+        p.move(to: CGPoint(x: rect.midX, y: rect.minY))       // 先端
+        p.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))    // 右根元
+        p.addLine(to: CGPoint(x: rect.minX, y: rect.maxY))    // 左根元
+        p.closeSubpath()
+        return p
     }
 }
 
-// MARK: - Needle View
+// MARK: - チェッカーパターンバー
 
-struct Needle: View {
-    let length: CGFloat
-    let width: CGFloat
-    let color: Color
-    let angle: Double
-
+struct Nikon35TiCheckerBar: View {
     var body: some View {
-        Rectangle()
-            .fill(color)
-            .frame(width: width, height: length)
-            .offset(y: -length / 2)
-            .rotationEffect(.degrees(angle))
-            .animation(MinimalAnimation.slowSpring, value: angle)
+        Canvas { ctx, size in
+            let cell: CGFloat = 3
+            let cols = Int(ceil(size.width  / cell))
+            let rows = Int(ceil(size.height / cell))
+            for row in 0..<rows {
+                for col in 0..<cols {
+                    let dark = (row + col) % 2 == 0
+                    ctx.fill(
+                        Path(CGRect(
+                            x: CGFloat(col) * cell,
+                            y: CGFloat(row) * cell,
+                            width: cell, height: cell
+                        )),
+                        with: .color(dark ? Color(white: 0.12) : Color(white: 0.88))
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -220,19 +400,18 @@ struct Nikon35TiMeterView_Previews: PreviewProvider {
         VStack(spacing: 24) {
             Nikon35TiMeterView(
                 aperture: 5.6,
-                shutterSpeedUs: 4000,  // 1/250s
+                shutterSpeedUs: 4000,
                 iso: 400,
                 exposureCompensation: 0.3
             )
-
             Nikon35TiMeterView(
                 aperture: 2.8,
-                shutterSpeedUs: 125,    // 1/8000s
+                shutterSpeedUs: 125,
                 iso: 1600,
                 exposureCompensation: -1.0
             )
         }
         .padding()
-        .background(MinimalTheme.Background.primary)
+        .background(Color(white: 0.93))
     }
 }
