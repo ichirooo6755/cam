@@ -287,9 +287,6 @@ struct ContentView: View {
                 ScrollView(showsIndicators: false) {
                     VStack(spacing: 24) {
 
-                        // Image Display
-                        previewArea
-
                         syncBanner
 
                         // 光検知（常時表示）
@@ -875,88 +872,6 @@ struct ContentView: View {
                 endRadius: 400
             )
         }
-    }
-
-    private var previewArea: some View {
-        ZStack {
-            if enableFocusPeaking, let image = focusPeakingImage {
-                // フォーカスピーキングプレビュー
-                Image(uiImage: image)
-                    .resizable()
-                    .scaledToFit()
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 300)
-                    .background(Color.black.opacity(0.12))
-                    .clipShape(RoundedRectangle(cornerRadius: 30))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 30)
-                            .stroke(.white.opacity(0.2), lineWidth: 1)
-                    )
-                    .contentShape(RoundedRectangle(cornerRadius: 30))
-            } else if let image = capturedImage {
-                Image(uiImage: image)
-                    .resizable()
-                    .scaledToFit()
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 300)
-                    .background(Color.black.opacity(0.12))
-                    .clipShape(RoundedRectangle(cornerRadius: 30))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 30)
-                            .stroke(.white.opacity(0.2), lineWidth: 1)
-                    )
-                    .contentShape(RoundedRectangle(cornerRadius: 30))
-                    .contextMenu {
-                        #if canImport(UIKit)
-                            Button {
-                                UIImageWriteToSavedPhotosAlbum(image, nil, nil, nil)
-                            } label: {
-                                Label("Save to Photos", systemImage: "square.and.arrow.down")
-                            }
-                        #endif
-                        Button {
-                            // Copy to clipboard or other action
-                        } label: {
-                            Label("Copy Image", systemImage: "doc.on.doc")
-                        }
-                    }
-            } else {
-                VStack(spacing: 16) {
-                    Image(systemName: "camera.shutter.button")
-                        .font(.system(size: 40, weight: .light))
-                        .foregroundColor(.primary.opacity(0.3))
-                    Text("NO PREVIEW")
-                        .font(.system(size: 10, weight: .black))
-                        .foregroundColor(.primary.opacity(0.2))
-
-                    PhotosPicker(selection: $selectedPhotoItem, matching: .images) {
-                        HStack(spacing: 8) {
-                            Image(systemName: "photo.on.rectangle.angled")
-                            Text("写真を編集")
-                        }
-                        .font(.caption.weight(.semibold))
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 20)
-                        .padding(.vertical, 10)
-                        .background(Color.blue.opacity(0.8))
-                        .cornerRadius(20)
-                    }
-                }
-                .frame(maxWidth: .infinity)
-                .frame(height: 300)
-                .minimalCard()
-            }
-
-            if isLoading || isCapturing {
-                ProgressView()
-                    .scaleEffect(1.2)
-                    .padding(20)
-                    .background(.ultraThinMaterial)
-                    .clipShape(Circle())
-                    .transition(.opacity.combined(with: .scale))
-            }
-        }
-        .padding(.top, 10)
     }
 
     private func pickerModule<T: Identifiable & CaseIterable & Hashable>(

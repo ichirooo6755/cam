@@ -169,7 +169,7 @@ struct UnifiedGalleryView: View {
                 GridItem(.adaptive(minimum: 150), spacing: 12)
             ], spacing: 12) {
                 ForEach(photoGroups) { group in
-                    PhotoCell(group: group)
+                    PhotoCell(group: group, serverIP: serverIP)
                         .onTapGesture {
                             selectedGroup = group
                             showPhotoDetail = true
@@ -249,6 +249,7 @@ struct UnifiedGalleryView: View {
 
 struct PhotoCell: View {
     @ObservedObject var group: PhotoGroup
+    var serverIP: String
     @State private var thumbnailImage: UIImage?
     @State private var isLoading = false
 
@@ -323,11 +324,19 @@ struct PhotoCell: View {
     }
 
     private func loadFromServer() {
+        let filename = group.id
         isLoading = true
         Task {
-            // TODO: サーバーからサムネイルを読み込む実装
-            await MainActor.run {
-                isLoading = false
+            let api = SimpleCameraAPI(baseURL: "http://\(serverIP):8001")
+            if let image = try? await api.downloadPhoto(filename: filename, thumbnail: true, maxDimension: 300) {
+                await MainActor.run {
+                    thumbnailImage = image
+                    isLoading = false
+                }
+            } else {
+                await MainActor.run {
+                    isLoading = false
+                }
             }
         }
     }

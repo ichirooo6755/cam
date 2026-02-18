@@ -1231,11 +1231,14 @@ struct PhotoEditorView: View {
             ZStack {
                 Color.black.ignoresSafeArea()
 
-                VStack(spacing: 0) {
-                    previewArea
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                GeometryReader { geometry in
+                    VStack(spacing: 0) {
+                        previewArea
+                            .frame(height: geometry.size.height * 0.42)
 
-                    controlsArea
+                        controlsArea
+                            .frame(maxHeight: geometry.size.height * 0.58)
+                    }
                 }
 
                 if isRendering || isExporting || isSavingToApp {
@@ -1388,6 +1391,7 @@ struct PhotoEditorView: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
+            .frame(maxHeight: .infinity)
         }
         .padding(MinimalSpacing.md)
         .background(MinimalTheme.Background.surface.opacity(0.95))
