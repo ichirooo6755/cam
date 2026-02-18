@@ -1,5 +1,6 @@
 import SwiftUI
 import PhotosUI
+import CoreData
 
 #if canImport(UIKit)
 import UIKit
@@ -7,6 +8,7 @@ import UIKit
 
 struct HDRComposerView: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.managedObjectContext) private var viewContext
 
     @State private var selectedPhotoItems: [PhotosPickerItem] = []
     @State private var sourceImages: [UIImage] = []
@@ -15,8 +17,10 @@ struct HDRComposerView: View {
 
     @State private var isProcessing: Bool = false
     @State private var isExporting: Bool = false
+    @State private var isSavingToApp: Bool = false
     @State private var showResultAlert: Bool = false
     @State private var resultMessage: String = ""
+    @State private var showRatingDialog: Bool = false
 
     @State private var imageWriteCoordinator: ImageWriteCoordinator?
 
@@ -34,7 +38,7 @@ struct HDRComposerView: View {
                     controlsArea
                 }
 
-                if isProcessing || isExporting {
+                if isProcessing || isExporting || isSavingToApp {
                     ProgressView()
                         .scaleEffect(1.2)
                         .padding(22)
@@ -55,6 +59,13 @@ struct HDRComposerView: View {
                     HStack(spacing: 14) {
                         if resultImage != nil {
                             Button {
+                                saveToAppStorage()
+                            } label: {
+                                Image(systemName: "internaldrive")
+                            }
+                            .disabled(isSavingToApp)
+
+                            Button {
                                 exportToPhotoLibrary()
                             } label: {
                                 Image(systemName: "square.and.arrow.down")
@@ -71,6 +82,18 @@ struct HDRComposerView: View {
             }
         } message: {
             Text(resultMessage)
+        }
+        .alert("この編集を評価", isPresented: $showRatingDialog) {
+            ForEach(1...5, id: \.self) { rating in
+                Button("\(rating)星") {
+                    confirmSaveWithRating(rating)
+                }
+            }
+            Button("キャンセル", role: .cancel) {
+                isSavingToApp = false
+            }
+        } message: {
+            Text("HDR合成の品質を評価してください（1-5星）")
         }
     }
 
@@ -336,6 +359,67 @@ struct HDRComposerView: View {
     private func resetComposition() {
         resultImage = nil
         settings = .default
+    }
+
+    private func saveToAppStorage() {
+        guard resultImage != nil else { return }
+        if isSavingToApp { return }
+        isSavingToApp = true
+        showRatingDialog = true
+    }
+
+    private func confirmSaveWithRating(_ rating: Int) {
+        guard let result = resultImage else {
+            isSavingToApp = false
+            return
+        }
+
+        Task {
+            await MainActor.run {
+                // 画像をJPEGエンコード（85%品質）
+                guard let imageData = result.jpegData(compressionQuality: 0.85) else {
+                    isSavingToApp = false
+                    resultMessage = "画像のエンコードに失敗しました"
+                    showResultAlert = true
+                    return
+                }
+
+                // サムネイル生成（300x300）
+                let thumbnailSize = CGSize(width: 300, height: 300)
+                let thumbnail = result.preparingThumbnail(of: thumbnailSize)
+                let thumbnailData = thumbnail?.jpegData(compressionQuality: 0.7)
+
+                // 設定をJSONエンコード（HDR設定として保存）
+                guard let settingsData = try? JSONEncoder().encode(settings),
+                      let settingsJSON = String(data: settingsData, encoding: .utf8) else {
+                    isSavingToApp = false
+                    resultMessage = "設定のエンコードに失敗しました"
+                    showResultAlert = true
+                    return
+                }
+
+                // Core Dataに保存（EditedPhotoとして）
+                let photo = EditedPhoto(context: viewContext)
+                photo.id = UUID()
+                photo.createdAt = Date()
+                photo.imageData = imageData
+                photo.thumbnailData = thumbnailData
+                photo.settingsJSON = settingsJSON
+                photo.userRating = Int16(rating)
+                photo.originalFilename = "HDR_\(Date().timeIntervalSince1970).jpg"
+
+                do {
+                    try viewContext.save()
+                    isSavingToApp = false
+                    resultMessage = "HDR画像をアプリ内に保存しました（\(rating)星）"
+                    showResultAlert = true
+                } catch {
+                    isSavingToApp = false
+                    resultMessage = "保存に失敗しました: \(error.localizedDescription)"
+                    showResultAlert = true
+                }
+            }
+        }
     }
 
     private func exportToPhotoLibrary() {

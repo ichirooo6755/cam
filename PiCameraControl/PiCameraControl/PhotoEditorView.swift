@@ -1752,7 +1752,13 @@ struct PhotoEditorView: View {
     private func saveToAppStorage() {
         if isSavingToApp { return }
         isSavingToApp = true
-        showRatingDialog = true
+
+        // PhotoGroupがある場合は新バージョンとして保存、ない場合は従来通りEditedPhotoとして保存
+        if sourcePhotoGroup != nil {
+            showRatingDialog = true
+        } else {
+            showRatingDialog = true
+        }
     }
 
     private func confirmSaveWithRating(_ rating: Int) {
@@ -1790,14 +1796,33 @@ struct PhotoEditorView: View {
                     return
                 }
 
-                // Core Dataに保存
-                let photo = EditedPhoto(context: viewContext)
-                photo.id = UUID()
-                photo.createdAt = Date()
-                photo.imageData = imageData
-                photo.thumbnailData = thumbnailData
-                photo.settingsJSON = settingsJSON
-                photo.userRating = Int16(rating)  // ユーザー評価
+                // PhotoGroupがある場合は新バージョンとして保存
+                if let group = sourcePhotoGroup {
+                    let version = PhotoVersion(context: viewContext)
+                    version.id = UUID()
+                    version.originalPhotoID = group.id
+                    version.versionNumber = Int32(group.nextVersionNumber())
+                    version.imageData = imageData
+                    version.thumbnailData = thumbnailData
+                    version.settingsJSON = settingsJSON
+                    version.createdAt = Date()
+                    version.updatedAt = Date()
+                    version.userRating = Int16(rating)
+                    version.isOriginal = false
+                    version.group = group
+
+                    // latestVersionを更新
+                    group.latestVersion = version
+                } else {
+                    // PhotoGroupがない場合は従来通りEditedPhotoとして保存
+                    let photo = EditedPhoto(context: viewContext)
+                    photo.id = UUID()
+                    photo.createdAt = Date()
+                    photo.imageData = imageData
+                    photo.thumbnailData = thumbnailData
+                    photo.settingsJSON = settingsJSON
+                    photo.userRating = Int16(rating)
+                }
 
                 // 自動編集モードの場合、評価を記録
                 if isAutoEditMode,
@@ -1816,7 +1841,8 @@ struct PhotoEditorView: View {
                     try viewContext.save()
                     isSavingToApp = false
                     let modeInfo = isAutoEditMode ? "（自動編集）" : ""
-                    resultMessage = "アプリ内に保存しました\(modeInfo)（\(rating)星）"
+                    let saveTypeInfo = sourcePhotoGroup != nil ? "新バージョンとして" : "アプリ内に"
+                    resultMessage = "\(saveTypeInfo)保存しました\(modeInfo)（\(rating)星）"
                     showResultAlert = true
 
                     // 保存後にリセット
