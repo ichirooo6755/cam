@@ -85,7 +85,7 @@ struct UnifiedGalleryView: View {
                     hasLoadedOnce = true
                 }
             }
-            .sheet(isPresented: $showPhotoDetail) {
+            .fullScreenCover(isPresented: $showPhotoDetail) {
                 if let group = selectedGroup {
                     PhotoDetailView(photoGroup: group)
                         .environment(\.managedObjectContext, viewContext)

@@ -21,6 +21,7 @@ struct PhotoDetailView: View {
     @State private var showEditor = false
     @State private var showShareSheet = false
     @State private var imageToShare: UIImage?
+    @State private var isLoadingFullImage = false
 
     private var api: SimpleCameraAPI {
         SimpleCameraAPI(baseURL: "http://\(serverIP):8001")
@@ -117,6 +118,9 @@ struct PhotoDetailView: View {
                 }
             }
         }
+        .onAppear {
+            loadOriginalImage()
+        }
         .fullScreenCover(isPresented: $showEditor) {
             if let image = currentVersion?.image {
                 PhotoEditorView(originalImage: image)
@@ -160,22 +164,24 @@ struct PhotoDetailView: View {
                         .aspectRatio(contentMode: .fit)
                         .tag(index)
                 } else {
-                    Rectangle()
-                        .fill(Color.gray.opacity(0.3))
-                        .overlay(
-                            VStack {
+                    ZStack {
+                        Color.clear
+                        if isLoadingFullImage {
+                            VStack(spacing: 8) {
                                 ProgressView()
+                                    .scaleEffect(1.4)
                                 Text("読み込み中...")
                                     .font(MinimalTypography.caption)
                                     .foregroundColor(MinimalTheme.Text.secondary)
-                                    .padding(.top, MinimalSpacing.sm)
                             }
-                        )
-                        .tag(index)
+                        }
+                    }
+                    .tag(index)
                 }
             }
         }
         .tabViewStyle(.page(indexDisplayMode: .never))
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .animation(MinimalAnimation.springEase, value: currentVersionIndex)
     }
 
@@ -284,6 +290,27 @@ struct PhotoDetailView: View {
                     Image(systemName: index <= version.userRating ? "star.fill" : "star")
                         .font(.system(size: 18))
                         .foregroundColor(index <= version.userRating ? .yellow : MinimalTheme.Text.tertiary)
+                }
+            }
+        }
+    }
+
+    // MARK: - Image Loading
+
+    private func loadOriginalImage() {
+        guard let version = currentVersion, version.imageData == nil else { return }
+        isLoadingFullImage = true
+        Task {
+            if let image = try? await api.downloadPhoto(filename: photoGroup.id),
+               let data = image.jpegData(compressionQuality: 0.9) {
+                await MainActor.run {
+                    version.imageData = data
+                    try? viewContext.save()
+                    isLoadingFullImage = false
+                }
+            } else {
+                await MainActor.run {
+                    isLoadingFullImage = false
                 }
             }
         }
