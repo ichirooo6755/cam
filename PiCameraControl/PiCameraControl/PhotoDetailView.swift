@@ -22,6 +22,7 @@ struct PhotoDetailView: View {
     @State private var showShareSheet = false
     @State private var imageToShare: UIImage?
     @State private var isLoadingFullImage = false
+    @State private var fullImage: UIImage?
 
     private var api: SimpleCameraAPI {
         SimpleCameraAPI(baseURL: "http://\(serverIP):8001")
@@ -78,7 +79,7 @@ struct PhotoDetailView: View {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Menu {
                         Button {
-                            if currentVersion?.image != nil {
+                            if fullImage != nil || currentVersion?.image != nil {
                                 showEditor = true
                             }
                         } label: {
@@ -86,7 +87,7 @@ struct PhotoDetailView: View {
                         }
 
                         Button {
-                            if let image = currentVersion?.image {
+                            if let image = fullImage ?? currentVersion?.image {
                                 imageToShare = image
                                 showShareSheet = true
                             }
@@ -122,7 +123,7 @@ struct PhotoDetailView: View {
             loadOriginalImage()
         }
         .fullScreenCover(isPresented: $showEditor) {
-            if let image = currentVersion?.image {
+            if let image = fullImage ?? currentVersion?.image {
                 PhotoEditorView(originalImage: image)
                     .environment(\.managedObjectContext, viewContext)
             }
@@ -156,33 +157,29 @@ struct PhotoDetailView: View {
     // MARK: - Subviews
 
     private var imageCarousel: some View {
-        TabView(selection: $currentVersionIndex) {
-            ForEach(Array(versions.enumerated()), id: \.element.id) { index, version in
-                if let image = version.image {
-                    Image(uiImage: image)
-                        .resizable()
-                        .aspectRatio(contentMode: .fit)
-                        .tag(index)
-                } else {
-                    ZStack {
-                        Color.clear
-                        if isLoadingFullImage {
-                            VStack(spacing: 8) {
-                                ProgressView()
-                                    .scaleEffect(1.4)
-                                Text("読み込み中...")
-                                    .font(MinimalTypography.caption)
-                                    .foregroundColor(MinimalTheme.Text.secondary)
-                            }
-                        }
-                    }
-                    .tag(index)
+        ZStack {
+            Color.black
+            if let image = fullImage ?? currentVersion?.image {
+                Image(uiImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if isLoadingFullImage {
+                VStack(spacing: 12) {
+                    ProgressView()
+                        .scaleEffect(1.4)
+                        .tint(.white)
+                    Text("読み込み中...")
+                        .font(MinimalTypography.caption)
+                        .foregroundColor(.white.opacity(0.7))
                 }
+            } else {
+                Image(systemName: "photo")
+                    .font(.system(size: 48))
+                    .foregroundColor(.white.opacity(0.3))
             }
         }
-        .tabViewStyle(.page(indexDisplayMode: .never))
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .animation(MinimalAnimation.springEase, value: currentVersionIndex)
     }
 
     private var versionIndicator: some View {
@@ -298,14 +295,22 @@ struct PhotoDetailView: View {
     // MARK: - Image Loading
 
     private func loadOriginalImage() {
-        guard let version = currentVersion, version.imageData == nil else { return }
+        // 既にキャッシュ済みならそれを使う
+        if let cached = currentVersion?.image {
+            fullImage = cached
+            return
+        }
         isLoadingFullImage = true
         Task {
-            if let image = try? await api.downloadPhoto(filename: photoGroup.id),
-               let data = image.jpegData(compressionQuality: 0.9) {
+            if let image = try? await api.downloadPhoto(filename: photoGroup.id) {
                 await MainActor.run {
-                    version.imageData = data
-                    try? viewContext.save()
+                    fullImage = image
+                    // Core Dataにキャッシュ保存
+                    if let version = currentVersion,
+                       let data = image.jpegData(compressionQuality: 0.9) {
+                        version.imageData = data
+                        try? viewContext.save()
+                    }
                     isLoadingFullImage = false
                 }
             } else {
