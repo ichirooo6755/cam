@@ -43,40 +43,25 @@ struct PhotoDetailView: View {
     }
 
     var body: some View {
-        NavigationView {
-            ZStack {
-                Color.black.ignoresSafeArea()
+        ZStack {
+            Color.black.ignoresSafeArea()
 
-                VStack(spacing: 0) {
-                    // メイン画像（スワイプで切り替え）
-                    imageCarousel
-
-                    // バージョンインジケーター
-                    versionIndicator
-                        .padding(.vertical, MinimalSpacing.sm)
-
-                    // メタデータ＆評価
-                    metadataSection
-                        .padding(.vertical, MinimalSpacing.md)
-                        .background(MinimalTheme.Background.surface)
-                }
-            }
-            .navigationTitle("")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
+            VStack(spacing: 0) {
+                // カスタムツールバー
+                HStack {
                     Button("閉じる") {
                         dismiss()
                     }
-                }
+                    .foregroundColor(.white)
 
-                ToolbarItem(placement: .principal) {
+                    Spacer()
+
                     Text("\(currentVersionIndex + 1) / \(versions.count)")
                         .font(MinimalTypography.labelMedium)
-                        .foregroundColor(MinimalTheme.Text.secondary)
-                }
+                        .foregroundColor(.white.opacity(0.7))
 
-                ToolbarItem(placement: .navigationBarTrailing) {
+                    Spacer()
+
                     Menu {
                         Button {
                             if fullImage != nil || currentVersion?.image != nil {
@@ -114,12 +99,28 @@ struct PhotoDetailView: View {
                         }
                     } label: {
                         Image(systemName: "ellipsis.circle")
-                            .foregroundColor(.primary)
+                            .font(.title3)
+                            .foregroundColor(.white)
                     }
                 }
+                .padding(.horizontal, 16)
+                .padding(.top, 8)
+                .padding(.bottom, 4)
+
+                // メイン画像
+                imageCarousel
+
+                // バージョンインジケーター
+                versionIndicator
+                    .padding(.vertical, MinimalSpacing.sm)
+
+                // メタデータ＆評価
+                metadataSection
+                    .padding(.vertical, MinimalSpacing.md)
+                    .background(MinimalTheme.Background.surface)
             }
         }
-        .onAppear {
+        .task {
             loadOriginalImage()
         }
         .fullScreenCover(isPresented: $showEditor) {
@@ -295,17 +296,22 @@ struct PhotoDetailView: View {
     // MARK: - Image Loading
 
     private func loadOriginalImage() {
-        // 既にキャッシュ済みならそれを使う
+        // 既にロード済み
+        if fullImage != nil { return }
+        // Core Dataにキャッシュ済み
         if let cached = currentVersion?.image {
             fullImage = cached
             return
         }
+        // サーバーからダウンロード
+        let filename = photoGroup.id
         isLoadingFullImage = true
         Task {
-            if let image = try? await api.downloadPhoto(filename: photoGroup.id) {
+            do {
+                let image = try await api.downloadPhoto(filename: filename)
                 await MainActor.run {
                     fullImage = image
-                    // Core Dataにキャッシュ保存
+                    // Core Dataにキャッシュ
                     if let version = currentVersion,
                        let data = image.jpegData(compressionQuality: 0.9) {
                         version.imageData = data
@@ -313,7 +319,7 @@ struct PhotoDetailView: View {
                     }
                     isLoadingFullImage = false
                 }
-            } else {
+            } catch {
                 await MainActor.run {
                     isLoadingFullImage = false
                 }

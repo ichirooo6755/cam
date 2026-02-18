@@ -20,7 +20,6 @@ struct UnifiedGalleryView: View {
 
     @State private var isLoading = false
     @State private var selectedGroup: PhotoGroup?
-    @State private var showPhotoDetail = false
     @State private var selectedPhotoItem: PhotosPickerItem?
     @State private var importedImage: UIImage?
     @State private var actionMessage: String?
@@ -85,11 +84,9 @@ struct UnifiedGalleryView: View {
                     hasLoadedOnce = true
                 }
             }
-            .fullScreenCover(isPresented: $showPhotoDetail) {
-                if let group = selectedGroup {
-                    PhotoDetailView(photoGroup: group)
-                        .environment(\.managedObjectContext, viewContext)
-                }
+            .fullScreenCover(item: $selectedGroup) { group in
+                PhotoDetailView(photoGroup: group)
+                    .environment(\.managedObjectContext, viewContext)
             }
             .onChange(of: selectedPhotoItem) { oldItem, newItem in
                 Task {
@@ -172,7 +169,6 @@ struct UnifiedGalleryView: View {
                     PhotoCell(group: group, serverIP: serverIP)
                         .onTapGesture {
                             selectedGroup = group
-                            showPhotoDetail = true
                         }
                 }
             }
