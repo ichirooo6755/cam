@@ -51,11 +51,12 @@
         <attribute name="userRating" attributeType="Integer 16" defaultValueString="0" usesScalarValueType="YES"/>
         <attribute name="isOriginal" attributeType="Boolean" defaultValueString="NO" usesScalarValueType="YES"/>
         <relationship name="group" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="PhotoGroup" inverseName="versions" inverseEntity="PhotoGroup"/>
+        <relationship name="latestVersionOf" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="PhotoGroup" inverseName="latestVersion" inverseEntity="PhotoGroup"/>
     </entity>
     <entity name="PhotoGroup" representedClassName="PhotoGroup" syncable="YES">
         <attribute name="id" attributeType="String"/>
         <attribute name="serverMetadataJSON" optional="YES" attributeType="String"/>
-        <relationship name="latestVersion" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="PhotoVersion"/>
+        <relationship name="latestVersion" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="PhotoVersion" inverseName="latestVersionOf" inverseEntity="PhotoVersion"/>
         <relationship name="versions" optional="YES" toMany="YES" deletionRule="Cascade" destinationEntity="PhotoVersion" inverseName="group" inverseEntity="PhotoVersion"/>
     </entity>
 </model>

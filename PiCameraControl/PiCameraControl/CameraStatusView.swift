@@ -6,7 +6,7 @@ struct CameraStatusView: View {
     @Environment(\.managedObjectContext) private var viewContext
 
     @State private var isLoading = false
-    @State private var sensorStatus: SensorStatus?
+    @State private var sensorStatus: SensorRuntimeStatus?
     @State private var meteringRecommendation: MeteringRecommendation?
     @State private var currentSettings: CameraSettings?
     @State private var errorMessage: String?
@@ -108,8 +108,8 @@ struct CameraStatusView: View {
             } else if let settings = currentSettings {
                 Nikon35TiMeterView(
                     aperture: 2.8,  // TODO: 実際のf値
-                    shutterSpeedUs: settings.shutterSpeed.microseconds ?? 4000,
-                    iso: settings.iso.value ?? 400,
+                    shutterSpeedUs: extractShutterUs(from: settings.shutterSpeed),
+                    iso: extractISO(from: settings.iso),
                     exposureCompensation: 0  // TODO: 実際の露出補正
                 )
             } else {
@@ -259,7 +259,7 @@ struct CameraStatusView: View {
 
     // MARK: - センサー情報セクション
 
-    private func sensorInfoSection(_ sensor: SensorStatus) -> some View {
+    private func sensorInfoSection(_ sensor: SensorRuntimeStatus) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("SENSOR DATA")
                 .font(.system(size: 11, weight: .bold, design: .monospaced))
@@ -344,6 +344,22 @@ struct CameraStatusView: View {
         }
     }
 
+    // MARK: - Helper Methods
+
+    private func extractShutterUs(from shutterSpeed: ShutterSpeedValue) -> Int {
+        if case .microseconds(let us) = shutterSpeed {
+            return us
+        }
+        return 4000
+    }
+
+    private func extractISO(from iso: ISOValue) -> Int {
+        if case .value(let val) = iso {
+            return val
+        }
+        return 400
+    }
+
     // MARK: - API呼び出し
 
     private func refreshStatus() async {
@@ -354,8 +370,8 @@ struct CameraStatusView: View {
             async let statusTask = api.fetchSensorStatus()
             async let settingsTask = api.fetchSettings()
 
-            let (status, settings) = try await (statusTask, settingsTask)
-            sensorStatus = status
+            let (statusResponse, settings) = try await (statusTask, settingsTask)
+            sensorStatus = statusResponse.sensor
             currentSettings = settings
         } catch {
             errorMessage = "ステータス取得失敗: \(error.localizedDescription)"
@@ -368,17 +384,12 @@ struct CameraStatusView: View {
         defer { isLoading = false }
 
         do {
-            let response = try await api.fetchMeteringRecommendation(
+            let recommendation = try await api.fetchMeteringRecommendation(
                 targetISO: nil,
                 targetShutterUs: nil
             )
 
-            if response.success, let recommendation = response.recommendation {
-                meteringRecommendation = recommendation
-            } else {
-                errorMessage = response.error ?? "測光に失敗しました"
-                showError = true
-            }
+            meteringRecommendation = recommendation
         } catch {
             errorMessage = "測光失敗: \(error.localizedDescription)"
             showError = true
@@ -390,10 +401,7 @@ struct CameraStatusView: View {
         defer { isLoading = false }
 
         do {
-            try await api.applyMeteringRecommendation(
-                iso: recommendation.recommendedISO,
-                shutterUs: recommendation.recommendedShutterUs
-            )
+            try await api.applyMeteringRecommendation(recommendation)
 
             // 設定を再取得
             currentSettings = try await api.fetchSettings()

@@ -146,7 +146,7 @@ actor HDRProcessor {
 
         // 中央の画像を基準にする（中間露出）
         let referenceIndex = images.count / 2
-        let reference = images[referenceIndex]
+        _ = images[referenceIndex]
 
         var aligned: [CIImage] = []
 

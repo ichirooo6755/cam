@@ -116,15 +116,23 @@ extension View {
 // MARK: - Components
 
 struct GlassToggle: View {
+    var icon: String
     var title: String
     @Binding var isOn: Bool
     var action: () -> Void
 
     var body: some View {
         VStack(spacing: 8) {
+            Image(systemName: icon)
+                .font(.system(size: 18, weight: .medium))
+                .foregroundColor(isOn ? MinimalTheme.Accent.primary : .secondary)
+
             Text(title)
                 .font(.caption.weight(.medium))
                 .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+                .lineLimit(2)
+                .minimumScaleFactor(0.8)
 
             Toggle("", isOn: $isOn)
                 .labelsHidden()
@@ -134,9 +142,8 @@ struct GlassToggle: View {
                     action()
                 }
         }
-        .padding(.vertical, 12)
-        .padding(.horizontal, 16)
-        .liquidGlassStyle(radius: 16)
+        .frame(maxWidth: .infinity)
+        .minimalCard()
     }
 }
 
@@ -212,6 +219,14 @@ struct ContentView: View {
     @State private var isMetering: Bool = false
     @StateObject private var captureLocationProvider = CaptureLocationProvider()
 
+    // Section expansion state
+    @State private var expandedCamera = true
+    @State private var expandedFeatures = false
+    @State private var expandedCapture = true
+    @State private var expandedSensor = false
+    @State private var expandedAppearance = false
+    @State private var expandedNetwork = false
+
     @FocusState private var isManualMetaFocused: Bool
 
     private var api: CameraAPI {
@@ -223,6 +238,30 @@ struct ContentView: View {
             return ShutterSpeedOption.allCases
         }
         return ShutterSpeedOption.allCases.filter { $0 != .ss400 }
+    }
+
+    // MARK: - Section Header Helper
+
+    private func sectionHeader(icon: String, title: String, badge: String? = nil) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: icon)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundColor(MinimalTheme.Accent.primary)
+                .frame(width: 24)
+            Text(title)
+                .font(MinimalTypography.headlineSmall)
+                .foregroundColor(.primary)
+            if let badge {
+                Text(badge)
+                    .font(MinimalTypography.labelSmall)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(MinimalTheme.Accent.primary.opacity(0.1))
+                    .foregroundColor(MinimalTheme.Accent.primary)
+                    .cornerRadius(4)
+            }
+            Spacer()
+        }
     }
 
     // MARK: - Body
@@ -253,65 +292,64 @@ struct ContentView: View {
 
                         syncBanner
 
+                        // 光検知（常時表示）
                         monitoringQuickSection
 
-                        // Camera Controls (Nikon 35Ti Style)
-                        VStack(spacing: 24) {
-                            // MODE Picker
-                            VStack(alignment: .leading, spacing: 14) {
-                                Text("MODE")
-                                    .font(.system(size: 11, weight: .bold, design: .monospaced))
-                                    .foregroundColor(Color.gray.opacity(0.9))
-                                    .tracking(1.5)
-                                    .padding(.horizontal, 4)
+                        // 📷 カメラ設定
+                        DisclosureGroup(isExpanded: $expandedCamera) {
+                            VStack(spacing: 20) {
+                                // MODE Picker
+                                VStack(alignment: .leading, spacing: 14) {
+                                    Text("MODE")
+                                        .font(.system(size: 11, weight: .bold, design: .monospaced))
+                                        .foregroundColor(Color.gray.opacity(0.9))
+                                        .tracking(1.5)
+                                        .padding(.horizontal, 4)
 
-                                ScrollView(.horizontal, showsIndicators: false) {
-                                    HStack(spacing: 10) {
-                                        ForEach(CameraModeOption.allCases) { mode in
-                                            Button {
-                                                withAnimation(.easeInOut(duration: 0.15)) {
-                                                    selectedCameraMode = mode
-                                                    updateCameraMode(mode)
+                                    ScrollView(.horizontal, showsIndicators: false) {
+                                        HStack(spacing: 10) {
+                                            ForEach(CameraModeOption.allCases) { mode in
+                                                Button {
+                                                    withAnimation(.easeInOut(duration: 0.15)) {
+                                                        selectedCameraMode = mode
+                                                        updateCameraMode(mode)
+                                                    }
+                                                } label: {
+                                                    Text(mode.label)
+                                                        .font(.system(size: 14, weight: selectedCameraMode == mode ? .bold : .medium, design: .monospaced))
+                                                        .foregroundColor(selectedCameraMode == mode ? .white : Color.gray.opacity(0.9))
+                                                        .padding(.horizontal, 18)
+                                                        .padding(.vertical, 12)
+                                                        .background(
+                                                            RoundedRectangle(cornerRadius: 10)
+                                                                .fill(selectedCameraMode == mode ? Color.red.opacity(0.85) : Color.gray.opacity(0.15))
+                                                        )
                                                 }
-                                            } label: {
-                                                Text(mode.label)
-                                                    .font(.system(size: 14, weight: selectedCameraMode == mode ? .bold : .medium, design: .monospaced))
-                                                    .foregroundColor(selectedCameraMode == mode ? .white : Color.gray.opacity(0.9))
-                                                    .padding(.horizontal, 18)
-                                                    .padding(.vertical, 12)
-                                                    .background(
-                                                        RoundedRectangle(cornerRadius: 10)
-                                                            .fill(selectedCameraMode == mode ? Color.red.opacity(0.85) : Color.gray.opacity(0.15))
-                                                    )
                                             }
                                         }
                                     }
                                 }
-                            }
-                            .padding(20)
-                            .liquidGlassStyle(radius: 16)
 
-                            if selectedCameraMode == .raw {
-                                VStack(alignment: .leading, spacing: 8) {
-                                    HStack {
-                                        Image(systemName: "camera.aperture")
-                                            .foregroundColor(.blue)
-                                        Text("RAWモード（PiCamera HQ）")
-                                            .font(.caption.weight(.bold))
-                                            .foregroundColor(.primary)
+                                if selectedCameraMode == .raw {
+                                    VStack(alignment: .leading, spacing: 8) {
+                                        HStack {
+                                            Image(systemName: "camera.aperture")
+                                                .foregroundColor(.blue)
+                                            Text("RAWモード（PiCamera HQ）")
+                                                .font(.caption.weight(.bold))
+                                                .foregroundColor(.primary)
+                                        }
+                                        Text("• DNG形式（12.3MP: 4056x3040）\n• Sony IMX477センサー生データ\n• 全自動処理OFF（ピュアRAW）\n• ISO 100-16000対応\n• 手動撮影専用（光検知無効）")
+                                            .font(.caption2)
+                                            .foregroundColor(.secondary)
+                                            .lineSpacing(4)
                                     }
-                                    Text("• DNG形式（12.3MP: 4056x3040）\n• Sony IMX477センサー生データ\n• 全自動処理OFF（ピュアRAW）\n• ISO 100-16000対応\n• 手動撮影専用（光検知無効）")
-                                        .font(.caption2)
-                                        .foregroundColor(.secondary)
-                                        .lineSpacing(4)
+                                    .padding(12)
+                                    .background(Color.blue.opacity(0.1))
+                                    .cornerRadius(12)
                                 }
-                                .padding(12)
-                                .background(Color.blue.opacity(0.1))
-                                .cornerRadius(12)
-                            }
 
-                            // カメラモード別JPEG品質説明
-                            VStack(alignment: .leading, spacing: 4) {
+                                // カメラモード別JPEG品質説明
                                 HStack {
                                     Image(systemName: "photo")
                                         .foregroundColor(.gray.opacity(0.7))
@@ -320,173 +358,224 @@ struct ContentView: View {
                                         .font(.caption2)
                                         .foregroundColor(.gray.opacity(0.9))
                                 }
-                            }
-                            .padding(.horizontal, 16)
+                                .padding(.horizontal, 4)
 
-                            isoQuickModule
-                            shutterPickerModule
+                                Divider()
 
-                            pickerModule(
-                                title: "QUALITY", selection: $selectedQuality,
-                                options: QualityOption.allCases
-                            ) { opt in
-                                updateQuality(opt)
-                            }
+                                isoQuickModule
 
-                            whiteBalanceModule
+                                Divider()
 
-                            if !manualModeEnabled {
-                                thresholdModule
-                            }
-                        }
+                                shutterPickerModule
 
-                        // Toggles
-                        LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 12) {
-                            GlassToggle(title: "手動モード", isOn: $manualModeEnabled) {
-                                updateMonitoringEnabled(!manualModeEnabled)
-                            }
-                            GlassToggle(title: "多重露光", isOn: $enableMultipleExposure) {
-                                updateToggle(multipleExposure: enableMultipleExposure)
-                            }
-                            GlassToggle(title: "2-in-1", isOn: $enable2in1Composition) {
-                                updateToggle(composition2in1: enable2in1Composition)
-                            }
-                            GlassToggle(title: "日時刻印", isOn: $enableTimestamp) {
-                                updateToggle(timestamp: enableTimestamp)
-                            }
-                            GlassToggle(title: "手ぶれ補正", isOn: $enableStabilization) {
-                                Task {
-                                    do {
-                                        try await api.updateStabilization(enableStabilization, temporary: false)
-                                    } catch {
-                                        print("手ぶれ補正の更新に失敗: \(error)")
-                                    }
+                                Divider()
+
+                                pickerModule(
+                                    title: "QUALITY", selection: $selectedQuality,
+                                    options: QualityOption.allCases
+                                ) { opt in
+                                    updateQuality(opt)
+                                }
+
+                                Divider()
+
+                                whiteBalanceModule
+
+                                if !manualModeEnabled {
+                                    Divider()
+                                    thresholdModule
                                 }
                             }
-                            GlassToggle(title: "RAWモード", isOn: $enableRawMode) {
-                                Task {
-                                    do {
-                                        try await api.updateSettings(["raw_mode": enableRawMode], temporary: false)
-                                    } catch {
-                                        print("RAWモードの更新に失敗: \(error)")
-                                    }
-                                }
-                            }
-                            GlassToggle(title: "フォーカスピーキング", isOn: $enableFocusPeaking) {
-                                if enableFocusPeaking {
-                                    fetchFocusPeaking()
-                                } else {
-                                    focusPeakingImage = nil
-                                }
-                            }
-                        }
-
-                        // 手ぶれ補正の説明
-                        if enableStabilization {
-                            Text("⚠️ 手ぶれ補正ONで画質がわずかに劣化します")
-                                .font(.caption)
-                                .foregroundColor(.orange.opacity(0.8))
-                                .padding(.horizontal, 16)
-                        }
-
-                        // RAWモードの説明
-                        if enableRawMode {
-                            Text("📷 RAWモード: DNG形式で保存（12.3MP）")
-                                .font(.caption)
-                                .foregroundColor(.blue.opacity(0.8))
-                                .padding(.horizontal, 16)
-                        }
-
-                        // 多重露光モード選択
-                        if enableMultipleExposure {
-                            VStack(alignment: .leading, spacing: 12) {
-                                Text("MULTIPLE EXPOSURE MODE")
-                                    .font(.caption2.weight(.black))
-                                    .foregroundColor(.secondary)
-                                    .padding(.horizontal, 4)
-
-                                ScrollView(.horizontal, showsIndicators: false) {
-                                    HStack(spacing: 10) {
-                                        Button {
-                                            multipleExposureMode = "blend"
-                                            updateMultipleExposureMode("blend")
-                                        } label: {
-                                            VStack(alignment: .leading, spacing: 4) {
-                                                Text("BLEND")
-                                                    .font(.system(size: 12, weight: .bold, design: .monospaced))
-                                                Text("50:50ブレンド")
-                                                    .font(.system(size: 9, weight: .medium))
-                                                    .foregroundColor(.secondary)
-                                            }
-                                            .padding(.horizontal, 14)
-                                            .padding(.vertical, 10)
-                                            .background(
-                                                RoundedRectangle(cornerRadius: 10)
-                                                    .fill(multipleExposureMode == "blend" ? Color.purple.opacity(0.85) : Color.gray.opacity(0.15))
-                                            )
-                                            .foregroundColor(multipleExposureMode == "blend" ? .white : .primary)
-                                        }
-
-                                        Button {
-                                            multipleExposureMode = "additive"
-                                            updateMultipleExposureMode("additive")
-                                        } label: {
-                                            VStack(alignment: .leading, spacing: 4) {
-                                                Text("ADDITIVE")
-                                                    .font(.system(size: 12, weight: .bold, design: .monospaced))
-                                                Text("加算合成（星の軌跡）")
-                                                    .font(.system(size: 9, weight: .medium))
-                                                    .foregroundColor(.secondary)
-                                            }
-                                            .padding(.horizontal, 14)
-                                            .padding(.vertical, 10)
-                                            .background(
-                                                RoundedRectangle(cornerRadius: 10)
-                                                    .fill(multipleExposureMode == "additive" ? Color.orange.opacity(0.85) : Color.gray.opacity(0.15))
-                                            )
-                                            .foregroundColor(multipleExposureMode == "additive" ? .white : .primary)
-                                        }
-                                    }
-                                }
-                            }
-                            .padding(20)
-                            .liquidGlassStyle(radius: 16)
-                        }
-
-                        Button {
-                            showResetTemporaryConfirm = true
+                            .padding(.top, 8)
                         } label: {
-                            HStack(spacing: 10) {
-                                Image(systemName: "arrow.uturn.backward")
-                                    .font(.caption.weight(.bold))
-                                Text("一時変更をリセット")
-                                    .font(.caption.weight(.bold))
-                                Spacer()
-                            }
-                            .padding(14)
-                            .foregroundColor(.blue)
+                            sectionHeader(icon: "camera.fill", title: "カメラ設定")
                         }
-                        .liquidGlassStyle(radius: 20)
-                        .disabled(isLoading || isCapturing)
-                        .alert("一時変更をリセットしますか？", isPresented: $showResetTemporaryConfirm) {
-                            Button("リセット", role: .destructive) {
-                                resetTemporarySettings()
+                        .tint(.primary)
+                        .minimalCard()
+
+                        // ⚙️ 機能設定
+                        DisclosureGroup(isExpanded: $expandedFeatures) {
+                            VStack(spacing: 16) {
+                                LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 12) {
+                                    GlassToggle(icon: "hand.raised.fill", title: "手動モード", isOn: $manualModeEnabled) {
+                                        updateMonitoringEnabled(!manualModeEnabled)
+                                    }
+                                    GlassToggle(icon: "square.stack.3d.up.fill", title: "多重露光", isOn: $enableMultipleExposure) {
+                                        updateToggle(multipleExposure: enableMultipleExposure)
+                                    }
+                                    GlassToggle(icon: "rectangle.split.2x1.fill", title: "2-in-1", isOn: $enable2in1Composition) {
+                                        updateToggle(composition2in1: enable2in1Composition)
+                                    }
+                                    GlassToggle(icon: "clock.fill", title: "日時刻印", isOn: $enableTimestamp) {
+                                        updateToggle(timestamp: enableTimestamp)
+                                    }
+                                    GlassToggle(icon: "waveform.path", title: "手ぶれ補正", isOn: $enableStabilization) {
+                                        Task {
+                                            do {
+                                                try await api.updateStabilization(enableStabilization, temporary: false)
+                                            } catch {
+                                                print("手ぶれ補正の更新に失敗: \(error)")
+                                            }
+                                        }
+                                    }
+                                    GlassToggle(icon: "doc.fill", title: "RAWモード", isOn: $enableRawMode) {
+                                        Task {
+                                            do {
+                                                try await api.updateSettings(["raw_mode": enableRawMode], temporary: false)
+                                            } catch {
+                                                print("RAWモードの更新に失敗: \(error)")
+                                            }
+                                        }
+                                    }
+                                    GlassToggle(icon: "scope", title: "フォーカスピーキング", isOn: $enableFocusPeaking) {
+                                        if enableFocusPeaking {
+                                            fetchFocusPeaking()
+                                        } else {
+                                            focusPeakingImage = nil
+                                        }
+                                    }
+                                }
+
+                                if enableStabilization {
+                                    Text("⚠️ 手ぶれ補正ONで画質がわずかに劣化します")
+                                        .font(.caption)
+                                        .foregroundColor(.orange.opacity(0.8))
+                                        .padding(.horizontal, 4)
+                                }
+
+                                if enableRawMode {
+                                    Text("📷 RAWモード: DNG形式で保存（12.3MP）")
+                                        .font(.caption)
+                                        .foregroundColor(.blue.opacity(0.8))
+                                        .padding(.horizontal, 4)
+                                }
+
+                                if enableMultipleExposure {
+                                    Divider()
+                                    VStack(alignment: .leading, spacing: 12) {
+                                        Text("MULTIPLE EXPOSURE MODE")
+                                            .font(.caption2.weight(.black))
+                                            .foregroundColor(.secondary)
+                                            .padding(.horizontal, 4)
+
+                                        ScrollView(.horizontal, showsIndicators: false) {
+                                            HStack(spacing: 10) {
+                                                Button {
+                                                    multipleExposureMode = "blend"
+                                                    updateMultipleExposureMode("blend")
+                                                } label: {
+                                                    VStack(alignment: .leading, spacing: 4) {
+                                                        Text("BLEND")
+                                                            .font(.system(size: 12, weight: .bold, design: .monospaced))
+                                                        Text("50:50ブレンド")
+                                                            .font(.system(size: 9, weight: .medium))
+                                                            .foregroundColor(.secondary)
+                                                    }
+                                                    .padding(.horizontal, 14)
+                                                    .padding(.vertical, 10)
+                                                    .background(
+                                                        RoundedRectangle(cornerRadius: 10)
+                                                            .fill(multipleExposureMode == "blend" ? Color.purple.opacity(0.85) : Color.gray.opacity(0.15))
+                                                    )
+                                                    .foregroundColor(multipleExposureMode == "blend" ? .white : .primary)
+                                                }
+
+                                                Button {
+                                                    multipleExposureMode = "additive"
+                                                    updateMultipleExposureMode("additive")
+                                                } label: {
+                                                    VStack(alignment: .leading, spacing: 4) {
+                                                        Text("ADDITIVE")
+                                                            .font(.system(size: 12, weight: .bold, design: .monospaced))
+                                                        Text("加算合成（星の軌跡）")
+                                                            .font(.system(size: 9, weight: .medium))
+                                                            .foregroundColor(.secondary)
+                                                    }
+                                                    .padding(.horizontal, 14)
+                                                    .padding(.vertical, 10)
+                                                    .background(
+                                                        RoundedRectangle(cornerRadius: 10)
+                                                            .fill(multipleExposureMode == "additive" ? Color.orange.opacity(0.85) : Color.gray.opacity(0.15))
+                                                    )
+                                                    .foregroundColor(multipleExposureMode == "additive" ? .white : .primary)
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+
+                                Divider()
+
+                                Button {
+                                    showResetTemporaryConfirm = true
+                                } label: {
+                                    HStack(spacing: 10) {
+                                        Image(systemName: "arrow.uturn.backward")
+                                            .font(.caption.weight(.bold))
+                                        Text("一時変更をリセット")
+                                            .font(.caption.weight(.bold))
+                                        Spacer()
+                                    }
+                                    .padding(.vertical, 4)
+                                    .foregroundColor(.blue)
+                                }
+                                .disabled(isLoading || isCapturing)
+                                .alert("一時変更をリセットしますか？", isPresented: $showResetTemporaryConfirm) {
+                                    Button("リセット", role: .destructive) {
+                                        resetTemporarySettings()
+                                    }
+                                    Button("キャンセル", role: .cancel) {}
+                                } message: {
+                                    Text("ISO/シャッター/WB/画質/閾値などの一時変更を元に戻します")
+                                }
                             }
-                            Button("キャンセル", role: .cancel) {}
-                        } message: {
-                            Text("ISO/シャッター/WB/画質/閾値などの一時変更を元に戻します")
+                            .padding(.top, 8)
+                        } label: {
+                            sectionHeader(icon: "slider.horizontal.3", title: "機能設定")
                         }
+                        .tint(.primary)
+                        .minimalCard()
 
-                        // Capture Button
-                        captureSection
-                            .sensoryFeedback(.impact(flexibility: .rigid), trigger: isCapturing)
+                        // 📸 撮影
+                        DisclosureGroup(isExpanded: $expandedCapture) {
+                            captureSection
+                                .sensoryFeedback(.impact(flexibility: .rigid), trigger: isCapturing)
+                                .padding(.top, 8)
+                        } label: {
+                            sectionHeader(icon: "camera.shutter.button", title: "撮影")
+                        }
+                        .tint(.primary)
+                        .minimalCard()
 
-                        sensorStatusSection
+                        // 📊 センサー
+                        DisclosureGroup(isExpanded: $expandedSensor) {
+                            sensorStatusSection
+                                .padding(.top, 8)
+                        } label: {
+                            sectionHeader(icon: "gauge.with.dots.needle.33percent", title: "センサー")
+                        }
+                        .tint(.primary)
+                        .minimalCard()
 
-                        appearanceSection
+                        // 🎨 表示設定
+                        DisclosureGroup(isExpanded: $expandedAppearance) {
+                            appearanceSection
+                                .padding(.top, 8)
+                        } label: {
+                            sectionHeader(icon: "paintbrush.fill", title: "表示設定")
+                        }
+                        .tint(.primary)
+                        .minimalCard()
 
-                        // Network
-                        networkSection
+                        // 🌐 ネットワーク
+                        DisclosureGroup(isExpanded: $expandedNetwork) {
+                            networkSection
+                                .padding(.top, 8)
+                        } label: {
+                            sectionHeader(icon: "wifi", title: "ネットワーク")
+                        }
+                        .tint(.primary)
+                        .minimalCard()
 
                         Spacer(minLength: 80)
                     }
@@ -518,8 +607,7 @@ struct ContentView: View {
                                     .foregroundColor(.secondary)
                             }
                         }
-                        .padding(14)
-                        .liquidGlassStyle(radius: 20)
+                        .minimalCard()
                         .padding(.horizontal, 20)
                         .padding(.top, 12)
 
@@ -856,7 +944,7 @@ struct ContentView: View {
                 }
                 .frame(maxWidth: .infinity)
                 .frame(height: 300)
-                .liquidGlassStyle(radius: 30)
+                .minimalCard()
             }
 
             if isLoading || isCapturing {
@@ -896,8 +984,6 @@ struct ContentView: View {
                 onChange(newValue)
             }
         }
-        .padding(12)
-        .liquidGlassStyle(radius: 20)
     }
 
     private var monitoringQuickSection: some View {
@@ -932,8 +1018,7 @@ struct ContentView: View {
                 .font(.caption)
                 .foregroundColor(.secondary)
         }
-        .padding(16)
-        .liquidGlassStyle(radius: 20)
+        .minimalCard()
     }
 
     private var appearanceSection: some View {
@@ -959,8 +1044,6 @@ struct ContentView: View {
                 .font(.caption)
                 .foregroundColor(.secondary)
         }
-        .padding(16)
-        .liquidGlassStyle(radius: 20)
     }
 
     private var isoQuickModule: some View {
@@ -1009,8 +1092,6 @@ struct ContentView: View {
                 }
             }
         }
-        .padding(16)
-        .liquidGlassStyle(radius: 20)
     }
 
     private var whiteBalanceModule: some View {
@@ -1041,8 +1122,6 @@ struct ContentView: View {
                 }
             }
         }
-        .padding(16)
-        .liquidGlassStyle(radius: 20)
     }
 
     private var sensorStatusSection: some View {
@@ -1141,8 +1220,6 @@ struct ContentView: View {
                 .cornerRadius(14)
             }
         }
-        .padding(16)
-        .liquidGlassStyle(radius: 20)
     }
 
     private var shutterPickerModule: some View {
@@ -1191,8 +1268,6 @@ struct ContentView: View {
                 }
             }
         }
-        .padding(16)
-        .liquidGlassStyle(radius: 20)
     }
 
     private var thresholdModule: some View {
@@ -1215,8 +1290,6 @@ struct ContentView: View {
             }
             .accentColor(.blue)
         }
-        .padding(16)
-        .liquidGlassStyle(radius: 20)
     }
 
     private var captureSection: some View {
@@ -1329,8 +1402,6 @@ struct ContentView: View {
                 .cornerRadius(14)
             }
         }
-        .padding(16)
-        .liquidGlassStyle(radius: 20)
     }
 
     private var networkSection: some View {
@@ -1476,8 +1547,6 @@ struct ContentView: View {
                 }
             }
         }
-        .padding(20)
-        .liquidGlassStyle(radius: 24)
     }
 
     struct GlassTextFieldStyle: TextFieldStyle {
@@ -1853,8 +1922,7 @@ struct ContentView: View {
                     .foregroundColor(.secondary)
                 Spacer()
             }
-            .padding(14)
-            .liquidGlassStyle(radius: 20)
+            .minimalCard()
         case .success(let message):
             HStack(spacing: 10) {
                 Image(systemName: "checkmark.circle.fill")
@@ -1864,8 +1932,7 @@ struct ContentView: View {
                     .foregroundColor(.secondary)
                 Spacer()
             }
-            .padding(14)
-            .liquidGlassStyle(radius: 20)
+            .minimalCard()
         }
     }
 
