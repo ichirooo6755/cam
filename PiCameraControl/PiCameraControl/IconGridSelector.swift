@@ -41,98 +41,108 @@ enum EditorCategory: String, CaseIterable, Identifiable {
         case .presets: return "プリセット"
         }
     }
-
-    var shortLabel: String {
-        switch self {
-        case .light: return "L"
-        case .color: return "C"
-        case .effects: return "E"
-        case .hsl: return "H"
-        case .splitToning: return "S"
-        case .toneCurve: return "T"
-        case .crop: return "CR"
-        case .radial: return "R"
-        case .presets: return "P"
-        }
-    }
 }
 
-/// アイコングリッドセレクター（3x3）
+/// アイコンセレクター（横一列スクロール＋折りたたみ対応）
 struct IconGridSelector: View {
     @Binding var selectedCategory: EditorCategory
-    @Environment(\.colorScheme) var colorScheme
-
-    private let columns = [
-        GridItem(.flexible(), spacing: 12),
-        GridItem(.flexible(), spacing: 12),
-        GridItem(.flexible(), spacing: 12)
-    ]
+    @State private var isExpanded: Bool = true
 
     var body: some View {
-        LazyVGrid(columns: columns, spacing: 12) {
-            ForEach(EditorCategory.allCases) { category in
-                CategoryIcon(
-                    category: category,
-                    isSelected: selectedCategory == category
-                )
-                .onTapGesture {
-                    withAnimation(MinimalAnimation.springEase) {
-                        selectedCategory = category
-                    }
+        VStack(spacing: 0) {
+            // ヘッダー（折りたたみボタン）
+            Button {
+                withAnimation(.easeInOut(duration: 0.25)) {
+                    isExpanded.toggle()
                 }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: selectedCategory.icon)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(MinimalTheme.Accent.primary)
+
+                    Text(selectedCategory.label)
+                        .font(MinimalTypography.labelMedium)
+                        .foregroundColor(MinimalTheme.Text.primary)
+
+                    Spacer()
+
+                    Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(MinimalTheme.Text.tertiary)
+                }
+                .padding(.horizontal, MinimalSpacing.md)
+                .padding(.vertical, 8)
+            }
+
+            // 横スクロールアイコン列
+            if isExpanded {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 4) {
+                        ForEach(EditorCategory.allCases) { category in
+                            CategoryIcon(
+                                category: category,
+                                isSelected: selectedCategory == category
+                            )
+                            .onTapGesture {
+                                withAnimation(MinimalAnimation.springEase) {
+                                    selectedCategory = category
+                                }
+                            }
+                        }
+                    }
+                    .padding(.horizontal, MinimalSpacing.md)
+                    .padding(.bottom, 8)
+                }
+                .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
-        .padding(MinimalSpacing.md)
         .minimalCard()
     }
 }
 
-/// カテゴリアイコン
+/// カテゴリアイコン（コンパクト版）
 struct CategoryIcon: View {
     let category: EditorCategory
     let isSelected: Bool
-    @Environment(\.colorScheme) var colorScheme
 
     var body: some View {
-        VStack(spacing: 6) {
-            // アイコン
+        VStack(spacing: 4) {
             Image(systemName: category.icon)
-                .font(.system(size: 24, weight: isSelected ? .semibold : .regular))
+                .font(.system(size: 20, weight: isSelected ? .semibold : .regular))
                 .foregroundColor(
                     isSelected
                         ? MinimalTheme.Accent.primary
                         : MinimalTheme.Text.secondary
                 )
-                .frame(width: 48, height: 48)
+                .frame(width: 40, height: 40)
                 .background(
-                    RoundedRectangle(cornerRadius: 10)
+                    RoundedRectangle(cornerRadius: 8)
                         .fill(
                             isSelected
-                                ? MinimalTheme.Accent.primary.opacity(0.1)
+                                ? MinimalTheme.Accent.primary.opacity(0.12)
                                 : Color.clear
                         )
                 )
                 .overlay(
-                    RoundedRectangle(cornerRadius: 10)
+                    RoundedRectangle(cornerRadius: 8)
                         .stroke(
-                            isSelected
-                                ? MinimalTheme.Accent.primary
-                                : Color.clear,
+                            isSelected ? MinimalTheme.Accent.primary : Color.clear,
                             lineWidth: 0.5
                         )
                 )
 
-            // ラベル
             Text(category.label)
-                .font(MinimalTypography.labelSmall)
+                .font(.system(size: 9, weight: isSelected ? .semibold : .regular))
                 .foregroundColor(
                     isSelected
-                        ? MinimalTheme.Text.primary
+                        ? MinimalTheme.Accent.primary
                         : MinimalTheme.Text.secondary
                 )
+                .lineLimit(1)
         }
-        .frame(maxWidth: .infinity)
-        .scaleEffect(isSelected ? 1.0 : 0.95)
+        .frame(width: 52)
+        .scaleEffect(isSelected ? 1.05 : 1.0)
         .animation(MinimalAnimation.springEase, value: isSelected)
     }
 }
