@@ -1547,7 +1547,7 @@ struct PhotoEditorView: View {
             sliderRow(title: "輝度", value: channel.luminance, range: -100...100, step: 1)
         }
         .padding(12)
-        .background(Color(red: 0.15, green: 0.15, blue: 0.17))
+        .background(Color(.secondarySystemBackground))
         .cornerRadius(12)
     }
 

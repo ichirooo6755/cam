@@ -94,7 +94,7 @@ struct IconGridSelector: View {
                     .padding(.horizontal, MinimalSpacing.md)
                     .padding(.bottom, 8)
                 }
-                .transition(.opacity.combined(with: .move(edge: .top)))
+                .transition(.opacity)
             }
         }
         .minimalCard()

@@ -210,6 +210,7 @@ struct ContentView: View {
     @State private var errorMessage: String? = nil
     @State private var syncState: SyncState = .idle
     @State private var isApplyingRemoteSettings: Bool = false
+    @State private var hasLoadedSettings: Bool = false
     @State private var showResetTemporaryConfirm: Bool = false
     @State private var manualCaptureMode: ManualCaptureMode = .current
     @State private var manualCaptureMeta: String = ""
@@ -660,7 +661,10 @@ struct ContentView: View {
                 apSSIDInput = savedAPSSID
                 apPasswordInput = savedAPPassword
                 captureLocationProvider.requestAuthorizationAndStart()
-                loadAllSettings()
+                if !hasLoadedSettings {
+                    hasLoadedSettings = true
+                    loadAllSettings()
+                }
             }
             .onChange(of: selectedPhotoItem) { oldItem, newItem in
                 Task {
@@ -1533,9 +1537,7 @@ struct ContentView: View {
         enableRawMode = settings.rawMode
         manualModeEnabled = !settings.monitoringEnabled
 
-        DispatchQueue.main.async {
-            isApplyingRemoteSettings = false
-        }
+        isApplyingRemoteSettings = false
     }
 
     private func performSettingUpdate(
