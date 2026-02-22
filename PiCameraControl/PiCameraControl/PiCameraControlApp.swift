@@ -12,11 +12,6 @@ struct PiCameraControlApp: App {
         WindowGroup {
             ZStack(alignment: .top) {
                 TabView {
-                    CameraStatusView()
-                        .tabItem {
-                            Label("ステータス", systemImage: "gauge.with.needle")
-                        }
-
                     UnifiedGalleryView()
                         .tabItem {
                             Label("ギャラリー", systemImage: "photo.on.rectangle.angled")

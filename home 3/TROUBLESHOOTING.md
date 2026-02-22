@@ -812,6 +812,36 @@ FORCE_AP_SWITCH=1 AP_INTERFACE=en0 HOME_INTERFACE=en0 \
 
 ## 作業ログ
 
+- 2026-02-23 02:46 JST
+  - 変更ファイル:
+    - `home 3/camera_service.py`
+      - **モード別パフォーマンスプロファイル導入** — `MODE_PROFILES` で各モードの check_interval / min_cooldown / max_per_minute / lores_size / quality / denoise_override を定義
+        - reaction: 100ms ポーリング、0.5s クールダウン、24枚/分、quality=70、denoise=off（最速）
+        - standard/manual: 200ms ポーリング、1.5s クールダウン、15枚/分
+        - quality/twilight/night: 500ms ポーリング、3.0s クールダウン、cdn_hq
+        - raw: 5.0s クールダウン（DNG大ファイル書込み対応）
+        - battery: 1.0s ポーリング、5.0s クールダウン、6枚/分
+      - lores_size を `(80,60)` → `(128,96)` に修正（IMX477 HQ カメラで小さすぎるサイズがクラッシュ原因）
+      - JPEG品質をプロファイルから設定リロード時に1回だけ適用（毎撮影時の再設定を廃止）
+      - `_active_max_per_minute` でモード別レートリミットを動的適用
+    - `PiCameraControl/PiCameraControl/PiCameraControlApp.swift`
+      - ステータスタブ（CameraStatusView）を TabView から削除（ギャラリー＋設定の2タブ構成に）
+    - `PiCameraControl/PiCameraControl/ContentView.swift`
+      - フォーカスピーキング残骸（`enableFocusPeaking` / `focusPeakingColor` / `focusPeakingImage` state変数＋`fetchFocusPeaking()` 関数）を完全除去
+  - 実行コマンド:
+    - `python3 -m py_compile 'home 3/camera_service.py'`（成功）
+    - `xcodebuild -scheme PiCameraControl build`（BUILD SUCCEEDED）
+    - `bash 'home 3/update.sh' 192.168.4.1`（成功 × 2回）
+    - reaction モード切替: `curl POST /api/settings {"camera_mode":"reaction"}`（成功）
+    - reaction モード sensor 確認: `check=0.1, cooldown=0.5, max/min=24, state=monitoring`
+    - standard モード切替 + 撮影確認: `check=0.25, cooldown=1.5, max/min=15`
+    - 手動撮影テスト: reaction（quality=75）、standard（quality=90）ともに成功
+  - 確認結果:
+    - reaction モード: NRestarts=0、100ms ポーリング、0.5s クールダウンで安定動作
+    - standard モード: 正常切替、撮影正常
+    - lores (80,60) によるクラッシュループ解消（(128,96) で安定）
+    - iOS ステータスタブ削除・フォーカスピーキング残骸除去完了
+
 - 2026-02-23 02:04 JST
   - 変更ファイル:
     - `home 3/api_server.py`

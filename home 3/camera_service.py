@@ -5,16 +5,16 @@
 
 Camera: Raspberry Pi Camera Module HQ (12.3MP)
 Sensor: Sony IMX477 (7.9mm diagonal, 1.55μm pixel)
-Resolution: 4056x3040 (native)
-ISO Range: 100-16000 (推奨: 100-6400)
-Shutter: 13μs - 670s (推奨: 100μs - 1s)
 
-Pi Zero 2W 制約:
-  CPU: 4-core ARM Cortex-A53 @ 1GHz
-  RAM: 512MB
-  → 画像合成・エッジ検出・PIL処理はすべて禁止
-  → 撮影間隔の下限を2秒に制限（JPEG保存に1-3秒かかるため）
-  → 1分あたり最大10枚のハードリミット
+モード別パフォーマンスプロファイル:
+  reaction  : 検知→撮影レイテンシ最小。100ms ポーリング、0.5s クールダウン、denoise OFF
+  standard  : 汎用高速。200ms ポーリング、1.5s クールダウン
+  manual    : standard と同等
+  quality   : 最高画質。500ms ポーリング、3s クールダウン、cdn_hq
+  twilight  : 暗所高画質。quality と同等
+  night     : 夜間高画質。quality と同等
+  raw       : DNG保存。大ファイル書込のため 5s クールダウン
+  battery   : 省電力。1s ポーリング、5s クールダウン
 """
 
 import os
@@ -48,22 +48,92 @@ SETTINGS_FILE = '/home/pi/camera_settings.json'
 SESSION_OVERRIDES_FILE = '/home/pi/camera_session_overrides.json'
 SENSOR_STATUS_FILE = '/home/pi/sensor_status.json'
 
-# --- Pi Zero 2W 安全レート制限 ---
 BRIGHTNESS_THRESHOLD = 30
-CHECK_INTERVAL = 0.5            # 500ms 間隔で光チェック（CPU負荷半減）
-MIN_CAPTURE_COOLDOWN = 2.0      # 最短撮影間隔（Pi Zero 2W ではJPEG保存に1-3秒）
-DEFAULT_CAPTURE_COOLDOWN = 3.0  # デフォルト撮影クールダウン
-MAX_CAPTURES_PER_MINUTE = 10    # 1分あたりの撮影上限
-SETTINGS_RELOAD_INTERVAL = 2.0  # 設定リロード間隔（1秒→2秒に軽量化）
-SENSOR_STATUS_WRITE_INTERVAL = 2.0  # ステータス書き込み間隔
 MIN_CHANGE_AMOUNT = 5
+SETTINGS_RELOAD_INTERVAL = 2.0
+SENSOR_STATUS_WRITE_INTERVAL = 2.0
+
+# --- モード別パフォーマンスプロファイル ---
+# check_interval    : 光検知ポーリング間隔（秒）
+# min_cooldown      : 撮影後の最短待機（秒）
+# max_per_minute    : 1分あたりの撮影上限
+# lores_size        : 光検知用の低解像度ストリーム
+# quality           : JPEG品質（低い=書込み高速）
+# denoise_override  : None=設定に従う / 文字列=強制上書き
+MODE_PROFILES = {
+    'reaction': {
+        'check_interval': 0.1,
+        'min_cooldown': 0.5,
+        'max_per_minute': 24,
+        'lores_size': (128, 96),
+        'quality': 70,
+        'denoise_override': 'off',
+    },
+    'standard': {
+        'check_interval': 0.2,
+        'min_cooldown': 1.5,
+        'max_per_minute': 15,
+        'lores_size': (160, 120),
+        'quality': 90,
+        'denoise_override': None,
+    },
+    'manual': {
+        'check_interval': 0.2,
+        'min_cooldown': 1.5,
+        'max_per_minute': 15,
+        'lores_size': (160, 120),
+        'quality': 90,
+        'denoise_override': None,
+    },
+    'quality': {
+        'check_interval': 0.5,
+        'min_cooldown': 3.0,
+        'max_per_minute': 10,
+        'lores_size': (160, 120),
+        'quality': 100,
+        'denoise_override': 'cdn_hq',
+    },
+    'twilight': {
+        'check_interval': 0.5,
+        'min_cooldown': 3.0,
+        'max_per_minute': 10,
+        'lores_size': (160, 120),
+        'quality': 95,
+        'denoise_override': 'cdn_hq',
+    },
+    'night': {
+        'check_interval': 0.5,
+        'min_cooldown': 3.0,
+        'max_per_minute': 10,
+        'lores_size': (160, 120),
+        'quality': 95,
+        'denoise_override': 'cdn_hq',
+    },
+    'raw': {
+        'check_interval': 0.5,
+        'min_cooldown': 5.0,
+        'max_per_minute': 6,
+        'lores_size': (160, 120),
+        'quality': 100,
+        'denoise_override': None,
+    },
+    'battery': {
+        'check_interval': 1.0,
+        'min_cooldown': 5.0,
+        'max_per_minute': 6,
+        'lores_size': (128, 96),
+        'quality': 80,
+        'denoise_override': None,
+    },
+}
+_DEFAULT_PROFILE = MODE_PROFILES['standard']
 
 DEFAULT_SETTINGS = {
     'camera_mode': 'standard',
     'brightness_threshold': 30,
-    'detection_interval': CHECK_INTERVAL,
-    'check_interval': CHECK_INTERVAL,
-    'capture_cooldown': DEFAULT_CAPTURE_COOLDOWN,
+    'detection_interval': 0.5,
+    'check_interval': 0.5,
+    'capture_cooldown': 3.0,
     'iso': 'auto',
     'shutter_speed': 'auto',
     'white_balance': 'auto',
@@ -81,15 +151,14 @@ os.makedirs(PHOTOS_DIR, exist_ok=True)
 
 # --- レートリミッター ---
 _capture_timestamps = []
+_active_max_per_minute = 15
 
 def _rate_limit_ok() -> bool:
-    """1分あたり MAX_CAPTURES_PER_MINUTE 枚を超えていないか"""
     now = time.time()
     cutoff = now - 60.0
-    # 古いタイムスタンプを除去
     while _capture_timestamps and _capture_timestamps[0] < cutoff:
         _capture_timestamps.pop(0)
-    return len(_capture_timestamps) < MAX_CAPTURES_PER_MINUTE
+    return len(_capture_timestamps) < _active_max_per_minute
 
 def _record_capture():
     _capture_timestamps.append(time.time())
@@ -105,10 +174,9 @@ def get_sensor_sample(camera):
     if lux is not None:
         brightness = float(lux)
     else:
-        # Luxが無い場合のみ lores 配列で計算
         array = camera.capture_array("lores")
         if len(array.shape) == 3:
-            brightness = float(np.mean(array[:, :, 0]))  # 1チャンネルだけで十分
+            brightness = float(np.mean(array[:, :, 0]))
         else:
             brightness = float(np.mean(array))
 
@@ -148,8 +216,8 @@ def write_sensor_status(state: dict) -> None:
         logger.debug(f"Failed to write sensor status: {e}")
 
 
-def _apply_camera_controls(camera: Picamera2, settings: dict) -> None:
-    """カメラ制御パラメータを設定（軽量操作のみ）"""
+def _apply_camera_controls(camera: Picamera2, settings: dict, profile: dict) -> None:
+    """カメラ制御パラメータを設定"""
     controls = {}
     iso_value = settings.get('iso', 'auto')
     shutter_value = settings.get('shutter_speed', 'auto')
@@ -190,8 +258,8 @@ def _apply_camera_controls(camera: Picamera2, settings: dict) -> None:
             }
             controls['AwbMode'] = wb_map.get(wb_value, libcamera.controls.AwbModeEnum.Auto)
 
-    # ノイズ除去モード
-    denoise_value = settings.get('denoise_mode', 'auto')
+    # ノイズ除去: プロファイルの強制上書きが優先
+    denoise_value = profile.get('denoise_override') or settings.get('denoise_mode', 'auto')
     if libcamera is not None and hasattr(libcamera.controls, 'draft'):
         denoise_map = {
             'off': libcamera.controls.draft.NoiseReductionModeEnum.Off,
@@ -199,7 +267,7 @@ def _apply_camera_controls(camera: Picamera2, settings: dict) -> None:
             'cdn_fast': libcamera.controls.draft.NoiseReductionModeEnum.Fast,
             'cdn_hq': libcamera.controls.draft.NoiseReductionModeEnum.HighQuality,
         }
-        if denoise_value != 'auto' and denoise_value in denoise_map:
+        if denoise_value in denoise_map:
             controls['NoiseReductionMode'] = denoise_map[denoise_value]
 
     # シャープネス
@@ -213,13 +281,8 @@ def _apply_camera_controls(camera: Picamera2, settings: dict) -> None:
         camera.set_controls(controls)
 
 
-def capture_photo(camera, settings: dict, detected_at: float = None) -> dict:
-    """
-    1枚だけ撮影して保存。画像処理は一切行わない。
-
-    Returns:
-        {'success': True/False, 'filepath': str, 'delay_ms': float}
-    """
+def capture_photo(camera, settings: dict, profile: dict, detected_at: float = None) -> dict:
+    """1枚だけ撮影して保存。画像処理は一切行わない。"""
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
     raw_mode = settings.get('raw_mode', False)
 
@@ -229,7 +292,8 @@ def capture_photo(camera, settings: dict, detected_at: float = None) -> dict:
         filepath = os.path.join(PHOTOS_DIR, f'photo_{timestamp}.jpg')
 
     try:
-        quality = settings.get('quality', 90)
+        # プロファイルの品質を適用（ユーザー設定より速度優先モードが上書き）
+        quality = profile.get('quality', settings.get('quality', 90))
         camera.options["quality"] = quality
         capture_start = time.time()
 
@@ -252,10 +316,11 @@ def capture_photo(camera, settings: dict, detected_at: float = None) -> dict:
             delay_ms = round((capture_end - detected_at) * 1000.0, 1)
 
         logger.info(
-            "Photo captured: %s (%.3fs, delay=%s)",
-            filepath,
+            "Captured: %s (%.3fs, delay=%s, q=%d)",
+            os.path.basename(filepath),
             capture_end - capture_start,
             f"{delay_ms}ms" if delay_ms else "N/A",
+            quality,
         )
         _record_capture()
         return {'success': True, 'filepath': filepath, 'delay_ms': delay_ms}
@@ -266,7 +331,7 @@ def capture_photo(camera, settings: dict, detected_at: float = None) -> dict:
 
 
 def main():
-    logger.info("Starting light detection camera service (Pi Zero 2W optimized)...")
+    logger.info("Starting light detection camera service (Pi Zero 2W)...")
 
     try:
         if os.path.exists(SESSION_OVERRIDES_FILE):
@@ -274,24 +339,26 @@ def main():
     except Exception as e:
         logger.warning(f"Failed to clear session overrides on boot: {e}")
 
+    global _active_max_per_minute
+
     camera = None
     current_main_size = None
+    current_lores_size = None
     last_capture_time = 0
     last_settings_load = 0
     threshold = BRIGHTNESS_THRESHOLD
     settings = DEFAULT_SETTINGS.copy()
     last_brightness = None
-    detection_interval = CHECK_INTERVAL
-    check_interval = CHECK_INTERVAL
-    capture_cooldown = DEFAULT_CAPTURE_COOLDOWN
+    check_interval = 0.5
+    capture_cooldown = 3.0
     controls_applied = False
+    active_profile = _DEFAULT_PROFILE
 
     sensor_state = {
         'service': 'camera-service',
         'camera_mode': 'standard',
         'monitoring_enabled': True,
         'threshold_percent': threshold,
-        'detection_interval': detection_interval,
         'check_interval': check_interval,
         'capture_cooldown': capture_cooldown,
         'brightness': None,
@@ -315,20 +382,28 @@ def main():
             # --- 設定リロード ---
             if current_time - last_settings_load > SETTINGS_RELOAD_INTERVAL:
                 settings = load_settings()
+                camera_mode = str(settings.get('camera_mode', 'standard') or 'standard').strip().lower()
+                active_profile = MODE_PROFILES.get(camera_mode, _DEFAULT_PROFILE)
+
                 threshold = int(settings.get('brightness_threshold', BRIGHTNESS_THRESHOLD))
-                detection_interval = max(0.5, float(settings.get('detection_interval', CHECK_INTERVAL)))
+
+                # プロファイルの値を適用（ユーザー設定で上書き可能だが下限はプロファイルが決定）
+                profile_check = active_profile['check_interval']
+                profile_cooldown = active_profile['min_cooldown']
+                _active_max_per_minute = active_profile['max_per_minute']
 
                 try:
-                    check_interval = max(0.25, float(settings.get('check_interval', CHECK_INTERVAL)))
+                    user_check = float(settings.get('check_interval', profile_check))
                 except (TypeError, ValueError):
-                    check_interval = CHECK_INTERVAL
+                    user_check = profile_check
+                # ユーザーがもっと速い値を指定してもプロファイル下限を尊重
+                check_interval = max(profile_check, min(user_check, 2.0))
 
-                # capture_cooldown: Pi Zero 2W の安全下限を強制
                 try:
-                    raw_cooldown = float(settings.get('capture_cooldown', DEFAULT_CAPTURE_COOLDOWN))
+                    user_cooldown = float(settings.get('capture_cooldown', profile_cooldown))
                 except (TypeError, ValueError):
-                    raw_cooldown = DEFAULT_CAPTURE_COOLDOWN
-                capture_cooldown = max(MIN_CAPTURE_COOLDOWN, raw_cooldown)
+                    user_cooldown = profile_cooldown
+                capture_cooldown = max(profile_cooldown, min(user_cooldown, 30.0))
 
                 monitoring_enabled = bool(settings.get('monitoring_enabled', True))
                 try:
@@ -340,13 +415,15 @@ def main():
                     width, height = 1920, 1080
 
                 desired_size = (width, height)
+                desired_lores = active_profile['lores_size']
+
                 sensor_state.update({
-                    'camera_mode': settings.get('camera_mode', 'standard'),
+                    'camera_mode': camera_mode,
                     'monitoring_enabled': monitoring_enabled,
                     'threshold_percent': threshold,
-                    'detection_interval': detection_interval,
                     'check_interval': check_interval,
                     'capture_cooldown': capture_cooldown,
+                    'max_per_minute': _active_max_per_minute,
                     'width': width,
                     'height': height,
                 })
@@ -363,10 +440,16 @@ def main():
                             pass
                         camera = None
                         current_main_size = None
+                        current_lores_size = None
                         last_brightness = None
                         controls_applied = False
                 else:
-                    if camera is None or current_main_size != desired_size:
+                    need_reconfig = (
+                        camera is None
+                        or current_main_size != desired_size
+                        or current_lores_size != desired_lores
+                    )
+                    if need_reconfig:
                         if camera is not None:
                             try:
                                 camera.stop()
@@ -379,24 +462,29 @@ def main():
                             camera = None
 
                         cam = Picamera2()
-                        # lores は光検知用の小さいサイズで十分
-                        lores_size = (160, 120)
                         config = cam.create_still_configuration(
                             main={"size": desired_size},
-                            lores={"size": lores_size},
+                            lores={"size": desired_lores},
                         )
                         cam.configure(config)
                         cam.start()
                         camera = cam
                         current_main_size = desired_size
+                        current_lores_size = desired_lores
                         last_brightness = None
                         controls_applied = False
-                        logger.info("Camera started: main=%s, lores=%s", desired_size, lores_size)
+                        logger.info(
+                            "Camera started: mode=%s, main=%s, lores=%s, cooldown=%.1fs",
+                            camera_mode, desired_size, desired_lores, capture_cooldown,
+                        )
 
                     # カメラ制御は設定リロード時に1回だけ適用
                     if camera is not None and not controls_applied:
-                        _apply_camera_controls(camera, settings)
+                        _apply_camera_controls(camera, settings, active_profile)
                         controls_applied = True
+                        # JPEG品質もここで設定（毎撮影時に再設定しなくて済む）
+                        camera.options["quality"] = active_profile.get(
+                            'quality', settings.get('quality', 90))
 
                 last_settings_load = current_time
 
@@ -438,7 +526,6 @@ def main():
                 sensor_state['ae_exposure_us'] = round(float(ae_exposure_us), 1) if ae_exposure_us is not None else None
                 sensor_state['last_change_amount'] = round(float(change_amount), 3)
 
-                # 暗くなる方向はスキップ（光の「立ち上がり」のみ検知）
                 if change_amount < 0:
                     time.sleep(check_interval)
                     continue
@@ -452,23 +539,24 @@ def main():
                 # --- 撮影判定 ---
                 if (change_percent >= threshold
                         and change_amount >= MIN_CHANGE_AMOUNT
-                        and current_time - last_capture_time >= detection_interval):
+                        and current_time - last_capture_time >= capture_cooldown):
 
-                    # レートリミットチェック
                     if not _rate_limit_ok():
-                        logger.warning("Rate limit reached (%d/min). Skipping capture.", MAX_CAPTURES_PER_MINUTE)
+                        logger.warning(
+                            "Rate limit (%d/min). Skipping.", _active_max_per_minute)
                         sensor_state['state'] = 'rate_limited'
                         time.sleep(check_interval)
                         continue
 
                     logger.info(
-                        "Light detected: brightness=%.2f, change=%.2f%%, threshold=%d",
+                        "Light detected: lux=%.2f, change=%.1f%%, thr=%d",
                         brightness, change_percent, threshold,
                     )
                     detected_at = time.time()
                     sensor_state['last_detected_at'] = datetime.now().isoformat()
 
-                    result = capture_photo(camera, settings, detected_at=detected_at)
+                    result = capture_photo(
+                        camera, settings, active_profile, detected_at=detected_at)
                     if result['success']:
                         last_capture_time = time.time()
                         sensor_state['last_capture_at'] = datetime.now().isoformat()
@@ -478,7 +566,7 @@ def main():
                 logger.error(f"Detection error: {e}")
                 sensor_state['last_error'] = str(e)
 
-            # --- センサーステータス書き込み（省電力）---
+            # --- センサーステータス書き込み ---
             if current_time - last_sensor_status_write >= SENSOR_STATUS_WRITE_INTERVAL:
                 write_sensor_status(sensor_state)
                 last_sensor_status_write = current_time
