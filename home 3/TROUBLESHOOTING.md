@@ -621,6 +621,26 @@ curl -X POST "http://raspberrypi.local:8001/api/wifi/switch" \
 - テザリング切替でも `iw dev <iface> set power_save off` を実行
 - IP取得は `hostname -I` の先頭ではなく、Wi‑Fi インターフェースのIPv4を優先して判定/表示する
 
+### 症状: Pi Zero 2W で連続撮影が発生しフリーズ / SD満杯になる
+**原因**
+- `capture_cooldown` が 0.25秒で、Pi Zero 2W の JPEG保存時間（1-3秒）より短かった
+- 1分あたりの撮影上限がなく、光がチラつく環境で無限に撮影が続いた
+- `_compose_images()` が numpy float32 で12MP画像合成を行い、150MB+ メモリ消費（512MB の30%）
+- `apply_focus_peaking()` がフル解像度配列に scipy Sobel を実行、OOM 必至
+- PIL/ImageDraw/ImageFont のインポートと多重露光ロジックが不要なまま残存
+- カメラ制御 `_apply_camera_controls()` が設定変更なしでも毎撮影時に呼ばれていた
+
+**解決策**
+- `camera_service.py` を Pi Zero 2W 最適化版に全面刷新:
+  - `MIN_CAPTURE_COOLDOWN = 2.0秒`（設定値がこれ以下でも強制適用）
+  - `MAX_CAPTURES_PER_MINUTE = 10枚` のハードレートリミット追加
+  - `CHECK_INTERVAL` を 0.25秒→0.5秒に変更（CPU負荷半減）
+  - `SETTINGS_RELOAD_INTERVAL` / `SENSOR_STATUS_WRITE_INTERVAL` を2秒に拡大
+  - `_compose_images()` / `apply_focus_peaking()` / 多重露光ロジック / PIL import を完全削除
+  - `_apply_camera_controls()` は設定リロード時に1回だけ適用（`controls_applied` フラグ）
+  - lores サイズを統一 `(160, 120)` に縮小（光検知用途に十分）
+  - `get_sensor_sample()` の lores 配列計算を1チャンネルのみに軽量化
+
 ### 症状: camera-service が起動直後にクラッシュし続ける（restart counter 33505）/ 写真が一切撮影されない
 **原因**
 - `camera_service.py` の `_add_timestamp()` 関数定義行 (`def ...`) をコメントアウトした際、関数本体のインデントされたコードがそのまま残留していた
@@ -791,6 +811,25 @@ FORCE_AP_SWITCH=1 AP_INTERFACE=en0 HOME_INTERFACE=en0 \
 ---
 
 ## 作業ログ
+
+- 2026-02-23 02:00 JST
+  - 変更ファイル:
+    - `home 3/camera_service.py`
+      - **Pi Zero 2W 最適化版に全面刷新**（652行→507行）
+      - 削除: `_compose_images()`（numpy float32 画像合成, 150MB+）、`apply_focus_peaking()`（scipy Sobel, OOM危険）、多重露光ロジック、PIL/ImageDraw/ImageFont import
+      - 追加: `MIN_CAPTURE_COOLDOWN=2.0秒`（設定値が低くても強制適用）、`MAX_CAPTURES_PER_MINUTE=10枚` ハードレートリミット
+      - `CHECK_INTERVAL` 0.25秒→0.5秒（CPU負荷半減）、`SETTINGS_RELOAD_INTERVAL`/`SENSOR_STATUS_WRITE_INTERVAL` 2秒
+      - `_apply_camera_controls()` を設定リロード時に1回だけ適用（`controls_applied` フラグ）
+      - lores サイズを `(160,120)` に統一、`get_sensor_sample()` を1チャンネル計算に軽量化
+    - `home 3/TROUBLESHOOTING.md`
+      - 上記の症状・原因・解決策と作業ログを追記
+  - 実行コマンド:
+    - `python3 -m py_compile 'home 3/camera_service.py' 'home 3/api_server.py'`（成功）
+    - `bash 'home 3/update.sh' 192.168.4.1`（成功）
+    - `ssh pi@192.168.4.1 "systemctl is-active camera-service"`（`active`）
+    - `tail -15 camera_service.log`（`Pi Zero 2W optimized` 起動確認、ログスパムなし）
+    - `cat sensor_status.json`（`capture_cooldown:2.0`, `detection_interval:0.5`, `state:"monitoring"` 確認）
+    - `curl -sS -X POST http://192.168.4.1:8001/api/capture -d '{}'`（success 確認）
 
 - 2026-02-23 01:54 JST
   - 変更ファイル:
