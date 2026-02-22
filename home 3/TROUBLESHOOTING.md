@@ -621,6 +621,22 @@ curl -X POST "http://raspberrypi.local:8001/api/wifi/switch" \
 - テザリング切替でも `iw dev <iface> set power_save off` を実行
 - IP取得は `hostname -I` の先頭ではなく、Wi‑Fi インターフェースのIPv4を優先して判定/表示する
 
+### 症状: Pi に接続できないのにアプリが「オフライン」を表示しない / 撮った写真が見れない
+**原因**
+- アプリにグローバルな接続監視が無く、各タブが独立して接続チェックしていた
+- `ContentView`（設定タブ）の `loadAllSettings()` 失敗時のみ `errorMessage = "Offline"` を設定する設計で、ギャラリータブ・ステータスタブには常設のオフラインインジケータが存在しなかった
+- 定期的な接続チェック（ポーリング）が無いため、接続が切れても即座に反映されなかった
+- ギャラリーの写真サムネイルはサーバーから都度取得する設計で、Pi 未到達時はブランク表示になっていた
+- サムネイルの Core Data キャッシュ保存が未実装だったため、一度表示した写真もオフライン時に再表示不可だった
+
+**解決策**
+- `ConnectionMonitor.swift` を新規追加: 5秒間隔で Pi の `/api/status` をチェックし、`isConnected` をグローバル共有
+- `PiCameraControlApp.swift` で `ConnectionMonitor` を `@StateObject` として起動し、`.environmentObject()` で全タブに注入
+- 全タブ共通のオフラインバナー `OfflineBannerView` を `TabView` 上部にオーバーレイ表示（赤→オレンジのグラデーション、再チェックボタン付き）
+- `UnifiedGalleryView` の空状態表示を接続状態に応じて切替（オフライン時は `wifi.slash` アイコン + 「Pi に接続できません」表示）
+- `PhotoCell.loadFromServer()` でダウンロード成功時に `thumbnailData` を Core Data にキャッシュ保存（次回オフラインでも表示可能）
+- `preferredColorScheme(.light)` のハードコードを `computedColorScheme`（`appAppearanceMode` 連動）に修正
+
 ### 症状: テザリング切替の途中失敗で AP に戻らず Pi が無通信になる
 **原因**
 - `switch_to_tethering_mode()` の途中（`wpa_supplicant restart` / `wpa_cli reconfigure` / `wpa_cli reconnect`）で失敗した場合、失敗レスポンスを返して終了し、APフォールバックが未実行になる経路があった
@@ -763,6 +779,33 @@ FORCE_AP_SWITCH=1 AP_INTERFACE=en0 HOME_INTERFACE=en0 \
 ---
 
 ## 作業ログ
+
+- 2026-02-23 01:50 JST
+  - 変更ファイル:
+    - `PiCameraControl/PiCameraControl/ConnectionMonitor.swift`（新規）
+      - 5秒間隔で Pi の `/api/status` をチェックするグローバル接続監視
+      - `@MainActor` + `ObservableObject` で全タブから `isConnected` を参照可能
+      - `startMonitoring()` / `stopMonitoring()` / `checkNow()` を提供
+    - `PiCameraControl/PiCameraControl/PiCameraControlApp.swift`
+      - `ConnectionMonitor` を `@StateObject` として起動し、`.environmentObject()` で全タブに注入
+      - 全タブ共通の `OfflineBannerView`（赤→オレンジグラデーション）を `TabView` 上部にオーバーレイ
+      - `preferredColorScheme(.light)` のハードコードを `computedColorScheme`（`appAppearanceMode` 連動）に修正
+    - `PiCameraControl/PiCameraControl/UnifiedGalleryView.swift`
+      - `@EnvironmentObject var connectionMonitor` を追加
+      - 空状態表示を接続状態に応じて切替（オフライン時は `wifi.slash` + 「Pi に接続できません」）
+      - `PhotoCell.loadFromServer()` でサムネイルを Core Data にキャッシュ保存（オフラインでも再表示可能）
+    - `PiCameraControl/PiCameraControl.xcodeproj/project.pbxproj`
+      - `ConnectionMonitor.swift` をプロジェクトに登録
+    - `home 3/TROUBLESHOOTING.md`
+      - 上記の症状・原因・解決策と作業ログを追記
+  - 実行コマンド:
+    - `ping -c 2 -W 1000 192.168.4.1`（Host unreachable）
+    - `ping -c 2 -W 1000 raspberrypi.local`（Unknown host）
+    - `xcodebuild -project PiCameraControl.xcodeproj -scheme PiCameraControl -destination 'generic/platform=iOS Simulator' -quiet build`（** BUILD SUCCEEDED **）
+  - 状況:
+    - Pi 実機は `192.168.4.1` / `raspberrypi.local` とも到達不可
+    - iOS側のオフライン検出・表示・キャッシュの改善を完了
+    - Pi 側の光検知・撮影問題は実機接続後に調査継続
 
 - 2026-02-15 19:16 JST
   - 変更ファイル:

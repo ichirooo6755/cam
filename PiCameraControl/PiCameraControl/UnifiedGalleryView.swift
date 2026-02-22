@@ -9,6 +9,7 @@ import UIKit
 /// 統合ギャラリービュー（サーバー写真 + 編集版を統合管理）
 struct UnifiedGalleryView: View {
     @Environment(\.managedObjectContext) private var viewContext
+    @EnvironmentObject var connectionMonitor: ConnectionMonitor
     @AppStorage("serverIP") private var serverIP: String = "192.168.4.1"
 
     // PhotoGroup一覧
@@ -144,16 +145,29 @@ struct UnifiedGalleryView: View {
 
     private var emptyState: some View {
         VStack(spacing: 20) {
-            Image(systemName: "photo.on.rectangle.angled")
-                .font(.system(size: 60))
-                .foregroundColor(MinimalTheme.Text.tertiary)
-            Text("写真がありません")
-                .font(MinimalTypography.headlineMedium)
-                .foregroundColor(MinimalTheme.Text.secondary)
-            Text("光を検知すると自動的に撮影されます")
-                .font(MinimalTypography.caption)
-                .foregroundColor(MinimalTheme.Text.tertiary)
-                .multilineTextAlignment(.center)
+            if !connectionMonitor.isConnected {
+                Image(systemName: "wifi.slash")
+                    .font(.system(size: 60))
+                    .foregroundColor(.red.opacity(0.5))
+                Text("Pi に接続できません")
+                    .font(MinimalTypography.headlineMedium)
+                    .foregroundColor(MinimalTheme.Text.secondary)
+                Text("Pi の電源・Wi-Fi を確認してください")
+                    .font(MinimalTypography.caption)
+                    .foregroundColor(MinimalTheme.Text.tertiary)
+                    .multilineTextAlignment(.center)
+            } else {
+                Image(systemName: "photo.on.rectangle.angled")
+                    .font(.system(size: 60))
+                    .foregroundColor(MinimalTheme.Text.tertiary)
+                Text("写真がありません")
+                    .font(MinimalTypography.headlineMedium)
+                    .foregroundColor(MinimalTheme.Text.secondary)
+                Text("光を検知すると自動的に撮影されます")
+                    .font(MinimalTypography.caption)
+                    .foregroundColor(MinimalTheme.Text.tertiary)
+                    .multilineTextAlignment(.center)
+            }
         }
         .padding()
         .minimalCard()
@@ -328,6 +342,12 @@ struct PhotoCell: View {
                 await MainActor.run {
                     thumbnailImage = image
                     isLoading = false
+                    // Core Data にサムネイルをキャッシュ（次回オフラインでも表示可能）
+                    if let version = group.latestVersion,
+                       let data = image.jpegData(compressionQuality: 0.7) {
+                        version.thumbnailData = data
+                        try? group.managedObjectContext?.save()
+                    }
                 }
             } else {
                 await MainActor.run {

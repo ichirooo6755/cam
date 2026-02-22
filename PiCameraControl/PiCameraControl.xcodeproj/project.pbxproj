@@ -27,6 +27,7 @@
 		E00000010000000000000062 /* CameraStatusView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E00000010000000000000063 /* CameraStatusView.swift */; };
 		E00000010000000000000064 /* HDRComposerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E00000010000000000000065 /* HDRComposerView.swift */; };
 		E00000010000000000000066 /* HDRProcessor.swift in Sources */ = {isa = PBXBuildFile; fileRef = E00000010000000000000067 /* HDRProcessor.swift */; };
+		E00000010000000000000068 /* ConnectionMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = E00000010000000000000069 /* ConnectionMonitor.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -53,6 +54,7 @@
 		E00000010000000000000063 /* CameraStatusView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraStatusView.swift; sourceTree = "<group>"; };
 		E00000010000000000000065 /* HDRComposerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HDRComposerView.swift; sourceTree = "<group>"; };
 		E00000010000000000000067 /* HDRProcessor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HDRProcessor.swift; sourceTree = "<group>"; };
+		E00000010000000000000069 /* ConnectionMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionMonitor.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -91,6 +93,7 @@
 				E00000010000000000000063 /* CameraStatusView.swift */,
 				E00000010000000000000065 /* HDRComposerView.swift */,
 				E00000010000000000000067 /* HDRProcessor.swift */,
+				E00000010000000000000069 /* ConnectionMonitor.swift */,
 			);
 			path = PiCameraControl;
 			sourceTree = "<group>";
@@ -200,6 +203,7 @@
 				E00000010000000000000062 /* CameraStatusView.swift in Sources */,
 				E00000010000000000000064 /* HDRComposerView.swift in Sources */,
 				E00000010000000000000066 /* HDRProcessor.swift in Sources */,
+				E00000010000000000000068 /* ConnectionMonitor.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
