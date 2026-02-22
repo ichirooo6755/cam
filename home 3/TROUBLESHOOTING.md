@@ -812,6 +812,34 @@ FORCE_AP_SWITCH=1 AP_INTERFACE=en0 HOME_INTERFACE=en0 \
 
 ## 作業ログ
 
+- 2026-02-23 02:58 JST
+  - 変更ファイル:
+    - `PiCameraControl/PiCameraControl/Models.swift`
+      - SS 1/8000 (125μs) 追加（HQ カメラ IMX477 は最速 13μs まで対応）
+      - `CameraModeOption` に `icon` / `subtitle` プロパティ追加（UI改善用）
+    - `PiCameraControl/PiCameraControl/ContentView.swift`
+      - モード選択UI改善: アイコン+サブタイトル付きコンパクトボタンに変更
+      - SS選択UI改善: HIGH SPEED / STANDARD / LONG EXPOSURE のカテゴリ分割表示
+      - ISO/SS の現在値表示をモノスペースボールドに統一
+      - `capturePhoto()` に `ImageCompositor` 接続:
+        - 多重露光ON → 2枚撮影して iPhone 側で blend/additive 合成
+        - 2-in-1 ON → 2枚撮影して横並び合成
+        - タイムスタンプON → iPhone 側でオーバーレイ
+      - `shutterOptions` フィルター: 非手動モードでは20s超のみ非表示に変更
+    - `PiCameraControl/PiCameraControl/ImageCompositor.swift`
+      - `CIContext` の `guard let` バグ修正（non-optional を optional binding していた）
+    - `PiCameraControl/PiCameraControl.xcodeproj/project.pbxproj`
+      - `ImageCompositor.swift` / `Nikon35TiComponents.swift` / `JonyIveDesignSystem.swift` / `PhotoPickerView.swift` をプロジェクトに追加（ビルドソースフェーズ含む）
+  - 実行コマンド:
+    - `xcodebuild build` BUILD SUCCEEDED
+    - `python3 -m py_compile` 全ファイル成功
+    - `bash update.sh 192.168.4.1` 成功
+    - 撮影テスト成功
+  - 確認結果:
+    - 全機能正常動作、NRestarts=0
+    - 多重露光/2in1/タイムスタンプが iPhone 側 ImageCompositor で処理されるようになった
+    - SS 1/8000〜120s がカテゴリ分割で見やすくなった
+
 - 2026-02-23 02:50 JST
   - 変更ファイル:
     - `home 3/camera_service.py`

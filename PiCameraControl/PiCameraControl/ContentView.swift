@@ -306,23 +306,27 @@ struct ContentView: View {
                                         .padding(.horizontal, 4)
 
                                     ScrollView(.horizontal, showsIndicators: false) {
-                                        HStack(spacing: 10) {
+                                        HStack(spacing: 8) {
                                             ForEach(CameraModeOption.allCases) { mode in
+                                                let isActive = selectedCameraMode == mode
                                                 Button {
                                                     withAnimation(.easeInOut(duration: 0.15)) {
                                                         selectedCameraMode = mode
                                                         updateCameraMode(mode)
                                                     }
                                                 } label: {
-                                                    Text(mode.label)
-                                                        .font(.system(size: 14, weight: selectedCameraMode == mode ? .bold : .medium, design: .monospaced))
-                                                        .foregroundColor(selectedCameraMode == mode ? .white : Color.gray.opacity(0.9))
-                                                        .padding(.horizontal, 18)
-                                                        .padding(.vertical, 12)
-                                                        .background(
-                                                            RoundedRectangle(cornerRadius: 10)
-                                                                .fill(selectedCameraMode == mode ? Color.red.opacity(0.85) : Color.gray.opacity(0.15))
-                                                        )
+                                                    VStack(spacing: 4) {
+                                                        Image(systemName: mode.icon)
+                                                            .font(.system(size: 16, weight: .semibold))
+                                                        Text(mode.subtitle)
+                                                            .font(.system(size: 9, weight: .bold))
+                                                    }
+                                                    .frame(width: 56, height: 52)
+                                                    .foregroundColor(isActive ? .white : .secondary)
+                                                    .background(
+                                                        RoundedRectangle(cornerRadius: 12)
+                                                            .fill(isActive ? Color.red.opacity(0.85) : Color.primary.opacity(0.06))
+                                                    )
                                                 }
                                             }
                                         }
@@ -923,9 +927,8 @@ struct ContentView: View {
                     .foregroundColor(.secondary)
                 Spacer()
                 Text(selectedISO.label)
-                    .font(.caption.weight(.semibold))
-                    .foregroundColor(.secondary)
-                    .monospacedDigit()
+                    .font(.system(size: 13, weight: .bold, design: .monospaced))
+                    .foregroundColor(.blue)
 
                 HStack(spacing: 8) {
                     Button {
@@ -1099,9 +1102,8 @@ struct ContentView: View {
                     .foregroundColor(.secondary)
                 Spacer()
                 Text(selectedShutterSpeed.label)
-                    .font(.caption.weight(.semibold))
-                    .foregroundColor(.secondary)
-                    .monospacedDigit()
+                    .font(.system(size: 13, weight: .bold, design: .monospaced))
+                    .foregroundColor(.indigo)
 
                 HStack(spacing: 8) {
                     Button {
@@ -1122,16 +1124,61 @@ struct ContentView: View {
                 }
             }
 
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    ForEach(shutterOptions, id: \.self) { opt in
-                        quickChip(
-                            title: opt.label,
-                            active: selectedShutterSpeed == opt,
-                            activeColor: .indigo
-                        ) {
-                            selectedShutterSpeed = opt
-                            updateShutterSpeed(opt)
+            // Auto
+            quickChip(title: "Auto", active: selectedShutterSpeed == .auto, activeColor: .indigo) {
+                selectedShutterSpeed = .auto
+                updateShutterSpeed(.auto)
+            }
+
+            // 高速 (1/8000〜1/125)
+            let fastOptions = shutterOptions.filter { ($0.microseconds ?? 0) > 0 && ($0.microseconds ?? 0) <= 8000 }
+            if !fastOptions.isEmpty {
+                Text("HIGH SPEED")
+                    .font(.system(size: 9, weight: .bold, design: .monospaced))
+                    .foregroundColor(.secondary.opacity(0.6))
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        ForEach(fastOptions, id: \.self) { opt in
+                            quickChip(title: opt.label, active: selectedShutterSpeed == opt, activeColor: .indigo) {
+                                selectedShutterSpeed = opt
+                                updateShutterSpeed(opt)
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 標準 (1/60〜1/2)
+            let midOptions = shutterOptions.filter { ($0.microseconds ?? 0) > 8000 && ($0.microseconds ?? 0) <= 500000 }
+            if !midOptions.isEmpty {
+                Text("STANDARD")
+                    .font(.system(size: 9, weight: .bold, design: .monospaced))
+                    .foregroundColor(.secondary.opacity(0.6))
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        ForEach(midOptions, id: \.self) { opt in
+                            quickChip(title: opt.label, active: selectedShutterSpeed == opt, activeColor: .indigo) {
+                                selectedShutterSpeed = opt
+                                updateShutterSpeed(opt)
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 長時間 (1s〜)
+            let slowOptions = shutterOptions.filter { ($0.microseconds ?? 0) > 500000 }
+            if !slowOptions.isEmpty {
+                Text("LONG EXPOSURE")
+                    .font(.system(size: 9, weight: .bold, design: .monospaced))
+                    .foregroundColor(.secondary.opacity(0.6))
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        ForEach(slowOptions, id: \.self) { opt in
+                            quickChip(title: opt.label, active: selectedShutterSpeed == opt, activeColor: .orange) {
+                                selectedShutterSpeed = opt
+                                updateShutterSpeed(opt)
+                            }
                         }
                     }
                 }
@@ -1721,14 +1768,43 @@ struct ContentView: View {
         let mode = manualCaptureMode
         let meta = manualCaptureMeta
         let locationPayload = captureLocationProvider.capturePayload()
+        let doMultiExposure = enableMultipleExposure
+        let multiMode = multipleExposureMode
+        let do2in1 = enable2in1Composition
+        let doTimestamp = enableTimestamp
+
         Task {
             do {
-                let (filename, metadata) = try await apiClient.captureWithMetadata(
-                    manualMode: mode,
-                    meta: meta,
-                    location: locationPayload
+                // 1枚目を撮影
+                let (filename1, metadata) = try await apiClient.captureWithMetadata(
+                    manualMode: mode, meta: meta, location: locationPayload
                 )
-                let image = try await apiClient.downloadImage(filename: filename)
+                var image = try await apiClient.downloadImage(filename: filename1)
+
+                // 多重露光: 2枚目を撮影してiPhone側で合成
+                if doMultiExposure || do2in1 {
+                    let (filename2, _) = try await apiClient.captureWithMetadata(
+                        manualMode: mode, meta: meta, location: locationPayload
+                    )
+                    let image2 = try await apiClient.downloadImage(filename: filename2)
+
+                    if do2in1 {
+                        image = ImageCompositor.sideBySideComposite(image, image2) ?? image
+                    } else if multiMode == "additive" {
+                        image = ImageCompositor.additiveComposite([image, image2]) ?? image
+                    } else {
+                        image = ImageCompositor.blendImages(image, image2) ?? image
+                    }
+                }
+
+                // タイムスタンプ追加（iPhone側で処理）
+                if doTimestamp {
+                    let formatter = DateFormatter()
+                    formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+                    let ts = formatter.string(from: Date())
+                    image = ImageCompositor.addTimestamp(image, timestamp: ts) ?? image
+                }
+
                 await MainActor.run {
                     capturedImage = image
                     lastCaptureMetadata = metadata

@@ -28,6 +28,10 @@
 		E00000010000000000000064 /* HDRComposerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E00000010000000000000065 /* HDRComposerView.swift */; };
 		E00000010000000000000066 /* HDRProcessor.swift in Sources */ = {isa = PBXBuildFile; fileRef = E00000010000000000000067 /* HDRProcessor.swift */; };
 		E00000010000000000000068 /* ConnectionMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = E00000010000000000000069 /* ConnectionMonitor.swift */; };
+		E00000010000000000000070 /* ImageCompositor.swift in Sources */ = {isa = PBXBuildFile; fileRef = E00000010000000000000071 /* ImageCompositor.swift */; };
+		E00000010000000000000072 /* Nikon35TiComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = E00000010000000000000073 /* Nikon35TiComponents.swift */; };
+		E00000010000000000000074 /* JonyIveDesignSystem.swift in Sources */ = {isa = PBXBuildFile; fileRef = E00000010000000000000075 /* JonyIveDesignSystem.swift */; };
+		E00000010000000000000076 /* PhotoPickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E00000010000000000000077 /* PhotoPickerView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -55,6 +59,10 @@
 		E00000010000000000000065 /* HDRComposerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HDRComposerView.swift; sourceTree = "<group>"; };
 		E00000010000000000000067 /* HDRProcessor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HDRProcessor.swift; sourceTree = "<group>"; };
 		E00000010000000000000069 /* ConnectionMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionMonitor.swift; sourceTree = "<group>"; };
+		E00000010000000000000071 /* ImageCompositor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageCompositor.swift; sourceTree = "<group>"; };
+		E00000010000000000000073 /* Nikon35TiComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Nikon35TiComponents.swift; sourceTree = "<group>"; };
+		E00000010000000000000075 /* JonyIveDesignSystem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JonyIveDesignSystem.swift; sourceTree = "<group>"; };
+		E00000010000000000000077 /* PhotoPickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoPickerView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -94,6 +102,10 @@
 				E00000010000000000000065 /* HDRComposerView.swift */,
 				E00000010000000000000067 /* HDRProcessor.swift */,
 				E00000010000000000000069 /* ConnectionMonitor.swift */,
+				E00000010000000000000071 /* ImageCompositor.swift */,
+				E00000010000000000000073 /* Nikon35TiComponents.swift */,
+				E00000010000000000000075 /* JonyIveDesignSystem.swift */,
+				E00000010000000000000077 /* PhotoPickerView.swift */,
 			);
 			path = PiCameraControl;
 			sourceTree = "<group>";
@@ -204,6 +216,10 @@
 				E00000010000000000000064 /* HDRComposerView.swift in Sources */,
 				E00000010000000000000066 /* HDRProcessor.swift in Sources */,
 				E00000010000000000000068 /* ConnectionMonitor.swift in Sources */,
+				E00000010000000000000070 /* ImageCompositor.swift in Sources */,
+				E00000010000000000000072 /* Nikon35TiComponents.swift in Sources */,
+				E00000010000000000000074 /* JonyIveDesignSystem.swift in Sources */,
+				E00000010000000000000076 /* PhotoPickerView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

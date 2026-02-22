@@ -471,6 +471,30 @@ enum CameraModeOption: String, CaseIterable, Identifiable, Hashable, Labelable {
         }
     }
 
+    var icon: String {
+        switch self {
+        case .reaction: return "bolt.fill"
+        case .standard: return "camera.fill"
+        case .quality: return "sparkles"
+        case .night: return "moon.stars.fill"
+        case .battery: return "battery.75percent"
+        case .manual: return "hand.raised.fill"
+        case .raw: return "doc.fill"
+        }
+    }
+
+    var subtitle: String {
+        switch self {
+        case .reaction: return "最速"
+        case .standard: return "汎用"
+        case .quality: return "高画質"
+        case .night: return "暗所"
+        case .battery: return "省電力"
+        case .manual: return "手動"
+        case .raw: return "DNG"
+        }
+    }
+
     static func from(_ value: String) -> CameraModeOption {
         return allCases.first { $0.rawValue == value } ?? .standard
     }
@@ -571,7 +595,7 @@ enum QualityOption: Int, CaseIterable, Identifiable, Hashable, Labelable {
 
 enum ShutterSpeedOption: String, CaseIterable, Identifiable, Hashable, Labelable {
     case auto
-    case ss4000, ss2000, ss1000, ss400, ss250, ss125, ss60, ss30, ss15
+    case ss8000, ss4000, ss2000, ss1000, ss400, ss250, ss125, ss60, ss30, ss15
     case ss8, ss4, ss2
     case ss1s, ss2s, ss3s, ss4s, ss5s, ss6s, ss7s, ss8s, ss9s, ss10s
     case ss11s, ss12s, ss13s, ss14s, ss15s, ss16s, ss17s, ss18s, ss19s, ss20s
@@ -582,6 +606,7 @@ enum ShutterSpeedOption: String, CaseIterable, Identifiable, Hashable, Labelable
     var label: String {
         switch self {
         case .auto: return "Auto"
+        case .ss8000: return "1/8000"
         case .ss4000: return "1/4000"
         case .ss2000: return "1/2000"
         case .ss1000: return "1/1000"
@@ -623,6 +648,7 @@ enum ShutterSpeedOption: String, CaseIterable, Identifiable, Hashable, Labelable
     var microseconds: Int? {
         switch self {
         case .auto: return nil
+        case .ss8000: return 125
         case .ss4000: return 250
         case .ss2000: return 500
         case .ss1000: return 1000

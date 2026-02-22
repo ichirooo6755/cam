@@ -88,7 +88,7 @@ enum ImageCompositor {
     /// 複数画像を加算合成（星の軌跡・ライトトレイル用）
     static func additiveComposite(_ images: [UIImage]) -> UIImage? {
         guard !images.isEmpty else { return nil }
-        guard let context = CIContext(options: nil) else { return nil }
+        let context = CIContext(options: nil)
 
         let targetSize = images[0].size
         let scale = images[0].scale
