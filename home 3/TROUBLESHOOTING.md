@@ -621,6 +621,18 @@ curl -X POST "http://raspberrypi.local:8001/api/wifi/switch" \
 - テザリング切替でも `iw dev <iface> set power_save off` を実行
 - IP取得は `hostname -I` の先頭ではなく、Wi‑Fi インターフェースのIPv4を優先して判定/表示する
 
+### 症状: camera-service が起動直後にクラッシュし続ける（restart counter 33505）/ 写真が一切撮影されない
+**原因**
+- `camera_service.py` の `_add_timestamp()` 関数定義行 (`def ...`) をコメントアウトした際、関数本体のインデントされたコードがそのまま残留していた
+- このコードが `write_sensor_status()` 関数の末尾に紛れ込み、`write_sensor_status()` が呼ばれるたびに `NameError: name 'image' is not defined` で即クラッシュ
+- systemd の自動再起動で延々クラッシュ→再起動が繰り返され、restart counter が 33505 に到達
+- 結果として光検知ループが一度も実行されず、写真が一切撮影されない状態が続いていた
+
+**解決策**
+- コメントアウトされた `_add_timestamp` の残留コード本体（`if ImageDraw is None:` 〜 `return image`）を完全に削除
+- `load_settings()` 内の毎秒出力されていた `Auto-adjusted quality` ログを削除（ログスパム解消）
+- デプロイ後に `camera-service` が正常起動し、撮影APIで写真保存を確認
+
 ### 症状: Pi に接続できないのにアプリが「オフライン」を表示しない / 撮った写真が見れない
 **原因**
 - アプリにグローバルな接続監視が無く、各タブが独立して接続チェックしていた
@@ -779,6 +791,25 @@ FORCE_AP_SWITCH=1 AP_INTERFACE=en0 HOME_INTERFACE=en0 \
 ---
 
 ## 作業ログ
+
+- 2026-02-23 01:54 JST
+  - 変更ファイル:
+    - `home 3/camera_service.py`
+      - **致命的バグ修正**: コメントアウトされた `_add_timestamp()` の残留コード本体（`if ImageDraw is None:` 〜 `return image`）が `write_sensor_status()` 内に紛れ込み、`NameError: name 'image' is not defined` で即クラッシュしていた問題を修正
+      - `load_settings()` の毎秒 `Auto-adjusted quality` ログ出力を削除（ログスパム解消）
+    - `home 3/TROUBLESHOOTING.md`
+      - 上記の症状・原因・解決策と作業ログを追記
+  - 実行コマンド:
+    - `python3 -m py_compile 'home 3/camera_service.py'`（成功）
+    - `bash 'home 3/update.sh' 192.168.4.1`（成功 × 2回）
+    - `ssh pi@192.168.4.1 "systemctl is-active camera-service"`（`active`）
+    - `curl -sS -X POST http://192.168.4.1:8001/api/capture -H 'Content-Type: application/json' -d '{}'`（success × 2回）
+    - `curl -sS http://192.168.4.1:8001/api/photos`（写真一覧取得成功）
+    - `curl -sS http://192.168.4.1:8001/api/sensor/status`（`state: "monitoring"` 確認）
+  - 状況:
+    - camera-service が正常起動し、光検知ループが動作中
+    - 手動撮影APIで写真保存を2回確認
+    - restart counter 33505 のクラッシュループが完全解消
 
 - 2026-02-23 01:50 JST
   - 変更ファイル:

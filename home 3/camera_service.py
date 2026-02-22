@@ -153,7 +153,6 @@ def load_settings() -> dict:
         if 'quality' not in settings or settings['quality'] == DEFAULT_SETTINGS['quality']:
             auto_quality = QUALITY_PRESETS[camera_mode]
             settings['quality'] = auto_quality
-            logger.info(f"Auto-adjusted quality to {auto_quality} for camera_mode '{camera_mode}'")
 
     return settings
 
@@ -168,22 +167,7 @@ def write_sensor_status(state: dict) -> None:
     except Exception as e:
         logger.debug(f"Failed to write sensor status: {e}")
 
-# 省電力化: タイムスタンプ追加はiPhone側に移行
-# def _add_timestamp(image: Image.Image, timestamp: str) -> Image.Image:
-    if ImageDraw is None:
-        return image
-
-    draw = ImageDraw.Draw(image)
-    try:
-        font = ImageFont.truetype("DejaVuSans-Bold.ttf", 40)
-    except Exception:
-        font = ImageFont.load_default()
-
-    text_x = 10
-    text_y = image.height - 60
-    draw.text((text_x + 2, text_y + 2), timestamp, font=font, fill=(0, 0, 0))
-    draw.text((text_x, text_y), timestamp, font=font, fill=(255, 255, 255))
-    return image
+# 省電力化: タイムスタンプ追加はiPhone側に移行（_add_timestamp は削除済み）
 
 def _apply_camera_controls(camera: Picamera2, settings: dict) -> None:
     controls = {}
