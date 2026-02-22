@@ -225,7 +225,7 @@ def _sanitize_settings_patch(patch):
         if key == 'camera_mode':
             mode = str(value).strip().lower()
             if mode not in CAMERA_MODE_PRESETS:
-                errors.append('camera_mode must be one of reaction/quality/standard/battery/manual/raw')
+                errors.append('camera_mode must be one of reaction/standard/quality/night/battery/manual/raw')
             else:
                 sanitized[key] = mode
             continue
@@ -525,75 +525,65 @@ def _wifi_recovery_watchdog_loop():
 
 CAMERA_MODE_PRESETS = {
     'reaction': {
-        # PiCamera HQ反応モード（HQは高速撮影に最適化されていない）
-        'quality': 75,
-        'width': 1920,   # HQの解像度を活かしつつバランス
+        'quality': 70,
+        'width': 1920,
         'height': 1080,
-        'detection_interval': 0.1,   # 100ms（HQの読み出し速度を考慮）
-        'check_interval': 0.02,      # 20ms光検知
-        'capture_cooldown': 0.1,     # 100ms
+        'check_interval': 0.1,
+        'capture_cooldown': 0.5,
         'monitoring_enabled': True,
-        'enable_multiple_exposure': False,
-        'enable_2in1_composition': False,
-        'enable_timestamp': False,
-        'denoise_mode': 'cdn_fast',
-        'sharpness': 1.0,  # HQレンズのシャープネスを活用
-    },
-    'quality': {
-        # PiCamera HQ最高画質モード（12.3MP native）
-        'quality': 100,
-        'width': 4056,
-        'height': 3040,
-        'detection_interval': 1.0,
-        'check_interval': 0.25,
-        'capture_cooldown': 0.25,
-        'monitoring_enabled': True,
-        'denoise_mode': 'cdn_hq',  # HQ専用高品質ノイズ除去
-        'sharpness': 1.0,  # HQレンズの鋭さを活かす
+        'denoise_mode': 'off',
     },
     'standard': {
         'quality': 90,
         'width': 1920,
         'height': 1080,
-        'detection_interval': 0.25,
-        'check_interval': 0.25,
-        'capture_cooldown': 0.25,
+        'check_interval': 0.2,
+        'capture_cooldown': 1.5,
         'monitoring_enabled': True,
     },
-    'battery': {
-        'quality': 90,
+    'quality': {
+        'quality': 100,
+        'width': 4056,
+        'height': 3040,
+        'check_interval': 0.5,
+        'capture_cooldown': 3.0,
+        'monitoring_enabled': True,
+        'denoise_mode': 'cdn_hq',
+    },
+    'night': {
+        'quality': 95,
         'width': 1920,
         'height': 1080,
-        'detection_interval': 2.0,
+        'check_interval': 0.5,
+        'capture_cooldown': 3.0,
+        'monitoring_enabled': True,
+        'denoise_mode': 'cdn_hq',
+    },
+    'battery': {
+        'quality': 80,
+        'width': 1920,
+        'height': 1080,
         'check_interval': 1.0,
-        'capture_cooldown': 0.0,
-        'monitoring_enabled': False,
-        'enable_multiple_exposure': False,
-        'enable_2in1_composition': False,
-        'enable_timestamp': False,
+        'capture_cooldown': 5.0,
+        'monitoring_enabled': True,
     },
     'manual': {
-        # MANUALモード: 全パラメータをユーザー指定
-        # monitoring_enabledはFalseで手動撮影専用
         'monitoring_enabled': False,
     },
     'raw': {
-        # RAWモード: PiCamera HQ DNG撮影、ピュアRAW
         'raw_mode': True,
         'quality': 100,
-        'width': 4056,   # HQ native 12.3MP
+        'width': 4056,
         'height': 3040,
-        'denoise_mode': 'off',  # RAWは完全生データ
-        'sharpness': 0.0,  # レンズ本来の特性を維持
+        'denoise_mode': 'off',
+        'sharpness': 0.0,
         'stabilization': False,
-        'monitoring_enabled': False,
-        'enable_multiple_exposure': False,
-        'enable_2in1_composition': False,
-        'enable_timestamp': False,
+        'monitoring_enabled': True,
+        'capture_cooldown': 5.0,
     },
 }
 
-METERING_ISO_STOPS = [100, 200, 400, 800, 1600, 3200]
+METERING_ISO_STOPS = [100, 200, 400, 800, 1600, 3200, 6400]
 METERING_SHUTTER_US_STOPS = [
     2500,
     4000,

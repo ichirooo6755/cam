@@ -11,8 +11,7 @@ Sensor: Sony IMX477 (7.9mm diagonal, 1.55μm pixel)
   standard  : 汎用高速。200ms ポーリング、1.5s クールダウン
   manual    : standard と同等
   quality   : 最高画質。500ms ポーリング、3s クールダウン、cdn_hq
-  twilight  : 暗所高画質。quality と同等
-  night     : 夜間高画質。quality と同等
+  night     : 暗所・夜間高画質。500ms ポーリング、3s クールダウン、cdn_hq
   raw       : DNG保存。大ファイル書込のため 5s クールダウン
   battery   : 省電力。1s ポーリング、5s クールダウン
 """
@@ -91,14 +90,6 @@ MODE_PROFILES = {
         'max_per_minute': 10,
         'lores_size': (160, 120),
         'quality': 100,
-        'denoise_override': 'cdn_hq',
-    },
-    'twilight': {
-        'check_interval': 0.5,
-        'min_cooldown': 3.0,
-        'max_per_minute': 10,
-        'lores_size': (160, 120),
-        'quality': 95,
         'denoise_override': 'cdn_hq',
     },
     'night': {

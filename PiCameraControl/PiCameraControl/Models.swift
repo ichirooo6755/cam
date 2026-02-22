@@ -52,9 +52,9 @@ struct CameraSettings: Codable {
         whiteBalance = try container.decodeIfPresent(String.self, forKey: .whiteBalance) ?? "auto"
         contrast = try container.decodeIfPresent(Int.self, forKey: .contrast) ?? 0
         saturation = try container.decodeIfPresent(Int.self, forKey: .saturation) ?? 0
-        quality = try container.decodeIfPresent(Int.self, forKey: .quality) ?? 95
-        width = try container.decodeIfPresent(Int.self, forKey: .width) ?? 4056
-        height = try container.decodeIfPresent(Int.self, forKey: .height) ?? 3040
+        quality = try container.decodeIfPresent(Int.self, forKey: .quality) ?? 90
+        width = try container.decodeIfPresent(Int.self, forKey: .width) ?? 1920
+        height = try container.decodeIfPresent(Int.self, forKey: .height) ?? 1080
         monitoringEnabled =
             try container.decodeIfPresent(Bool.self, forKey: .monitoringEnabled) ?? true
         detectionThreshold =
@@ -64,7 +64,7 @@ struct CameraSettings: Codable {
         checkInterval =
             try container.decodeIfPresent(Double.self, forKey: .checkInterval) ?? 0.25
         captureCooldown =
-            try container.decodeIfPresent(Double.self, forKey: .captureCooldown) ?? 0.25
+            try container.decodeIfPresent(Double.self, forKey: .captureCooldown) ?? 3.0
         enableMultipleExposure =
             try container.decodeIfPresent(Bool.self, forKey: .enableMultipleExposure) ?? false
         multipleExposureMode =
@@ -450,8 +450,9 @@ protocol Labelable {
 
 enum CameraModeOption: String, CaseIterable, Identifiable, Hashable, Labelable {
     case reaction
-    case quality
     case standard
+    case quality
+    case night
     case battery
     case manual
     case raw
@@ -461,8 +462,9 @@ enum CameraModeOption: String, CaseIterable, Identifiable, Hashable, Labelable {
     var label: String {
         switch self {
         case .reaction: return "REACTION"
-        case .quality: return "QUALITY"
         case .standard: return "STANDARD"
+        case .quality: return "QUALITY"
+        case .night: return "NIGHT"
         case .battery: return "BATTERY"
         case .manual: return "MANUAL"
         case .raw: return "RAW (DNG)"
@@ -500,7 +502,7 @@ enum ManualCaptureMode: String, CaseIterable, Identifiable, Hashable, Labelable 
 
 enum ISOOption: String, CaseIterable, Identifiable, Hashable, Labelable {
     case auto
-    case iso100, iso200, iso400, iso800, iso1600, iso3200
+    case iso100, iso200, iso400, iso800, iso1600, iso3200, iso6400
 
     var id: String { rawValue }
 
@@ -513,6 +515,7 @@ enum ISOOption: String, CaseIterable, Identifiable, Hashable, Labelable {
         case .iso800: return "800"
         case .iso1600: return "1600"
         case .iso3200: return "3200"
+        case .iso6400: return "6400"
         }
     }
 
@@ -525,6 +528,7 @@ enum ISOOption: String, CaseIterable, Identifiable, Hashable, Labelable {
         case .iso800: return .value(800)
         case .iso1600: return .value(1600)
         case .iso3200: return .value(3200)
+        case .iso6400: return .value(6400)
         }
     }
 
@@ -567,7 +571,7 @@ enum QualityOption: Int, CaseIterable, Identifiable, Hashable, Labelable {
 
 enum ShutterSpeedOption: String, CaseIterable, Identifiable, Hashable, Labelable {
     case auto
-    case ss400, ss250, ss125, ss60, ss30, ss15
+    case ss4000, ss2000, ss1000, ss400, ss250, ss125, ss60, ss30, ss15
     case ss8, ss4, ss2
     case ss1s, ss2s, ss3s, ss4s, ss5s, ss6s, ss7s, ss8s, ss9s, ss10s
     case ss11s, ss12s, ss13s, ss14s, ss15s, ss16s, ss17s, ss18s, ss19s, ss20s
@@ -578,6 +582,9 @@ enum ShutterSpeedOption: String, CaseIterable, Identifiable, Hashable, Labelable
     var label: String {
         switch self {
         case .auto: return "Auto"
+        case .ss4000: return "1/4000"
+        case .ss2000: return "1/2000"
+        case .ss1000: return "1/1000"
         case .ss400: return "1/400"
         case .ss250: return "1/250"
         case .ss125: return "1/125"
@@ -616,6 +623,9 @@ enum ShutterSpeedOption: String, CaseIterable, Identifiable, Hashable, Labelable
     var microseconds: Int? {
         switch self {
         case .auto: return nil
+        case .ss4000: return 250
+        case .ss2000: return 500
+        case .ss1000: return 1000
         case .ss400: return 2500
         case .ss250: return 4000
         case .ss125: return 8000

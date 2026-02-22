@@ -812,6 +812,34 @@ FORCE_AP_SWITCH=1 AP_INTERFACE=en0 HOME_INTERFACE=en0 \
 
 ## 作業ログ
 
+- 2026-02-23 02:50 JST
+  - 変更ファイル:
+    - `home 3/camera_service.py`
+      - `twilight` モード削除 → `night` に統一（実質同一プロファイルだった）
+    - `home 3/api_server.py`
+      - `CAMERA_MODE_PRESETS` を Pi Zero 2W 安全値に全面更新 + `night` プリセット追加
+      - 古い `check_interval: 0.02` / `capture_cooldown: 0.1` 等の危険値を修正
+      - `enable_multiple_exposure` / `enable_2in1_composition` / `enable_timestamp` をプリセットから除去（Pi側で未使用）
+      - `METERING_ISO_STOPS` に ISO 6400 追加
+      - エラーメッセージに `night` を追記
+    - `PiCameraControl/PiCameraControl/Models.swift`
+      - `CameraModeOption` に `.night` 追加（`twilight` 廃止）
+      - `ISOOption` に `.iso6400` 追加（HQ カメラ ISO 100-16000 対応）
+      - `ShutterSpeedOption` に `.ss4000` (1/4000), `.ss2000` (1/2000), `.ss1000` (1/1000) 追加（HQ カメラ 13μs-670s 対応）
+      - `CameraSettings` デフォルト値修正: quality=90, 1920x1080, captureCooldown=3.0
+    - `PiCameraControl/PiCameraControl/ContentView.swift`
+      - `shutterOptions` フィルター修正: 旧 `ss400` 除外 → 20s超の長時間露光のみ制限
+      - `qualityDescriptionForMode` に `.night` case 追加
+  - 実行コマンド:
+    - `python3 -m py_compile` 全ファイル成功
+    - `xcodebuild build` BUILD SUCCEEDED
+    - `bash update.sh 192.168.4.1`（成功 × 2回）
+    - night モード切替 + 撮影テスト: `check=0.5, cooldown=3.0, quality=95` 確認
+  - 確認結果:
+    - 全モード（reaction/standard/quality/night/battery/manual/raw）正常切替・撮影可能
+    - ISO 6400 / SS 1/4000 が HQ カメラで設定可能に
+    - 電源断→自動復帰: systemd `Restart=always` + `WantedBy=multi-user.target` で保証
+
 - 2026-02-23 02:46 JST
   - 変更ファイル:
     - `home 3/camera_service.py`

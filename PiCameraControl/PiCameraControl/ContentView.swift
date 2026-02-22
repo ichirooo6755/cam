@@ -235,7 +235,11 @@ struct ContentView: View {
         if manualModeEnabled {
             return ShutterSpeedOption.allCases
         }
-        return ShutterSpeedOption.allCases.filter { $0 != .ss400 }
+        // 非手動モードでは長時間露光（30s以上）を非表示
+        return ShutterSpeedOption.allCases.filter {
+            guard let us = $0.microseconds else { return true }
+            return us <= 20_000_000
+        }
     }
 
     // MARK: - Section Header Helper
@@ -1865,6 +1869,8 @@ struct ContentView: View {
             return "JPEG品質: Q100（最高画質）"
         case .standard:
             return "JPEG品質: Q90（標準）"
+        case .night:
+            return "JPEG品質: Q95（暗所・夜間高画質）"
         case .battery:
             return "JPEG品質: Q80（省電力）"
         case .manual:
