@@ -425,13 +425,6 @@ struct ContentView: View {
                                             }
                                         }
                                     }
-                                    GlassToggle(icon: "scope", title: "フォーカスピーキング", isOn: $enableFocusPeaking) {
-                                        if enableFocusPeaking {
-                                            fetchFocusPeaking()
-                                        } else {
-                                            focusPeakingImage = nil
-                                        }
-                                    }
                                 }
 
                                 if enableStabilization {

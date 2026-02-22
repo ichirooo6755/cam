@@ -812,6 +812,28 @@ FORCE_AP_SWITCH=1 AP_INTERFACE=en0 HOME_INTERFACE=en0 \
 
 ## 作業ログ
 
+- 2026-02-23 02:04 JST
+  - 変更ファイル:
+    - `home 3/api_server.py`
+      - `serve_focus_peaking()` と `/api/focus_peaking` ルートを完全削除（`camera_service.apply_focus_peaking` が削除済みでインポート時にクラッシュ）
+      - `_is_wifi_switching()` ヘルパー関数を追加（Wi-Fiスキャン時の切替中チェックで未定義エラーだった）
+      - `DEFAULT_SETTINGS` の `detection_interval`/`check_interval` を0.5秒、`capture_cooldown` を3.0秒に更新（Pi Zero 2W 安全値に統一）
+    - `PiCameraControl/PiCameraControl/ContentView.swift`
+      - フォーカスピーキングトグルUI削除（Pi側APIが削除済み）
+    - Pi上の `camera_settings.json`
+      - `detection_interval`/`check_interval` を0.5秒、`capture_cooldown` を3.0秒に直接更新
+  - 実行コマンド:
+    - `python3 -m py_compile 'home 3/api_server.py' 'home 3/camera_service.py'`（成功）
+    - `xcodebuild -scheme PiCameraControl -destination 'generic/platform=iOS Simulator' build`（BUILD SUCCEEDED）
+    - `bash 'home 3/update.sh' 192.168.4.1`（成功 × 2回）
+    - API全テスト: `/api/settings` GET/POST, `/api/wifi/status`, `/api/sensor/status`, `/api/capture`, `/api/photos`（全て正常）
+    - `curl /api/settings` で `capture_cooldown:3.0`, `detection_interval:0.5` を確認
+  - 確認結果:
+    - APモード正常稼働（`mode:"ap"`, `ip:"192.168.4.1"`, `ssid:"PiCamera"`）
+    - ISO一時変更→リセット正常、手動撮影3回成功
+    - フォーカスピーキングAPI呼び出しによるクラッシュリスク解消
+    - Wi-Fiスキャン時の未定義エラー解消
+
 - 2026-02-23 02:00 JST
   - 変更ファイル:
     - `home 3/camera_service.py`
