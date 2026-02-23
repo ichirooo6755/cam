@@ -76,24 +76,44 @@ actor CameraAPI {
         self.session = URLSession(configuration: config)
     }
 
+    // MARK: - リトライヘルパー
+
+    /// ネットワーク操作を最大 maxRetries 回リトライする
+    private func withRetry<T>(maxRetries: Int = 1, delay: TimeInterval = 1.0, operation: () async throws -> T) async throws -> T {
+        var lastError: Error?
+        for attempt in 0...maxRetries {
+            do {
+                return try await operation()
+            } catch {
+                lastError = error
+                if attempt < maxRetries {
+                    try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                }
+            }
+        }
+        throw lastError!
+    }
+
     // MARK: - 設定取得
 
     /// 現在のカメラ設定を取得
     func fetchSettings() async throws -> CameraSettings {
-        guard let url = URL(string: "\(baseURL)/api/settings") else {
-            throw CameraAPIError.invalidURL
+        try await withRetry {
+            guard let url = URL(string: "\(self.baseURL)/api/settings") else {
+                throw CameraAPIError.invalidURL
+            }
+
+            let (data, response) = try await self.session.data(from: url)
+
+            guard let httpResponse = response as? HTTPURLResponse,
+                httpResponse.statusCode == 200
+            else {
+                throw CameraAPIError.serverError
+            }
+
+            let decoder = JSONDecoder()
+            return try decoder.decode(CameraSettings.self, from: data)
         }
-
-        let (data, response) = try await session.data(from: url)
-
-        guard let httpResponse = response as? HTTPURLResponse,
-            httpResponse.statusCode == 200
-        else {
-            throw CameraAPIError.serverError
-        }
-
-        let decoder = JSONDecoder()
-        return try decoder.decode(CameraSettings.self, from: data)
     }
 
     // MARK: - 設定更新

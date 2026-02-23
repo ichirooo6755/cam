@@ -812,6 +812,47 @@ FORCE_AP_SWITCH=1 AP_INTERFACE=en0 HOME_INTERFACE=en0 \
 
 ## 作業ログ
 
+- 2026-02-23 22:36 JST
+  - 問題: WiFi頻繁切断、タイムアウト、パスワード拒否、スリープ切断、OFFLINEバナー被り、撮影フィードバック不足
+  - 根本原因分析:
+    1. ConnectionMonitorにNWPathMonitor未使用→ネットワーク変化をリアルタイム検知不可
+    2. scenePhase未監視→スリープ復帰時にTimer停止のまま
+    3. Hotspotプロファイルを毎回delete→recreate→iOSのパスワードキャッシュが壊れる
+    4. APIにリトライロジックなし→一時的な接続不安定で即失敗
+    5. OfflineBannerがZStack+ignoresSafeAreaで旧デザインと被る
+  - 変更ファイル:
+    - `PiCameraControl/PiCameraControl/ConnectionMonitor.swift`
+      - 全面書き換え: NWPathMonitor追加（ネットワーク変化即検知）
+      - handleForegroundReturn() / handleBackgroundEntry() 追加
+      - デバウンス（1秒以内の連続チェック抑制）
+      - consecutiveFailures カウンター追加
+      - 切断時は2秒間隔の高速ポーリング、接続時は5秒間隔
+    - `PiCameraControl/PiCameraControl/PiCameraControlApp.swift`
+      - @Environment(\.scenePhase) 追加→.active時にhandleForegroundReturn()
+      - OfflineBannerをZStackからsafeAreaInset(edge: .top)に変更→被り解消
+      - OfflineBannerViewをシンプル化（失敗回数表示追加）
+    - `PiCameraControl/PiCameraControl/CameraAPI.swift`
+      - withRetry() ヘルパー追加（最大1回リトライ、1秒間隔）
+      - fetchSettings() をwithRetryでラップ
+    - `PiCameraControl/PiCameraControl/SimpleCameraAPI.swift`
+      - withRetry() ヘルパー追加
+      - fetchPhotos() / fetchStatus() をwithRetryでラップ
+    - `PiCameraControl/PiCameraControl/ContentView.swift`
+      - captureToast State追加→撮影成功/失敗をカプセル型トーストで表示
+      - capturePhoto()にHaptic Feedback追加（成功:ブルッ/失敗:ブブッ）
+      - トースト3秒後に自動消去
+    - `home 3/wifi_manager.py`
+      - switch_to_ap_mode(): Hotspotプロファイルを再利用（delete→recreateを廃止）
+      - 既存プロファイルがあればmodifyのみ、なければ新規作成
+      - ap-isolation=no 追加（iOS向けDTIM最適化）
+      - powersave=2(OFF)を全パスで強制
+  - 実行コマンド:
+    - `xcodebuild build` BUILD SUCCEEDED
+    - `python3 -m py_compile` 全ファイル成功
+  - 確認結果:
+    - iOS: BUILD SUCCEEDED
+    - Pi: SSH接続不可のためデプロイ保留（Piが起動したら `bash update.sh 192.168.4.1` で適用）
+
 - 2026-02-23 02:58 JST
   - 変更ファイル:
     - `PiCameraControl/PiCameraControl/Models.swift`

@@ -212,6 +212,7 @@ struct ContentView: View {
     @State private var manualCaptureMode: ManualCaptureMode = .current
     @State private var manualCaptureMeta: String = ""
     @State private var lastCaptureMetadata: PhotoMetadata? = nil
+    @State private var captureToast: String? = nil
     @State private var sensorStatus: SensorRuntimeStatus? = nil
     @State private var meteringRecommendation: MeteringRecommendation? = nil
     @State private var isMetering: Bool = false
@@ -1267,6 +1268,20 @@ struct ContentView: View {
             .disabled(isCapturing)
             .padding(.vertical, 6)
 
+            if let toast = captureToast {
+                Text(toast)
+                    .font(.system(size: 14, weight: .bold, design: .rounded))
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 10)
+                    .background(
+                        Capsule()
+                            .fill(toast.contains("成功") ? Color.green : Color.red)
+                    )
+                    .transition(.scale.combined(with: .opacity))
+                    .animation(.spring(response: 0.3), value: captureToast)
+            }
+
             Text("赤いボタンで手動撮影します。CURRENTは今の設定を使用。MODE指定時は手動撮影だけ一時的にプリセットを適用します。")
                 .font(.caption)
                 .foregroundColor(.secondary)
@@ -1813,14 +1828,21 @@ struct ContentView: View {
                     capturedImage = image
                     lastCaptureMetadata = metadata
                     isCapturing = false
+                    captureToast = "✅ 撮影成功"
                     generator.notificationOccurred(.success)
                 }
+                // トースト自動消去
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                await MainActor.run { captureToast = nil }
             } catch {
                 await MainActor.run {
                     errorMessage = error.localizedDescription
                     isCapturing = false
+                    captureToast = "❌ 撮影失敗"
                     generator.notificationOccurred(.error)
                 }
+                try? await Task.sleep(nanoseconds: 4_000_000_000)
+                await MainActor.run { captureToast = nil }
             }
         }
     }

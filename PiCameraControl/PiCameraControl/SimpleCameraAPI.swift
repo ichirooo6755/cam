@@ -22,22 +22,40 @@ actor SimpleCameraAPI {
         config.timeoutIntervalForResource = 120
         self.session = URLSession(configuration: config)
     }
+
+    /// ネットワーク操作を最大 maxRetries 回リトライする
+    private func withRetry<T>(maxRetries: Int = 1, delay: TimeInterval = 1.0, operation: () async throws -> T) async throws -> T {
+        var lastError: Error?
+        for attempt in 0...maxRetries {
+            do {
+                return try await operation()
+            } catch {
+                lastError = error
+                if attempt < maxRetries {
+                    try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                }
+            }
+        }
+        throw lastError!
+    }
     
     /// 写真一覧を取得
     func fetchPhotos() async throws -> [String] {
-        guard let url = URL(string: "\(baseURL)/api/photos") else {
-            throw APIError.invalidURL
+        try await withRetry {
+            guard let url = URL(string: "\(self.baseURL)/api/photos") else {
+                throw APIError.invalidURL
+            }
+            
+            let (data, response) = try await self.session.data(from: url)
+            
+            guard let httpResponse = response as? HTTPURLResponse,
+                  httpResponse.statusCode == 200 else {
+                throw APIError.serverError
+            }
+            
+            let files = try JSONDecoder().decode([String].self, from: data)
+            return files.compactMap { self.sanitizeFilename($0) }
         }
-        
-        let (data, response) = try await session.data(from: url)
-        
-        guard let httpResponse = response as? HTTPURLResponse,
-              httpResponse.statusCode == 200 else {
-            throw APIError.serverError
-        }
-        
-        let files = try JSONDecoder().decode([String].self, from: data)
-        return files.compactMap { sanitizeFilename($0) }
     }
     
     /// 写真をダウンロード
@@ -147,18 +165,20 @@ actor SimpleCameraAPI {
     
     /// システム状態を取得
     func fetchStatus() async throws -> SystemStatus {
-        guard let url = URL(string: "\(baseURL)/api/status") else {
-            throw APIError.invalidURL
+        try await withRetry {
+            guard let url = URL(string: "\(self.baseURL)/api/status") else {
+                throw APIError.invalidURL
+            }
+            
+            let (data, response) = try await self.session.data(from: url)
+            
+            guard let httpResponse = response as? HTTPURLResponse,
+                  httpResponse.statusCode == 200 else {
+                throw APIError.serverError
+            }
+            
+            return try JSONDecoder().decode(SystemStatus.self, from: data)
         }
-        
-        let (data, response) = try await session.data(from: url)
-        
-        guard let httpResponse = response as? HTTPURLResponse,
-              httpResponse.statusCode == 200 else {
-            throw APIError.serverError
-        }
-        
-        return try JSONDecoder().decode(SystemStatus.self, from: data)
     }
     
     /// 明るさ閾値を更新

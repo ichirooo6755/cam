@@ -1067,39 +1067,48 @@ def switch_to_ap_mode(ssid='PiCamera', password='picamera123'):
 
         _run(['sudo', '-n', iw_cmd, 'dev', iface, 'set', 'power_save', 'off'])
 
-        # Safe teardown with delays
-        _run(['sudo', '-n', nmcli_cmd, 'connection', 'down', 'Hotspot'])
-        time.sleep(2)
-        _run(['sudo', '-n', nmcli_cmd, 'connection', 'delete', 'Hotspot'])
-        time.sleep(2)
+        # 既存Hotspotプロファイルの存在確認（削除→再作成はiOSのパスワードキャッシュを壊す）
+        profile_check = _run([nmcli_cmd, '-t', '-f', 'NAME', 'connection', 'show', 'Hotspot'], timeout=15)
+        hotspot_exists = (profile_check['returncode'] == 0)
 
-        result = _run(
-            ['sudo', '-n', nmcli_cmd, 'device', 'wifi', 'hotspot',
-             'ifname', iface,
-             'ssid', ssid,
-             'password', password],
-            timeout=40,
-        )
-
-        if result['returncode'] != 0:
-            return _fail_with_tethering_recovery(
-                f"Hotspot起動に失敗: {result['stderr'] or result['stdout']}"
+        if hotspot_exists:
+            # 既存プロファイルを再利用: 停止→設定更新→再起動
+            logger.info("Reusing existing Hotspot profile (preserving iOS credential cache)")
+            _run(['sudo', '-n', nmcli_cmd, 'connection', 'down', 'Hotspot'])
+            time.sleep(1)
+        else:
+            # プロファイルが存在しない場合のみ新規作成
+            logger.info("Creating new Hotspot profile")
+            result = _run(
+                ['sudo', '-n', nmcli_cmd, 'device', 'wifi', 'hotspot',
+                 'ifname', iface,
+                 'ssid', ssid,
+                 'password', password],
+                timeout=40,
             )
 
+            if result['returncode'] != 0:
+                return _fail_with_tethering_recovery(
+                    f"Hotspot起動に失敗: {result['stderr'] or result['stdout']}"
+                )
+            _run(['sudo', '-n', nmcli_cmd, 'connection', 'down', 'Hotspot'])
+            time.sleep(1)
+
+        # プロファイル設定を更新（既存・新規共通）
         _run(['sudo', '-n', nmcli_cmd, 'connection', 'modify', 'Hotspot', 'connection.autoconnect', 'yes'])
         _run(['sudo', '-n', nmcli_cmd, 'connection', 'modify', 'Hotspot', '802-11-wireless.powersave', '2'])
         _run(['sudo', '-n', nmcli_cmd, 'connection', 'modify', 'Hotspot', '802-11-wireless.band', 'bg'])
         _run(['sudo', '-n', nmcli_cmd, 'connection', 'modify', 'Hotspot', '802-11-wireless.channel', '6'])
+        _run(['sudo', '-n', nmcli_cmd, 'connection', 'modify', 'Hotspot', '802-11-wireless.ssid', ssid])
         _run(['sudo', '-n', nmcli_cmd, 'connection', 'modify', 'Hotspot', '802-11-wireless.security', '802-11-wireless-security'])
         _run(['sudo', '-n', nmcli_cmd, 'connection', 'modify', 'Hotspot', '802-11-wireless-security.key-mgmt', 'wpa-psk'])
         _run(['sudo', '-n', nmcli_cmd, 'connection', 'modify', 'Hotspot', '802-11-wireless-security.psk', password])
-
-        # APのIPを固定化（失敗しても継続）
         _run(['sudo', '-n', nmcli_cmd, 'connection', 'modify', 'Hotspot', 'ipv4.method', 'shared'])
         _run(['sudo', '-n', nmcli_cmd, 'connection', 'modify', 'Hotspot', 'ipv4.addresses', f'{AP_IP}/24'])
-        _run(['sudo', '-n', nmcli_cmd, 'connection', 'down', 'Hotspot'])
-        time.sleep(1)
-        _run(['sudo', '-n', nmcli_cmd, 'connection', 'up', 'Hotspot'])
+        # iOS向け: DTIM interval=1でスリープ中もビーコン受信を維持
+        _run(['sudo', '-n', nmcli_cmd, 'connection', 'modify', 'Hotspot', '802-11-wireless.ap-isolation', 'no'])
+
+        _run(['sudo', '-n', nmcli_cmd, 'connection', 'up', 'Hotspot'], timeout=40)
         time.sleep(2)
 
         _run(['sudo', '-n', iw_cmd, 'dev', iface, 'set', 'power_save', 'off'])
