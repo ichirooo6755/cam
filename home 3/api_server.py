@@ -1806,7 +1806,11 @@ class APIHandler(BaseHTTPRequestHandler):
         logger.info("%s - %s", self.client_address[0], format % args)
 
 def restore_wifi_mode_on_boot():
-    """起動時に前回のWi-Fiモードを復元"""
+    """起動時に前回のWi-Fiモードを復元
+    
+    APが既に正常動作中の場合は重い切替処理をスキップし、
+    SSH/API接続を途切れさせない。
+    """
     try:
         if not os.path.exists(SETTINGS_FILE):
             return
@@ -1819,20 +1823,30 @@ def restore_wifi_mode_on_boot():
         current_mode = wifi_manager.get_current_mode()
         logger.info(f"Boot: saved_mode={saved_mode}, current_mode={current_mode}")
 
-        if saved_mode == 'ap' and current_mode != 'ap':
+        if saved_mode == 'ap':
+            # APモードの場合: まずAPが既に正常動作中かチェック
+            if wifi_manager._is_ap_healthy():
+                logger.info("Boot: AP is already healthy, applying lightweight tuning only (no disruption)")
+                iface = wifi_manager._detect_wifi_interface()
+                iw_cmd = wifi_manager._resolve_executable('iw')
+                wifi_manager._run(['sudo', '-n', iw_cmd, 'dev', iface, 'set', 'power_save', 'off'])
+                return
+
+            if current_mode == 'ap':
+                # APモードだがHotspotが不健全 → ensure_ap_persistence（内部で健全性チェック済み）
+                try:
+                    persistence = wifi_manager.ensure_ap_persistence()
+                    logger.info(f"AP persistence ensure result: {persistence}")
+                except Exception as e:
+                    logger.warning(f"AP persistence ensure failed: {e}")
+                return
+
+            # テザリングモードからAP復元が必要
             ap_ssid = settings.get('ap_ssid')
             ap_password = settings.get('ap_password')
             logger.info(f"Restoring AP mode: SSID={ap_ssid}")
             result = wifi_manager.switch_to_ap_mode(ap_ssid, ap_password)
             logger.info(f"AP restore result: {result}")
-            return
-
-        if saved_mode == 'ap' and current_mode == 'ap':
-            try:
-                persistence = wifi_manager.ensure_ap_persistence()
-                logger.info(f"AP persistence ensure result: {persistence}")
-            except Exception as e:
-                logger.warning(f"AP persistence ensure failed: {e}")
             return
 
         if saved_mode == 'tethering' and current_mode != 'ap':

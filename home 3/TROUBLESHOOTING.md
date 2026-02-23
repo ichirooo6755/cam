@@ -812,6 +812,35 @@ FORCE_AP_SWITCH=1 AP_INTERFACE=en0 HOME_INTERFACE=en0 \
 
 ## 作業ログ
 
+- 2026-02-23 22:57 JST
+  - 問題: SSHがタイムアウトする（WiFiに繋がっているのにPiに接続できない）
+  - 根本原因:
+    1. `ensure_ap_persistence()` がAPが正常動作中でも全ネットワークを破壊→再構築していた
+       - `ip addr flush dev wlan0` で全IPアドレスを削除
+       - `ip link set wlan0 down` でインターフェースをDOWN
+       - この間（30〜60秒）SSH/API接続が全て切断される
+    2. `restore_wifi_mode_on_boot()` が起動毎に上記を呼び出していた
+       - `saved_mode=ap, current_mode=ap` でもensure_ap_persistence()を実行
+       - APが既に正常動作中でも不要な破壊→再構築が走る
+  - 変更ファイル:
+    - `home 3/wifi_manager.py`
+      - `_is_ap_healthy()` 追加: Hotspotがアクティブ+AP IPが割り当て済みかを非破壊的にチェック
+      - `ensure_ap_persistence()` 書き換え:
+        - フェーズ1: APが正常なら軽量調整のみ（powersave OFF + 不要サービス停止）→接続を切断しない
+        - フェーズ2: APが壊れている場合のみフル再構築（旧ロジック）
+      - `switch_to_ap_mode()`: Hotspotプロファイル再利用（delete→recreate廃止）
+    - `home 3/api_server.py`
+      - `restore_wifi_mode_on_boot()` 改善:
+        - まず`_is_ap_healthy()`で健全性チェック
+        - APが正常動作中ならpowersave OFFのみ適用して即return（SSH切断なし）
+        - APが不健全な場合のみensure_ap_persistence()呼び出し
+  - 実行コマンド:
+    - `python3 -m py_compile` 全ファイル成功
+    - `bash update.sh 192.168.4.1` デプロイ成功
+  - 確認結果:
+    - デプロイ後: API応答OK、SSH接続OK、WiFi AP正常動作
+    - ログ: `Skip boot Wi-Fi restore once: deployment marker consumed`（デプロイ直後のWiFi不要切替スキップ確認）
+
 - 2026-02-23 22:36 JST
   - 問題: WiFi頻繁切断、タイムアウト、パスワード拒否、スリープ切断、OFFLINEバナー被り、撮影フィードバック不足
   - 根本原因分析:

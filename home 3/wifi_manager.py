@@ -865,13 +865,57 @@ def scan_wifi_networks(max_results=25, rescan=True, timeout=25):
         'iface': iface,
     }
 
+def _is_ap_healthy():
+    """APモードが正常に動作しているかを非破壊的にチェック"""
+    try:
+        nmcli_cmd = _resolve_executable('nmcli')
+        # Hotspotプロファイルがアクティブか
+        active = _run([nmcli_cmd, '-t', '-f', 'NAME,TYPE', 'connection', 'show', '--active'], timeout=10)
+        if active['returncode'] != 0:
+            return False
+        if not any('Hotspot' in line for line in active['stdout'].splitlines()):
+            return False
+        # AP IPが割り当てられているか
+        ip = _get_primary_ip()
+        if ip and (ip.startswith('192.168.4.') or ip.startswith('10.42.0.')):
+            return True
+        return False
+    except Exception:
+        return False
+
+
 def ensure_ap_persistence(allow_recursive_ap_recovery=True):
+    """APモードの永続性を確保する。
+    APが正常動作中なら軽量な調整のみ行い、接続を切断しない。
+    APが壊れている場合のみフル再構築を行う。
+    """
     if not has_nmcli():
         return {'success': False, 'message': 'nmcli not available'}
 
     iface = _detect_wifi_interface()
     nmcli_cmd = _resolve_executable('nmcli')
     iw_cmd = _resolve_executable('iw')
+
+    # --- フェーズ1: APが正常動作中なら軽量調整のみ（接続を切断しない） ---
+    if _is_ap_healthy():
+        logger.info("ensure_ap_persistence: AP is healthy, applying lightweight tuning only")
+        # powersave OFFだけ確実に適用（接続を切らない）
+        _run(['sudo', '-n', iw_cmd, 'dev', iface, 'set', 'power_save', 'off'])
+        # 不要なサービスを静かに停止（ネットワークに影響しない）
+        _run(['sudo', '-n', 'systemctl', 'stop', 'wpa_supplicant'], timeout=5)
+        _run(['sudo', '-n', 'systemctl', 'stop', 'dhcpcd'], timeout=5)
+
+        ip = _get_primary_ip() or AP_IP
+        return {
+            'success': True,
+            'ip': ip,
+            'ip_address': ip,
+            'action': 'lightweight_tuning',
+        }
+
+    # --- フェーズ2: APが壊れている場合のみフル再構築 ---
+    logger.warning("ensure_ap_persistence: AP is NOT healthy, performing full rebuild")
+
     ctrl_dir = _detect_wpa_ctrl_dir()
     sock_path = os.path.join(ctrl_dir, iface)
 
@@ -925,11 +969,13 @@ def ensure_ap_persistence(allow_recursive_ap_recovery=True):
     _run(['sudo', '-n', nmcli_cmd, 'connection', 'modify', 'Hotspot', '802-11-wireless.powersave', '2'])
     _run(['sudo', '-n', nmcli_cmd, 'connection', 'modify', 'Hotspot', '802-11-wireless.band', 'bg'])
     _run(['sudo', '-n', nmcli_cmd, 'connection', 'modify', 'Hotspot', '802-11-wireless.channel', '6'])
+    _run(['sudo', '-n', nmcli_cmd, 'connection', 'modify', 'Hotspot', '802-11-wireless.ssid', ssid])
     _run(['sudo', '-n', nmcli_cmd, 'connection', 'modify', 'Hotspot', '802-11-wireless.security', '802-11-wireless-security'])
     _run(['sudo', '-n', nmcli_cmd, 'connection', 'modify', 'Hotspot', '802-11-wireless-security.key-mgmt', 'wpa-psk'])
     _run(['sudo', '-n', nmcli_cmd, 'connection', 'modify', 'Hotspot', '802-11-wireless-security.psk', password])
     _run(['sudo', '-n', nmcli_cmd, 'connection', 'modify', 'Hotspot', 'ipv4.method', 'shared'])
     _run(['sudo', '-n', nmcli_cmd, 'connection', 'modify', 'Hotspot', 'ipv4.addresses', f'{AP_IP}/24'])
+    _run(['sudo', '-n', nmcli_cmd, 'connection', 'modify', 'Hotspot', '802-11-wireless.ap-isolation', 'no'])
 
     active = _run([nmcli_cmd, '-t', '-f', 'NAME,TYPE', 'connection', 'show', '--active'], timeout=15)
     if active['returncode'] != 0 or not any('Hotspot:' in line for line in active['stdout'].splitlines()):
@@ -968,6 +1014,7 @@ def ensure_ap_persistence(allow_recursive_ap_recovery=True):
         'success': True,
         'ip': ip,
         'ip_address': ip,
+        'action': 'full_rebuild',
     }
 
 def switch_to_ap_mode(ssid='PiCamera', password='picamera123'):
