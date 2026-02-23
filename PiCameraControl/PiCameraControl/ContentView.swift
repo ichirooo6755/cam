@@ -1764,6 +1764,10 @@ struct ContentView: View {
         syncState = .idle
         isCapturing = true
         lastCaptureMetadata = nil
+        
+        let generator = UINotificationFeedbackGenerator()
+        generator.prepare()
+        
         let apiClient = api
         let mode = manualCaptureMode
         let meta = manualCaptureMeta
@@ -1809,11 +1813,13 @@ struct ContentView: View {
                     capturedImage = image
                     lastCaptureMetadata = metadata
                     isCapturing = false
+                    generator.notificationOccurred(.success)
                 }
             } catch {
                 await MainActor.run {
                     errorMessage = error.localizedDescription
                     isCapturing = false
+                    generator.notificationOccurred(.error)
                 }
             }
         }

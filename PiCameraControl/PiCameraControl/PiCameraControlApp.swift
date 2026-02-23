@@ -56,31 +56,43 @@ struct OfflineBannerView: View {
     @EnvironmentObject var connectionMonitor: ConnectionMonitor
 
     var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "wifi.slash")
-                .font(.system(size: 14, weight: .bold))
-            Text("OFFLINE")
-                .font(.system(size: 13, weight: .bold, design: .monospaced))
-            Text("- Pi に接続できません")
-                .font(.system(size: 12, weight: .medium))
-            Spacer()
-            Button {
-                Task { await connectionMonitor.checkNow() }
-            } label: {
-                Image(systemName: "arrow.clockwise")
-                    .font(.system(size: 12, weight: .bold))
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Image(systemName: "wifi.slash")
+                    .font(.system(size: 14, weight: .bold))
+                Text("OFFLINE")
+                    .font(.system(size: 13, weight: .bold, design: .monospaced))
+                Text("- Pi に接続できません")
+                    .font(.system(size: 12, weight: .medium))
+                Spacer()
+                Button {
+                    Task { await connectionMonitor.checkNow() }
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 12, weight: .bold))
+                }
             }
-        }
-        .foregroundColor(.white)
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-        .background(
-            LinearGradient(
-                colors: [Color.red.opacity(0.85), Color.orange.opacity(0.75)],
-                startPoint: .leading,
-                endPoint: .trailing
+            .foregroundColor(.white)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            .background(
+                LinearGradient(
+                    colors: [Color.red.opacity(0.85), Color.orange.opacity(0.75)],
+                    startPoint: .leading,
+                    endPoint: .trailing
+                )
             )
-        )
-        .padding(.top, 0)
+            Spacer()
+        }
+        // ignore safe area to stick to top, but add top padding so it doesn't overlap dynamic island
+        .ignoresSafeArea(edges: .top)
+        .padding(.top, safeAreaTop)
+    }
+
+    private var safeAreaTop: CGFloat {
+        let scenes = UIApplication.shared.connectedScenes
+        let windowScene = scenes.first as? UIWindowScene
+        let window = windowScene?.windows.first
+        return window?.safeAreaInsets.top ?? 44
     }
 }

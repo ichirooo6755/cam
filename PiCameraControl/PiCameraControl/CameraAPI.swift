@@ -71,8 +71,8 @@ actor CameraAPI {
         }
 
         let config = URLSessionConfiguration.default
-        config.timeoutIntervalForRequest = 30
-        config.timeoutIntervalForResource = 60
+        config.timeoutIntervalForRequest = 60
+        config.timeoutIntervalForResource = 120
         self.session = URLSession(configuration: config)
     }
 
