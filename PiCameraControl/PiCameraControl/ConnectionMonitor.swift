@@ -16,7 +16,7 @@ final class ConnectionMonitor: ObservableObject {
     private let normalInterval: TimeInterval = 5.0
     private let fastInterval: TimeInterval = 2.0
     private let session: URLSession
-    private let pathMonitor = NWPathMonitor()
+    private var activePathMonitor: NWPathMonitor?
     private let pathMonitorQueue = DispatchQueue(label: "connectionMonitor.nw")
     private var isCheckInFlight = false
     private var lastCheckStarted: Date = .distantPast
@@ -42,7 +42,8 @@ final class ConnectionMonitor: ObservableObject {
     func stopMonitoring() {
         timer?.invalidate()
         timer = nil
-        pathMonitor.cancel()
+        activePathMonitor?.cancel()
+        activePathMonitor = nil
     }
 
     /// フォアグラウンド復帰時に呼ぶ（即時チェック + Timer再開）
@@ -77,12 +78,12 @@ final class ConnectionMonitor: ObservableObject {
     }
 
     private func startPathMonitor() {
+        activePathMonitor?.cancel()
         let monitor = NWPathMonitor()
         monitor.pathUpdateHandler = { [weak self] path in
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 if path.status == .satisfied {
-                    // ネットワーク復帰 → 即チェック
                     await self.checkConnection()
                 } else {
                     self.isConnected = false
@@ -91,6 +92,7 @@ final class ConnectionMonitor: ObservableObject {
             }
         }
         monitor.start(queue: pathMonitorQueue)
+        activePathMonitor = monitor
     }
 
     /// serverIP を読み取り、Pi の /api/status へ GET して到達性を判定

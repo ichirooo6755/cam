@@ -812,6 +812,33 @@ FORCE_AP_SWITCH=1 AP_INTERFACE=en0 HOME_INTERFACE=en0 \
 
 ## 作業ログ
 
+- 2026-02-24 13:55 JST
+  - 問題1: SS 1/1000s が適用できない（1/250はOK）
+  - 根本原因1: `api_server.py` の `_sanitize_settings_patch` でシャッタースピードの下限が `2500μs` (=1/400)
+    → 1/1000(1000μs), 1/2000(500μs), 1/4000(250μs), 1/8000(125μs) が全てバリデーションエラーでリジェクト
+  - 修正1: 下限を `100μs` に変更、上限も `120_000_000μs` (120秒長時間露光対応) に拡大
+  - 問題2: 光を検知するとWiFiが切断される（Piが完全に到達不能になる）
+  - 根本原因2:
+    1. Pi Zero 2W で撮影時のCPUスパイク（JPEG 12.3MP エンコード）がWiFi APプロセスを飢餓状態にし、
+       ビーコンフレームが送出できなくなりiOSが切断される
+    2. WiFi recovery watchdog が APモード時に `continue` でスキップしていたため、
+       撮影でAPが壊れても復旧メカニズムが一切動作しなかった
+  - 修正2:
+    - `camera_service.py`: `os.nice(10)` でプロセス優先度を下げ、WiFiプロセスにCPU時間を確保
+    - `camera_service.py`: 撮影後 `time.sleep(0.15)` でCPU明示的yield
+    - `api_server.py`: WiFi watchdog をAPモード時にも `_is_ap_healthy()` で10秒毎にチェックするよう改修
+      → AP不健全が15秒以上続くと `ensure_ap_persistence()` で自動復旧
+  - 変更ファイル:
+    - `home 3/api_server.py` (SS バリデーション + watchdog AP監視)
+    - `home 3/camera_service.py` (nice + CPU yield)
+  - 実行コマンド:
+    - `python3 -m py_compile` 全ファイル成功
+    - `git push` dd4f368
+  - 確認結果:
+    - Piが光検知→撮影でWiFi AP完全ダウン（ping 100% loss）
+    - これはまさに修正対象のバグの症状（watchdogがAPモードをスキップ→復旧なし）
+    - Pi物理再起動後にデプロイ予定
+
 - 2026-02-23 22:57 JST
   - 問題: SSHがタイムアウトする（WiFiに繋がっているのにPiに接続できない）
   - 根本原因:

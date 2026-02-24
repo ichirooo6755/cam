@@ -810,29 +810,6 @@ struct ContentView: View {
 
     // MARK: - Subviews
 
-    private var backgroundGradient: some View {
-        ZStack {
-            Color(colorScheme == .dark ? Color(red: 0.06, green: 0.07, blue: 0.08) : Color(red: 0.97, green: 0.98, blue: 0.99))
-
-            LinearGradient(
-                colors: [
-                    Color.cyan.opacity(colorScheme == .dark ? 0.22 : 0.14),
-                    Color.white.opacity(colorScheme == .dark ? 0.04 : 0.2),
-                    Color.clear,
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-
-            RadialGradient(
-                colors: [Color.teal.opacity(colorScheme == .dark ? 0.2 : 0.1), .clear],
-                center: .bottomTrailing,
-                startRadius: 0,
-                endRadius: 400
-            )
-        }
-    }
-
     private func pickerModule<T: Identifiable & CaseIterable & Hashable>(
         title: String, selection: Binding<T>, options: T.AllCases, onChange: @escaping (T) -> Void
     ) -> some View where T.AllCases: RandomAccessCollection, T.ID == String {
