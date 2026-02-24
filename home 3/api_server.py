@@ -302,8 +302,8 @@ def _sanitize_settings_patch(patch):
                 sanitized[key] = 'auto'
             else:
                 ivalue = _parse_int(value)
-                if ivalue is None or ivalue < 2500 or ivalue > 20_000_000:
-                    errors.append('shutter_speed must be auto or microseconds in 2500..20000000')
+                if ivalue is None or ivalue < 100 or ivalue > 120_000_000:
+                    errors.append('shutter_speed must be auto or microseconds in 100..120000000')
                 else:
                     sanitized[key] = ivalue
             continue
@@ -445,11 +445,16 @@ def _run_force_ap_recovery(trigger='watchdog'):
 
 
 def _wifi_recovery_watchdog_loop():
-    """通常経路で到達不能な状態が続いたらAPを自動復旧する。"""
+    """通常経路で到達不能な状態が続いたらAPを自動復旧する。
+    APモード時もAP健全性を監視し、撮影等でAPが壊れた場合に自動復旧する。
+    """
     logger.info(
         "Wi-Fi recovery watchdog started "
         f"(interval={WIFI_RECOVERY_CHECK_INTERVAL_SEC}s grace={WIFI_RECOVERY_OFFLINE_GRACE_SEC}s cooldown={WIFI_RECOVERY_ATTEMPT_COOLDOWN_SEC}s)"
     )
+
+    ap_unhealthy_since = None
+    AP_UNHEALTHY_GRACE_SEC = 15  # AP不健全→復旧までの猶予（撮影中の一時的な不安定を許容）
 
     while True:
         time.sleep(WIFI_RECOVERY_CHECK_INTERVAL_SEC)
@@ -461,10 +466,43 @@ def _wifi_recovery_watchdog_loop():
 
             mode = wifi_manager.get_current_mode()
 
-            # 省電力: APモード時はwatchdog不要（ローカル接続のみ）
+            # --- APモード時: AP健全性を監視し、壊れたら復旧 ---
             if mode == 'ap':
+                if wifi_manager._is_ap_healthy():
+                    ap_unhealthy_since = None
+                    continue
+
+                now = time.time()
+                if ap_unhealthy_since is None:
+                    ap_unhealthy_since = now
+                    logger.warning("Wi-Fi watchdog: AP appears unhealthy, monitoring...")
+                    continue
+
+                unhealthy_for = now - ap_unhealthy_since
+                if unhealthy_for < AP_UNHEALTHY_GRACE_SEC:
+                    continue
+
+                logger.warning(f"Wi-Fi watchdog: AP unhealthy for {int(unhealthy_for)}s, attempting recovery")
+                ap_unhealthy_since = None
+
+                can_switch, guard_error = _begin_wifi_switch('watchdog-ap-repair', bypass_cooldown=True)
+                if not can_switch:
+                    logger.warning(f"Wi-Fi watchdog AP repair skipped: {guard_error}")
+                    continue
+
+                try:
+                    result = wifi_manager.ensure_ap_persistence()
+                    if result.get('success'):
+                        logger.info(f"Wi-Fi watchdog: AP repaired successfully (action={result.get('action')})")
+                    else:
+                        logger.error(f"Wi-Fi watchdog: AP repair failed: {result}")
+                except Exception as e:
+                    logger.error(f"Wi-Fi watchdog: AP repair exception: {e}")
+                finally:
+                    _finish_wifi_switch()
                 continue
 
+            # --- テザリングモード時: 既存ロジック ---
             operational = _is_mode_operational(mode)
             now = time.time()
 

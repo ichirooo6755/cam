@@ -301,6 +301,10 @@ def capture_photo(camera, settings: dict, profile: dict, detected_at: float = No
                 camera.switch_mode_and_capture_file(
                     camera.still_configuration, filepath)
 
+        # WiFi AP安定化: 撮影完了後にCPUを明示的にyieldし、
+        # WiFi APプロセスがビーコンフレームを送出できるようにする
+        time.sleep(0.15)
+
         capture_end = time.time()
         delay_ms = None
         if detected_at is not None:
@@ -322,6 +326,14 @@ def capture_photo(camera, settings: dict, profile: dict, detected_at: float = No
 
 
 def main():
+    # WiFi AP安定化: camera_serviceのCPU優先度を下げる
+    # 撮影時のCPUスパイクでWiFiビーコンフレームが送出できなくなりiOSが切断される問題の対策
+    try:
+        os.nice(10)
+        logger.info("Process priority lowered (nice=10) for WiFi stability")
+    except OSError as e:
+        logger.warning(f"Failed to set nice level: {e}")
+
     logger.info("Starting light detection camera service (Pi Zero 2W)...")
 
     try:
