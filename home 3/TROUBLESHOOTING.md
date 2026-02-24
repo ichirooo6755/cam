@@ -835,9 +835,23 @@ FORCE_AP_SWITCH=1 AP_INTERFACE=en0 HOME_INTERFACE=en0 \
     - `python3 -m py_compile` 全ファイル成功
     - `git push` dd4f368
   - 確認結果:
-    - Piが光検知→撮影でWiFi AP完全ダウン（ping 100% loss）
-    - これはまさに修正対象のバグの症状（watchdogがAPモードをスキップ→復旧なし）
-    - Pi物理再起動後にデプロイ予定
+    - デプロイ前: Piが光検知→撮影でWiFi AP完全ダウン（ping 100% loss）
+    - デプロイ後 (2026-02-24 15:00 JST):
+      - 両サービス active (camera-service, api-server)
+      - camera_service の nice=10 適用確認済み
+      - WiFi watchdog AP監視ログ確認済み
+      - SS 1/1000(1000μs) → success ✅
+      - SS 1/2000(500μs) → success ✅
+      - SS 1/4000(250μs) → success ✅
+      - SS 1/8000(125μs) → success ✅
+      - SS auto → success ✅
+      - WiFi status: AP mode, SSID=PiCamera, IP=192.168.4.1 ✅
+      - Sensor: state=monitoring, lux=0.611 ✅
+      - Settings fetch/update 正常 ✅
+    - iOS側修正:
+      - ConnectionMonitor NWPathMonitorリーク修正 → BUILD SUCCEEDED
+      - ContentView デッドコード削除 → BUILD SUCCEEDED
+    - git push: f110d09
 
 - 2026-02-23 22:57 JST
   - 問題: SSHがタイムアウトする（WiFiに繋がっているのにPiに接続できない）
