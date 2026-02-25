@@ -812,6 +812,31 @@ FORCE_AP_SWITCH=1 AP_INTERFACE=en0 HOME_INTERFACE=en0 \
 
 ## 作業ログ
 
+- 2026-02-25 10:48 JST
+  - 問題1: Swap 100%枯渇 (99MB/99MB使用、空き0KB)
+    - RAM 419MBのPi Zero 2Wでデスクトップ環境(Xorg, lxpanel, pcmanfm)が
+      メモリを消費。OOM Killは未発生だがパフォーマンス低下・WiFi不安定の潜在原因。
+  - 修正1: Swap 100MB→512MBに拡大 (`/etc/dphys-swapfile`)
+  - 修正2: 不要サービス無効化（ヘッドレスサーバー化）
+    - `lightdm` (デスクトップ), `bluetooth`, `cups` (プリンタ),
+      `avahi-daemon`, `ModemManager`, `triggerhappy` を disable
+    - `systemctl set-default multi-user.target` でGUI起動を無効化
+  - 改善結果:
+    - メモリ: used 160Mi→134Mi, free 81Mi→96Mi, available 202Mi→227Mi
+    - Swap: 99Mi/99Mi(100%)→0B/511Mi(0%) — 完全に解放
+  - 問題2: dmesgに `brcmf_vif_set_mgmt_ie: vndr ie set error : -52` が複数
+    - Pi Zero 2WのBroadcom WiFiチップの既知の無害な警告（AP起動時の一時的なエラー）
+    - 実際のAP動作には影響なし
+  - 問題3: `plymouth-start.service` が failed
+    - ブートスプラッシュ画面のサービス。ヘッドレス運用では不要・無害。
+  - 問題4: bluetoothd SAP/privacy エラー
+    - Bluetooth無効化で解消済み
+  - 実行コマンド:
+    - `sudo systemctl set-default multi-user.target`
+    - `sudo systemctl disable --now lightdm bluetooth cups avahi-daemon ModemManager triggerhappy`
+    - `sudo sed -i 's/^CONF_SWAPSIZE=.*/CONF_SWAPSIZE=512/' /etc/dphys-swapfile`
+    - `sudo systemctl restart dphys-swapfile`
+
 - 2026-02-25 10:30 JST
   - 問題: camera-serviceが「Camera(s) not found」で4088回クラッシュ→リスタートの無限ループ
   - 根本原因: `Picamera2()` 初期化でRuntimeError発生時にmain()が即終了し、
