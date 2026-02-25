@@ -356,6 +356,7 @@ def main():
     capture_cooldown = 3.0
     controls_applied = False
     active_profile = _DEFAULT_PROFILE
+    _camera_retry_delay = 10.0  # カメラ未検出時のリトライ間隔（指数バックオフ、最大120秒）
 
     sensor_state = {
         'service': 'camera-service',
@@ -464,22 +465,38 @@ def main():
                                 pass
                             camera = None
 
-                        cam = Picamera2()
-                        config = cam.create_still_configuration(
-                            main={"size": desired_size},
-                            lores={"size": desired_lores},
-                        )
-                        cam.configure(config)
-                        cam.start()
-                        camera = cam
-                        current_main_size = desired_size
-                        current_lores_size = desired_lores
-                        last_brightness = None
-                        controls_applied = False
-                        logger.info(
-                            "Camera started: mode=%s, main=%s, lores=%s, cooldown=%.1fs",
-                            camera_mode, desired_size, desired_lores, capture_cooldown,
-                        )
+                        try:
+                            cam = Picamera2()
+                            config = cam.create_still_configuration(
+                                main={"size": desired_size},
+                                lores={"size": desired_lores},
+                            )
+                            cam.configure(config)
+                            cam.start()
+                            camera = cam
+                            current_main_size = desired_size
+                            current_lores_size = desired_lores
+                            last_brightness = None
+                            controls_applied = False
+                            _camera_retry_delay = 10.0  # リセット
+                            logger.info(
+                                "Camera started: mode=%s, main=%s, lores=%s, cooldown=%.1fs",
+                                camera_mode, desired_size, desired_lores, capture_cooldown,
+                            )
+                        except RuntimeError as cam_err:
+                            # カメラ未検出: クラッシュせず指数バックオフでリトライ
+                            logger.warning(
+                                "Camera not available (%s). Retrying in %.0fs...",
+                                cam_err, _camera_retry_delay,
+                            )
+                            sensor_state['state'] = 'camera_unavailable'
+                            sensor_state['last_error'] = str(cam_err)
+                            write_sensor_status(sensor_state)
+                            last_sensor_status_write = current_time
+                            time.sleep(_camera_retry_delay)
+                            _camera_retry_delay = min(_camera_retry_delay * 2, 120.0)
+                            last_settings_load = 0  # 次ループで即リトライ
+                            continue
 
                     # カメラ制御は設定リロード時に1回だけ適用
                     if camera is not None and not controls_applied:

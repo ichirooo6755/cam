@@ -812,6 +812,25 @@ FORCE_AP_SWITCH=1 AP_INTERFACE=en0 HOME_INTERFACE=en0 \
 
 ## 作業ログ
 
+- 2026-02-25 10:30 JST
+  - 問題: camera-serviceが「Camera(s) not found」で4088回クラッシュ→リスタートの無限ループ
+  - 根本原因: `Picamera2()` 初期化でRuntimeError発生時にmain()が即終了し、
+    systemdの `Restart=always` (10秒間隔) で無限リスタート。CPU・ログ帯域を無駄に消費。
+    カメラハードウェア自体はCSIケーブル接続不良または物理的問題で未検出。
+  - 修正: `camera_service.py` のカメラ初期化を try/except で捕捉し、
+    指数バックオフリトライ（10s→20s→40s→...最大120s）でプロセス内リトライに変更。
+    プロセスが生存したまま `sensor_state['state'] = 'camera_unavailable'` を書き込み、
+    カメラ復帰時に自動的に初期化を完了する。
+  - 変更ファイル: `home 3/camera_service.py`
+  - 確認結果:
+    - デプロイ後 NRestarts=0（以前は4088回）
+    - プロセス生存・指数バックオフ確認: 10s→20s→40s
+    - api-serverログにエラーなし、WiFi watchdog正常稼働
+  - ハードウェア診断:
+    - `libcamera-hello --list-cameras` → No cameras available
+    - `vcgencmd get_camera` → supported=0 detected=0
+    - CSIケーブル接続・カメラモジュールの物理確認が必要
+
 - 2026-02-24 13:55 JST
   - 問題1: SS 1/1000s が適用できない（1/250はOK）
   - 根本原因1: `api_server.py` の `_sanitize_settings_patch` でシャッタースピードの下限が `2500μs` (=1/400)
