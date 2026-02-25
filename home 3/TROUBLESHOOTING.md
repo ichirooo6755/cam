@@ -812,6 +812,29 @@ FORCE_AP_SWITCH=1 AP_INTERFACE=en0 HOME_INTERFACE=en0 \
 
 ## 作業ログ
 
+- 2026-02-25 20:30 JST
+  - 問題: WiFiに接続しているのにアプリから「見つからない」で撮影不可
+  - 根本原因: NetworkManagerのHotspot再作成フォールバック(`nmcli device wifi hotspot`)が
+    デフォルトの`10.42.0.1`サブネットでAPを作成。IP設定(`192.168.4.1/24`)が再適用されない。
+    iOSアプリは`192.168.4.1`固定のため接続不可。
+  - 修正1 (Pi側 - wifi_manager.py):
+    - `ensure_ap_persistence()`: hotspot再作成後にIP設定を再適用し、connection再起動
+    - `ensure_ap_persistence()`: 最終IP検証で`10.42.0.x`の場合は`192.168.4.1`に強制修正
+    - `switch_to_ap_mode()`: 同様のIP強制修正ロジック追加
+  - 修正2 (iOS側 - ConnectionMonitor.swift):
+    - IPフォールバック機構追加: プライマリIP失敗が3回連続したら
+      `192.168.4.1`と`10.42.0.1`の候補を自動で試す
+    - 成功したIPで`serverIP`を自動更新→アプリ全体が自動切替
+  - 即時修正: バックグラウンドスクリプトでPiのAPを`192.168.4.1`に修正
+  - 変更ファイル:
+    - `home 3/wifi_manager.py` (AP IP強制修正)
+    - `PiCameraControl/ConnectionMonitor.swift` (IPフォールバック)
+  - 確認結果:
+    - PiのIP: 192.168.4.1 ✅
+    - 両サービス active ✅
+    - iOS BUILD SUCCEEDED ✅
+    - エラーログなし ✅
+
 - 2026-02-25 10:48 JST
   - 問題1: Swap 100%枯渇 (99MB/99MB使用、空き0KB)
     - RAM 419MBのPi Zero 2Wでデスクトップ環境(Xorg, lxpanel, pcmanfm)が

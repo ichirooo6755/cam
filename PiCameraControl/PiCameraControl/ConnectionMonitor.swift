@@ -21,6 +21,9 @@ final class ConnectionMonitor: ObservableObject {
     private var isCheckInFlight = false
     private var lastCheckStarted: Date = .distantPast
 
+    /// フォールバック候補IP（プライマリが失敗した場合に試す）
+    private let fallbackIPs = ["192.168.4.1", "10.42.0.1"]
+
     private init() {
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 3
@@ -97,7 +100,6 @@ final class ConnectionMonitor: ObservableObject {
 
     /// serverIP を読み取り、Pi の /api/status へ GET して到達性を判定
     private func checkConnection() async {
-        // デバウンス: 1秒以内の連続呼び出しを抑制
         let now = Date()
         if now.timeIntervalSince(lastCheckStarted) < 1.0 { return }
         guard !isCheckInFlight else { return }
@@ -106,38 +108,49 @@ final class ConnectionMonitor: ObservableObject {
         defer { isCheckInFlight = false }
 
         let serverIP = UserDefaults.standard.string(forKey: "serverIP") ?? "192.168.4.1"
-        guard let url = URL(string: "http://\(serverIP):8001/api/status") else {
-            isConnected = false
-            lastChecked = Date()
-            return
-        }
-
-        var request = URLRequest(url: url)
-        request.httpMethod = "GET"
-        request.cachePolicy = .reloadIgnoringLocalCacheData
-
         let wasConnected = isConnected
 
-        do {
-            let (_, response) = try await session.data(for: request)
-            if let httpResponse = response as? HTTPURLResponse,
-               (200...499).contains(httpResponse.statusCode) {
-                isConnected = true
-                consecutiveFailures = 0
-            } else {
-                isConnected = false
-                consecutiveFailures += 1
-            }
-        } catch {
-            isConnected = false
+        // プライマリIPで接続試行
+        if await tryConnect(ip: serverIP) {
+            isConnected = true
+            consecutiveFailures = 0
+        } else {
             consecutiveFailures += 1
+            isConnected = false
+
+            // 3回連続失敗でフォールバックIPを試す
+            if consecutiveFailures >= 3 {
+                for fallback in fallbackIPs where fallback != serverIP {
+                    if await tryConnect(ip: fallback) {
+                        UserDefaults.standard.set(fallback, forKey: "serverIP")
+                        isConnected = true
+                        consecutiveFailures = 0
+                        break
+                    }
+                }
+            }
         }
 
         lastChecked = Date()
 
-        // 接続状態が変化したらポーリング間隔を調整
         if wasConnected != isConnected {
             scheduleTimer()
         }
+    }
+
+    /// 指定IPの /api/status へ GET して到達性を判定
+    private func tryConnect(ip: String) async -> Bool {
+        guard let url = URL(string: "http://\(ip):8001/api/status") else { return false }
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        do {
+            let (_, response) = try await session.data(for: request)
+            if let http = response as? HTTPURLResponse,
+               (200...499).contains(http.statusCode) {
+                return true
+            }
+        } catch {}
+        return false
     }
 }

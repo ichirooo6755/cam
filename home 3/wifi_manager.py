@@ -988,6 +988,16 @@ def ensure_ap_persistence(allow_recursive_ap_recovery=True):
                 'password', password,
             ], timeout=40)
             if recreate['returncode'] == 0:
+                # 再作成後にIP設定を再適用（デフォルト10.42.0.1を192.168.4.1に強制）
+                _run(['sudo', '-n', nmcli_cmd, 'connection', 'modify', 'Hotspot', 'ipv4.addresses', f'{AP_IP}/24'])
+                _run(['sudo', '-n', nmcli_cmd, 'connection', 'modify', 'Hotspot', 'ipv4.method', 'shared'])
+                _run(['sudo', '-n', nmcli_cmd, 'connection', 'modify', 'Hotspot', 'connection.autoconnect', 'yes'])
+                _run(['sudo', '-n', nmcli_cmd, 'connection', 'modify', 'Hotspot', '802-11-wireless.powersave', '2'])
+                _run(['sudo', '-n', nmcli_cmd, 'connection', 'modify', 'Hotspot', '802-11-wireless.ap-isolation', 'no'])
+                # IP変更を反映するためHotspotを再起動
+                _run(['sudo', '-n', nmcli_cmd, 'connection', 'down', 'Hotspot'], timeout=15)
+                time.sleep(1)
+                _run(['sudo', '-n', nmcli_cmd, 'connection', 'up', 'Hotspot'], timeout=40)
                 active = _run([nmcli_cmd, '-t', '-f', 'NAME,TYPE', 'connection', 'show', '--active'], timeout=15)
                 if any('Hotspot:' in line for line in active['stdout'].splitlines()):
                     up = {'returncode': 0, 'stdout': 'recreated', 'stderr': ''}
@@ -1007,7 +1017,19 @@ def ensure_ap_persistence(allow_recursive_ap_recovery=True):
         return {'success': False, 'message': f'AP状態の確認に失敗しました: {ready_err}'}
 
     ip = _get_primary_ip() or AP_IP
-    if not (ip.startswith('192.168.4.') or ip.startswith('10.42.0.')):
+
+    # 10.42.0.x（NMデフォルト）で起動してしまった場合、192.168.4.1に強制修正
+    if ip.startswith('10.42.0.'):
+        logger.warning("AP started with wrong subnet %s, forcing %s", ip, AP_IP)
+        _run(['sudo', '-n', nmcli_cmd, 'connection', 'modify', 'Hotspot', 'ipv4.addresses', f'{AP_IP}/24'])
+        _run(['sudo', '-n', nmcli_cmd, 'connection', 'down', 'Hotspot'], timeout=15)
+        time.sleep(1)
+        _run(['sudo', '-n', nmcli_cmd, 'connection', 'up', 'Hotspot'], timeout=40)
+        _run(['sudo', '-n', iw_cmd, 'dev', iface, 'set', 'power_save', 'off'])
+        time.sleep(3)
+        ip = _get_primary_ip() or AP_IP
+
+    if not ip.startswith('192.168.4.'):
         ip = AP_IP
 
     return {
@@ -1174,7 +1196,17 @@ def switch_to_ap_mode(ssid='PiCamera', password='picamera123'):
 
         # 現在のIPを取得（失敗時は既定値）
         current_ip = _get_primary_ip() or AP_IP
-        if not (current_ip.startswith('192.168.4.') or current_ip.startswith('10.42.0.')):
+        # 10.42.0.x（NMデフォルト）で起動した場合は強制修正
+        if current_ip.startswith('10.42.0.'):
+            logger.warning("switch_to_ap_mode: wrong subnet %s, forcing %s", current_ip, AP_IP)
+            _run(['sudo', '-n', nmcli_cmd, 'connection', 'modify', 'Hotspot', 'ipv4.addresses', f'{AP_IP}/24'])
+            _run(['sudo', '-n', nmcli_cmd, 'connection', 'down', 'Hotspot'], timeout=15)
+            time.sleep(1)
+            _run(['sudo', '-n', nmcli_cmd, 'connection', 'up', 'Hotspot'], timeout=40)
+            _run(['sudo', '-n', iw_cmd, 'dev', iface, 'set', 'power_save', 'off'])
+            time.sleep(3)
+            current_ip = _get_primary_ip() or AP_IP
+        if not current_ip.startswith('192.168.4.'):
             current_ip = AP_IP
 
         logger.info("Successfully switched to AP mode")
