@@ -174,6 +174,25 @@ def get_sensor_sample(camera):
     return brightness, lux, ae_gain, ae_exposure_us
 
 
+def get_sensor_sample_from_request(request):
+    """キャプチャリクエストから明るさ情報を取得"""
+    metadata = request.get_metadata()
+    lux = metadata.get('Lux')
+    ae_gain = metadata.get('AnalogueGain')
+    ae_exposure_us = metadata.get('ExposureTime')
+
+    if lux is not None:
+        brightness = float(lux)
+    else:
+        array = request.make_array("lores")
+        if len(array.shape) == 3:
+            brightness = float(np.mean(array[:, :, 0]))
+        else:
+            brightness = float(np.mean(array))
+
+    return brightness, lux, ae_gain, ae_exposure_us
+
+
 def load_settings() -> dict:
     settings = DEFAULT_SETTINGS.copy()
     try:
@@ -363,8 +382,23 @@ def _adapt_exposure(camera: 'Picamera2', filepath: str, settings: dict) -> None:
         logger.warning("Failed to apply adaptive gain: %s", e)
 
 
-def capture_photo(camera, settings: dict, profile: dict, detected_at: float = None) -> dict:
-    """1枚だけ撮影して保存。画像処理は一切行わない。"""
+def save_request_to_file(request, filepath, settings, profile):
+    """キャプチャリクエストをファイルに保存。リクエストのreleaseは呼び出し元が行う。"""
+    raw_mode = settings.get('raw_mode', False)
+    if raw_mode:
+        try:
+            request.save_dng(filepath)
+        except Exception as dng_err:
+            logger.warning("DNG save failed (%s), falling back to JPEG", dng_err)
+            filepath = filepath.replace('.dng', '.jpg')
+            request.save("main", filepath)
+    else:
+        request.save("main", filepath)
+    return filepath
+
+
+def capture_photo(camera, settings: dict, profile: dict, detected_at: float = None, request=None) -> dict:
+    """撮影して保存。requestが渡された場合はそのフレームを保存（光検知と同一フレーム）。"""
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
     raw_mode = settings.get('raw_mode', False)
 
@@ -374,45 +408,40 @@ def capture_photo(camera, settings: dict, profile: dict, detected_at: float = No
         filepath = os.path.join(PHOTOS_DIR, f'photo_{timestamp}.jpg')
 
     try:
-        # プロファイルの品質を適用（ユーザー設定より速度優先モードが上書き）
         quality = profile.get('quality', settings.get('quality', 90))
         camera.options["quality"] = quality
         capture_start = time.time()
 
-        camera_mode = settings.get('camera_mode', 'standard')
-        use_hires = camera_mode in ('quality', 'raw') or raw_mode
-
-        if use_hires:
-            # 高画質モード: 4056x3040にモード切替して撮影（2-4秒かかる）
-            # ⚠ フィルムカメラのシャッター後に撮影するため光が写らない可能性あり
-            logger.warning(
-                "High-res capture (%s): switching to full resolution. "
-                "Expect 2-4s delay — light may be gone.",
-                camera_mode,
-            )
-            if raw_mode:
-                try:
-                    camera.switch_mode_and_capture_file(
-                        camera.still_configuration, filepath, format='dng')
-                except Exception as dng_err:
-                    logger.warning("DNG capture failed (%s), falling back to JPEG", dng_err)
-                    filepath = filepath.replace('.dng', '.jpg')
-                    camera.options["quality"] = quality
+        if request is not None:
+            # 光検知と同一フレームを保存（遅延ゼロ）
+            filepath = save_request_to_file(request, filepath, settings, profile)
+        else:
+            # 手動撮影等: 新しいフレームを取得
+            camera_mode = settings.get('camera_mode', 'standard')
+            use_hires = camera_mode in ('quality', 'raw') or raw_mode
+            if use_hires:
+                logger.info("High-res capture (%s): switching to full resolution.", camera_mode)
+                if raw_mode:
+                    try:
+                        camera.switch_mode_and_capture_file(
+                            camera.still_configuration, filepath, format='dng')
+                    except Exception as dng_err:
+                        logger.warning("DNG capture failed (%s), falling back to JPEG", dng_err)
+                        filepath = filepath.replace('.dng', '.jpg')
+                        camera.options["quality"] = quality
+                        camera.switch_mode_and_capture_file(
+                            camera.still_configuration, filepath)
+                else:
                     camera.switch_mode_and_capture_file(
                         camera.still_configuration, filepath)
             else:
-                camera.switch_mode_and_capture_file(
-                    camera.still_configuration, filepath)
-        else:
-            # 通常モード: 現在のフレームを即座にキャプチャ（遅延なし）
-            request = camera.capture_request()
-            try:
-                request.save("main", filepath)
-            finally:
-                request.release()
+                new_req = camera.capture_request()
+                try:
+                    filepath = save_request_to_file(new_req, filepath, settings, profile)
+                finally:
+                    new_req.release()
 
-        # WiFi AP安定化: 撮影完了後にCPUを明示的にyieldし、
-        # WiFi APプロセスがビーコンフレームを送出できるようにする
+        # WiFi AP安定化
         time.sleep(0.15)
 
         capture_end = time.time()
@@ -643,12 +672,18 @@ def main():
                 time.sleep(check_interval)
                 continue
 
-            # --- 光検知ループ ---
+            # --- 光検知ループ（同一フレーム検知+撮影） ---
+            # capture_request()でフレームを取得し、そのフレームで光検知判定。
+            # 光があればそのフレームそのものをファイルに保存（遅延ゼロ）。
+            request = None
             try:
-                brightness, lux, ae_gain, ae_exposure_us = get_sensor_sample(camera)
+                request = camera.capture_request()
+                brightness, lux, ae_gain, ae_exposure_us = get_sensor_sample_from_request(request)
 
                 if last_brightness is None:
                     last_brightness = brightness
+                    request.release()
+                    request = None
                     time.sleep(check_interval)
                     continue
 
@@ -664,6 +699,8 @@ def main():
                 sensor_state['last_change_amount'] = round(float(change_amount), 3)
 
                 if change_amount < 0:
+                    request.release()
+                    request = None
                     time.sleep(check_interval)
                     continue
 
@@ -674,14 +711,19 @@ def main():
                 sensor_state['last_change_percent'] = round(float(change_percent), 3)
 
                 # --- 撮影判定 ---
-                if (change_percent >= threshold
-                        and change_amount >= MIN_CHANGE_AMOUNT
-                        and current_time - last_capture_time >= capture_cooldown):
+                should_capture = (
+                    change_percent >= threshold
+                    and change_amount >= MIN_CHANGE_AMOUNT
+                    and current_time - last_capture_time >= capture_cooldown
+                )
 
+                if should_capture:
                     if not _rate_limit_ok():
                         logger.warning(
                             "Rate limit (%d/min). Skipping.", _active_max_per_minute)
                         sensor_state['state'] = 'rate_limited'
+                        request.release()
+                        request = None
                         time.sleep(check_interval)
                         continue
 
@@ -693,16 +735,30 @@ def main():
                     detected_at = time.time()
                     sensor_state['last_detected_at'] = datetime.now().isoformat()
 
+                    # 同一フレームを保存（requestを渡すことで遅延ゼロ）
                     result = capture_photo(
-                        camera, settings, active_profile, detected_at=detected_at)
+                        camera, settings, active_profile,
+                        detected_at=detected_at, request=request)
+                    request.release()
+                    request = None
+
                     if result['success']:
                         last_capture_time = time.time()
                         sensor_state['last_capture_at'] = datetime.now().isoformat()
                         sensor_state['last_detect_to_capture_ms'] = result.get('delay_ms')
+                else:
+                    request.release()
+                    request = None
 
             except Exception as e:
                 logger.error(f"Detection error: {e}")
                 sensor_state['last_error'] = str(e)
+            finally:
+                if request is not None:
+                    try:
+                        request.release()
+                    except Exception:
+                        pass
 
             # --- センサーステータス書き込み ---
             if current_time - last_sensor_status_write >= SENSOR_STATUS_WRITE_INTERVAL:
