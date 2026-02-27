@@ -1795,7 +1795,7 @@ class APIHandler(BaseHTTPRequestHandler):
                 '--width', str(width),
                 '--height', str(height),
                 '--quality', str(settings.get('quality', 90)),
-                '--timeout', '1000',
+                '--timeout', '3000',
                 '--nopreview'
             ]
 

@@ -578,6 +578,30 @@ def main():
                         "Light detected: lux=%.2f, change=%.1f%%, thr=%d",
                         brightness, change_percent, threshold,
                     )
+
+                    # AE再適応待機: 暗→明の急変時、AEが新しい明るさに
+                    # 収束する前に撮影すると白飛びする。
+                    # 変化量に応じて待機時間を調整（大きい変化ほど長く待つ）
+                    ae_settle_frames = 5 if change_percent < 500 else 10
+                    ae_settle_sec = ae_settle_frames * 0.033  # ~30fps想定
+                    if camera_mode == 'reaction':
+                        ae_settle_sec = min(ae_settle_sec, 0.15)  # reactionモードは短縮
+                    logger.info("AE settle wait: %.2fs (%d frames)", ae_settle_sec, ae_settle_frames)
+                    time.sleep(ae_settle_sec)
+
+                    # 待機後に再度メタデータ取得してAE収束を確認
+                    try:
+                        post_meta = camera.capture_metadata()
+                        post_gain = post_meta.get('AnalogueGain')
+                        post_exp = post_meta.get('ExposureTime')
+                        logger.info(
+                            "AE after settle: gain=%.2f, exp=%dµs (pre: gain=%.2f, exp=%s)",
+                            post_gain or 0, post_exp or 0,
+                            ae_gain or 0, ae_exposure_us or 0,
+                        )
+                    except Exception:
+                        pass
+
                     detected_at = time.time()
                     sensor_state['last_detected_at'] = datetime.now().isoformat()
 
