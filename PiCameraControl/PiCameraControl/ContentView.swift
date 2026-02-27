@@ -227,6 +227,7 @@ struct ContentView: View {
     @State private var expandedSensor = false
     @State private var expandedAppearance = false
     @State private var expandedNetwork = false
+    @State private var expandedTroubleshoot = false
 
     @FocusState private var isManualMetaFocused: Bool
 
@@ -303,8 +304,8 @@ struct ContentView: View {
                                 // MODE Picker
                                 VStack(alignment: .leading, spacing: 14) {
                                     Text("MODE")
-                                        .font(.system(size: 11, weight: .bold, design: .monospaced))
-                                        .foregroundColor(Color.gray.opacity(0.9))
+                                        .font(.system(size: 13, weight: .bold, design: .monospaced))
+                                        .foregroundColor(.secondary)
                                         .tracking(1.5)
                                         .padding(.horizontal, 4)
 
@@ -322,7 +323,7 @@ struct ContentView: View {
                                                         Image(systemName: mode.icon)
                                                             .font(.system(size: 16, weight: .semibold))
                                                         Text(mode.subtitle)
-                                                            .font(.system(size: 9, weight: .bold))
+                                                            .font(.system(size: 11, weight: .bold))
                                                     }
                                                     .frame(width: 56, height: 52)
                                                     .foregroundColor(isActive ? .white : .secondary)
@@ -572,6 +573,16 @@ struct ContentView: View {
                                 .padding(.top, 8)
                         } label: {
                             sectionHeader(icon: "wifi", title: "ネットワーク")
+                        }
+                        .tint(.primary)
+                        .minimalCard()
+
+                        // 🛠 トラブルシューティング
+                        DisclosureGroup(isExpanded: $expandedTroubleshoot) {
+                            troubleshootSection
+                                .padding(.top, 8)
+                        } label: {
+                            sectionHeader(icon: "wrench.and.screwdriver.fill", title: "トラブルシューティング")
                         }
                         .tint(.primary)
                         .minimalCard()
@@ -1372,6 +1383,154 @@ struct ContentView: View {
                 .background(Color.primary.opacity(0.05))
                 .cornerRadius(14)
             }
+        }
+    }
+
+    private var troubleshootSection: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("問題が起きたら以下のボタンで修正できます")
+                .font(.system(size: 13))
+                .foregroundColor(.secondary)
+
+            // フィルムカメラ用デフォルトに戻す
+            Button {
+                Task {
+                    do {
+                        try await api.updateSettings([
+                            "iso": 200,
+                            "shutter_speed": 1000000,
+                            "camera_mode": "standard",
+                        ])
+                        syncState = .success("ISO 200 / SS 1s に復元しました")
+                        loadAllSettings()
+                    } catch {
+                        errorMessage = "復元失敗: \(error.localizedDescription)"
+                    }
+                }
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "camera.fill")
+                        .font(.system(size: 16, weight: .bold))
+                        .frame(width: 32)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("フィルムカメラ用に復元")
+                            .font(.system(size: 14, weight: .bold))
+                        Text("ISO 200 / SS 1秒 / STANDARD")
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundColor(.secondary)
+                    }
+                    Spacer()
+                    Image(systemName: "arrow.counterclockwise")
+                }
+                .padding(14)
+                .background(RoundedRectangle(cornerRadius: 12).fill(Color.blue.opacity(0.1)))
+            }
+            .buttonStyle(.plain)
+
+            // ISO/SSをautoに変更
+            Button {
+                Task {
+                    do {
+                        try await api.updateSettings([
+                            "iso": "auto",
+                            "shutter_speed": "auto",
+                        ], resetTemporary: true)
+                        syncState = .success("ISO/SS を AUTO に変更しました")
+                        loadAllSettings()
+                    } catch {
+                        errorMessage = "変更失敗: \(error.localizedDescription)"
+                    }
+                }
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "wand.and.stars")
+                        .font(.system(size: 16, weight: .bold))
+                        .frame(width: 32)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("ISO/SS を AUTO に変更")
+                            .font(.system(size: 14, weight: .bold))
+                        Text("一時設定もクリア")
+                            .font(.system(size: 11))
+                            .foregroundColor(.secondary)
+                    }
+                    Spacer()
+                    Image(systemName: "sparkles")
+                }
+                .padding(14)
+                .background(RoundedRectangle(cornerRadius: 12).fill(Color.green.opacity(0.1)))
+            }
+            .buttonStyle(.plain)
+
+            // camera-service再起動
+            Button {
+                Task {
+                    do {
+                        // /api/capture with empty body triggers service restart cycle
+                        let url = URL(string: "http://\(serverIP):8001/api/settings")!
+                        var request = URLRequest(url: url)
+                        request.httpMethod = "POST"
+                        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                        request.httpBody = try JSONSerialization.data(withJSONObject: ["camera_mode": selectedCameraMode.rawValue])
+                        let _ = try await URLSession.shared.data(for: request)
+                        syncState = .success("カメラモードを再適用しました")
+                        loadAllSettings()
+                    } catch {
+                        errorMessage = "再適用失敗: \(error.localizedDescription)"
+                    }
+                }
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "arrow.triangle.2.circlepath")
+                        .font(.system(size: 16, weight: .bold))
+                        .frame(width: 32)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("カメラモード再適用")
+                            .font(.system(size: 14, weight: .bold))
+                        Text("設定をサーバーに再送信")
+                            .font(.system(size: 11))
+                            .foregroundColor(.secondary)
+                    }
+                    Spacer()
+                    Image(systemName: "arrow.clockwise")
+                }
+                .padding(14)
+                .background(RoundedRectangle(cornerRadius: 12).fill(Color.orange.opacity(0.1)))
+            }
+            .buttonStyle(.plain)
+
+            // 現在の設定表示
+            VStack(alignment: .leading, spacing: 6) {
+                Text("現在の設定")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundColor(.secondary)
+                HStack(spacing: 16) {
+                    Label("ISO: \(selectedISO.label)", systemImage: "sun.max")
+                    Label("SS: \(selectedShutterSpeed.label)", systemImage: "timer")
+                }
+                .font(.system(size: 13, weight: .medium, design: .monospaced))
+                HStack(spacing: 16) {
+                    Label("Mode: \(selectedCameraMode.rawValue.uppercased())", systemImage: "camera")
+                    Label("Q: \(selectedQuality.label)", systemImage: "photo")
+                }
+                .font(.system(size: 13, weight: .medium, design: .monospaced))
+                if let sensor = sensorStatus {
+                    HStack(spacing: 16) {
+                        if let lux = sensor.lux {
+                            Text(String(format: "Lux: %.1f", lux))
+                        }
+                        if let gain = sensor.aeGain {
+                            Text(String(format: "Gain: %.1f", gain))
+                        }
+                        if let exp = sensor.aeExposureUs {
+                            Text(String(format: "Exp: %.0fµs", exp))
+                        }
+                    }
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundColor(.secondary)
+                }
+            }
+            .padding(12)
+            .background(RoundedRectangle(cornerRadius: 10).fill(Color.primary.opacity(0.04)))
         }
     }
 

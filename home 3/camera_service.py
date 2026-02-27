@@ -221,16 +221,17 @@ def _apply_camera_controls(camera: Picamera2, settings: dict, profile: dict) -> 
     # auto設定でも内部的にはAeEnable=Falseでgainを直接制御する。
     controls['AeEnable'] = False
 
-    # 適応型gainが設定されている場合はそれを優先
-    if _adaptive_gain is not None:
-        controls['AnalogueGain'] = max(_ADAPTIVE_GAIN_MIN, min(_ADAPTIVE_GAIN_MAX, _adaptive_gain))
-        logger.info("Using adaptive gain: %.2f (ISO %d)", _adaptive_gain, int(_adaptive_gain * 100))
-    elif iso_value != 'auto':
+    # ユーザーが明示的にISO値を設定した場合はそれを最優先で使用
+    if iso_value != 'auto':
         try:
             gain = int(iso_value) / 100.0
             controls['AnalogueGain'] = max(1.0, min(160.0, gain))
         except ValueError:
             logger.warning(f"Invalid ISO value: {iso_value}")
+    elif _adaptive_gain is not None:
+        # auto時のみ適応型gainを使用（撮影結果から自動調整）
+        controls['AnalogueGain'] = max(_ADAPTIVE_GAIN_MIN, min(_ADAPTIVE_GAIN_MAX, _adaptive_gain))
+        logger.info("Using adaptive gain: %.2f (ISO %d)", _adaptive_gain, int(_adaptive_gain * 100))
 
     if shutter_value != 'auto':
         try:
