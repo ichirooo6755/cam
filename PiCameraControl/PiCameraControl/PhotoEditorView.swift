@@ -195,7 +195,7 @@ struct HistogramData {
     var dynamicRange: Double     // ダイナミックレンジ（0-1）
 }
 
-private enum ImageAnalyzer {
+enum ImageAnalyzer {
     private static let context = CIContext(options: nil)
 
     static func analyze(image: UIImage) -> ImageAnalysisResult? {
@@ -350,7 +350,7 @@ private enum ImageAnalyzer {
 
 // MARK: - AutoEditEngine (精度向上版)
 
-private enum AutoEditEngine {
+enum AutoEditEngine {
     /// 画像分析結果に基づいて設定を提案（精度向上版）
     static func suggestSettings(for analysis: ImageAnalysisResult, learningData: [AutoEditEvaluation]) -> PhotoEditorSettings {
         var settings = PhotoEditorSettings.default
@@ -1226,6 +1226,19 @@ struct PhotoEditorView: View {
     @State private var imageWriteCoordinator: ImageWriteCoordinator?
     @GestureState private var showingOriginalWhilePress: Bool = false
 
+    // Smart Auto Edit
+    @State private var smartAnalysis: SmartAutoEditEngine.SmartAnalysis?
+    @State private var appliedCorrections: Set<SmartAutoEditEngine.CorrectionType> = []
+
+    // Reference Photo
+    @State private var referencePhoto: UIImage?
+    @State private var referenceAnalysis: SmartAutoEditEngine.SmartAnalysis?
+    @State private var showReferencePicker: Bool = false
+
+    // Feedback Panel
+    @State private var showFeedbackPanel: Bool = false
+    @State private var settingsBeforeEdit: PhotoEditorSettings?
+
     var body: some View {
         NavigationView {
             ZStack {
@@ -1260,22 +1273,28 @@ struct PhotoEditorView: View {
 
                 ToolbarItem(placement: .navigationBarTrailing) {
                     HStack(spacing: 14) {
+                        // Smart Auto Edit (sparkles + wand 統合)
                         Button {
-                            applyAutoEdit()
+                            applySmartAutoEdit()
                         } label: {
-                            Image(systemName: isAutoEditMode ? "sparkles" : "sparkle")
-                                .foregroundColor(isAutoEditMode ? .purple : .primary)
+                            ZStack(alignment: .topTrailing) {
+                                Image(systemName: isAutoEditMode ? "wand.and.stars" : "wand.and.stars")
+                                    .foregroundColor(isAutoEditMode ? .purple : .primary)
+                                if !appliedCorrections.isEmpty {
+                                    Circle()
+                                        .fill(Color.purple)
+                                        .frame(width: 8, height: 8)
+                                        .offset(x: 3, y: -3)
+                                }
+                            }
                         }
 
+                        // Reference Photo
                         Button {
-                            settings.autoWhiteBalance.toggle()
-                            if settings.autoWhiteBalance {
-                                settings.temperature = 0
-                                settings.tint = 0
-                            }
+                            showReferencePicker = true
                         } label: {
-                            Image(systemName: settings.autoWhiteBalance ? "wand.and.stars.inverse" : "wand.and.stars")
-                                .foregroundColor(settings.autoWhiteBalance ? .blue : .primary)
+                            Image(systemName: referencePhoto != nil ? "photo.fill" : "photo")
+                                .foregroundColor(referencePhoto != nil ? .orange : .primary)
                         }
 
                         Button {
@@ -1344,6 +1363,32 @@ struct PhotoEditorView: View {
         } message: {
             Text("編集の品質を評価してください（1-5星）")
         }
+        .environment(\.colorScheme, .dark)
+        .sheet(isPresented: $showReferencePicker) {
+            PhotoPickerView(isPresented: $showReferencePicker) { image in
+                referencePhoto = image
+                referenceAnalysis = SmartAutoEditEngine.analyze(image: image)
+            }
+        }
+        .overlay {
+            if showFeedbackPanel {
+                SmartEditFeedbackView(
+                    originalImage: originalImage,
+                    editedImage: previewImage ?? originalImage,
+                    appliedCorrections: appliedCorrections,
+                    onRate: { rating in
+                        confirmSaveWithRating(rating)
+                        showFeedbackPanel = false
+                    },
+                    onCancel: {
+                        showFeedbackPanel = false
+                        isSavingToApp = false
+                    }
+                )
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
+        .animation(.easeInOut(duration: 0.3), value: showFeedbackPanel)
     }
 
     private var previewArea: some View {
@@ -1394,7 +1439,7 @@ struct PhotoEditorView: View {
             .frame(maxHeight: .infinity)
         }
         .padding(MinimalSpacing.md)
-        .background(MinimalTheme.Background.surface.opacity(0.95))
+        .background(Color(.systemBackground).opacity(0.95))
     }
 
     @ViewBuilder
@@ -1424,7 +1469,7 @@ struct PhotoEditorView: View {
                     }
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
-                    .background(settings.autoWhiteBalance ? Color.blue : Color.gray.opacity(0.2))
+                    .background(settings.autoWhiteBalance ? Color.blue : Color(.secondarySystemBackground))
                     .foregroundColor(settings.autoWhiteBalance ? .white : .primary)
                     .cornerRadius(8)
                 }
@@ -1722,6 +1767,9 @@ struct PhotoEditorView: View {
         settings = .default
         isAutoEditMode = false
         predictedSettings = nil
+        smartAnalysis = nil
+        appliedCorrections = []
+        settingsBeforeEdit = nil
     }
 
     private func applyAutoEdit() {
@@ -1746,6 +1794,31 @@ struct PhotoEditorView: View {
         isAutoEditMode = true
     }
 
+    private func applySmartAutoEdit() {
+        guard let analysis = SmartAutoEditEngine.analyze(image: originalImage) else {
+            return
+        }
+
+        smartAnalysis = analysis
+        imageAnalysis = analysis.base
+        settingsBeforeEdit = settings
+
+        // 学習データを取得
+        let learningData = AutoEditEvaluation.fetchForTraining(minRating: 4, context: viewContext)
+
+        // 統合スマート自動編集
+        let (suggested, corrections) = SmartAutoEditEngine.suggestSettings(
+            analysis: analysis,
+            learningData: learningData,
+            referenceAnalysis: referenceAnalysis
+        )
+
+        predictedSettings = suggested
+        appliedCorrections = corrections
+        settings = suggested
+        isAutoEditMode = true
+    }
+
     private func applyInfraredPreset() {
         settings.irAutoCorrect = true
         settings.irCorrectionStrength = 0.78
@@ -1757,9 +1830,9 @@ struct PhotoEditorView: View {
         if isSavingToApp { return }
         isSavingToApp = true
 
-        // PhotoGroupがある場合は新バージョンとして保存、ない場合は従来通りEditedPhotoとして保存
-        if sourcePhotoGroup != nil {
-            showRatingDialog = true
+        // スマート編集モード時はフィードバックパネル、それ以外はアラート
+        if isAutoEditMode {
+            showFeedbackPanel = true
         } else {
             showRatingDialog = true
         }
@@ -1830,15 +1903,28 @@ struct PhotoEditorView: View {
 
                 // 自動編集モードの場合、評価を記録
                 if isAutoEditMode,
-                   let predicted = predictedSettings,
-                   let analysis = imageAnalysis {
-                    AutoEditEngine.recordEvaluation(
-                        predicted: predicted,
-                        final: current,
-                        rating: rating,
-                        analysis: analysis,
-                        context: viewContext
-                    )
+                   let predicted = predictedSettings {
+                    if let smart = smartAnalysis {
+                        // SmartAutoEditEngine経由
+                        SmartAutoEditEngine.recordEvaluation(
+                            predicted: predicted,
+                            final: current,
+                            rating: rating,
+                            analysis: smart,
+                            corrections: appliedCorrections,
+                            referenceAnalysis: referenceAnalysis,
+                            context: viewContext
+                        )
+                    } else if let analysis = imageAnalysis {
+                        // 従来のAutoEditEngine経由
+                        AutoEditEngine.recordEvaluation(
+                            predicted: predicted,
+                            final: current,
+                            rating: rating,
+                            analysis: analysis,
+                            context: viewContext
+                        )
+                    }
                 }
 
                 do {
@@ -1852,6 +1938,9 @@ struct PhotoEditorView: View {
                     // 保存後にリセット
                     isAutoEditMode = false
                     predictedSettings = nil
+                    smartAnalysis = nil
+                    appliedCorrections = []
+                    settingsBeforeEdit = nil
                 } catch {
                     isSavingToApp = false
                     resultMessage = "保存に失敗しました: \(error.localizedDescription)"

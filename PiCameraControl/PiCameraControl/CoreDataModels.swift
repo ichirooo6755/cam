@@ -100,6 +100,8 @@ public class AutoEditEvaluation: NSManagedObject, Identifiable {
     @NSManaged public var imageBrightness: Double  // 画像の平均輝度（0-1）
     @NSManaged public var imageContrast: Double  // 画像のコントラスト
     @NSManaged public var imageSaturation: Double  // 画像の彩度
+    @NSManaged public var smartEditDecisionJSON: String?  // どの補正が適用されたかの記録
+    @NSManaged public var referenceAnalysisJSON: String?  // リファレンス写真の分析結果
 }
 
 extension AutoEditEvaluation {

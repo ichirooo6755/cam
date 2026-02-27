@@ -92,9 +92,9 @@ struct IconGridSelector: View {
                         }
                     }
                     .padding(.horizontal, MinimalSpacing.md)
-                    .padding(.bottom, 8)
+                    .padding(.vertical, 8)
                 }
-                .transition(.opacity)
+                .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
         .minimalCard()
@@ -141,7 +141,7 @@ struct CategoryIcon: View {
                 )
                 .lineLimit(1)
         }
-        .frame(width: 52)
+        .frame(width: 54, height: 64)
         .scaleEffect(isSelected ? 1.05 : 1.0)
         .animation(MinimalAnimation.springEase, value: isSelected)
     }

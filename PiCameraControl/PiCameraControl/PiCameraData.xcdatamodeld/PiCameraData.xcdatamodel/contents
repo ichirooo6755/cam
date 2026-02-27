@@ -12,7 +12,9 @@
         <attribute name="isOriginal" optional="YES" attributeType="Boolean" usesScalarValueType="YES"/>
         <attribute name="originalPhotoID" optional="YES" attributeType="String"/>
         <attribute name="predictedSettingsJSON" attributeType="String"/>
+        <attribute name="referenceAnalysisJSON" optional="YES" attributeType="String"/>
         <attribute name="settingsJSON" optional="YES" attributeType="String"/>
+        <attribute name="smartEditDecisionJSON" optional="YES" attributeType="String"/>
         <attribute name="thumbnailData" optional="YES" attributeType="Binary"/>
         <attribute name="updatedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
         <attribute name="userRating" attributeType="Integer 16" defaultValueString="0" usesScalarValueType="YES"/>
