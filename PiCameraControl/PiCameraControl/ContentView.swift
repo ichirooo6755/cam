@@ -200,6 +200,9 @@ struct ContentView: View {
     @State private var capturedImage: UIImage? = nil
     @State private var isLoading: Bool = false
     @State private var isCapturing: Bool = false
+    @State private var isMetering: Bool = false
+    @State private var meteringResult: CameraAPI.MeteringRecommendation? = nil
+    @State private var meteringToast: String? = nil
     @State private var isSwitchingWiFi: Bool = false
     @State private var isScanning: Bool = false
     @State private var scannedNetworks: [WiFiNetwork] = []
@@ -1242,8 +1245,69 @@ struct ContentView: View {
                     }
                 }
             }
-            .disabled(isCapturing)
+            .disabled(isCapturing || isMetering)
             .padding(.vertical, 6)
+
+            // 測光ボタン
+            Button {
+                performMeteringCalibrate()
+            } label: {
+                HStack(spacing: 8) {
+                    if isMetering {
+                        ProgressView()
+                            .tint(.yellow)
+                    } else {
+                        Image(systemName: "sun.max.trianglebadge.exclamationmark")
+                            .font(.system(size: 16, weight: .bold))
+                    }
+                    Text(isMetering ? "測光中..." : "測光")
+                        .font(.system(size: 14, weight: .bold, design: .rounded))
+                }
+                .foregroundColor(.black)
+                .padding(.horizontal, 24)
+                .padding(.vertical, 12)
+                .background(
+                    Capsule()
+                        .fill(Color.yellow.opacity(isMetering ? 0.5 : 0.9))
+                )
+            }
+            .disabled(isCapturing || isMetering)
+
+            if let rec = meteringResult {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("測光結果")
+                        .font(.system(size: 12, weight: .bold, design: .rounded))
+                        .foregroundColor(.secondary)
+                    HStack(spacing: 12) {
+                        if let iso = rec.recommendedIso {
+                            Text("ISO \(iso)")
+                                .font(.system(size: 14, weight: .semibold, design: .monospaced))
+                        }
+                        if let ss = rec.recommendedShutterUs {
+                            let label = ss >= 1_000_000 ? String(format: "%.1fs", Double(ss) / 1_000_000) : "1/\(1_000_000 / ss)"
+                            Text(label)
+                                .font(.system(size: 14, weight: .semibold, design: .monospaced))
+                        }
+                        if let lux = rec.avgLux {
+                            Text(String(format: "%.1f lux", lux))
+                                .font(.system(size: 12, design: .monospaced))
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                }
+                .padding(10)
+                .background(RoundedRectangle(cornerRadius: 10).fill(Color.yellow.opacity(0.15)))
+            }
+
+            if let mToast = meteringToast {
+                Text(mToast)
+                    .font(.system(size: 13, weight: .bold, design: .rounded))
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .background(Capsule().fill(mToast.contains("完了") ? Color.green : Color.orange))
+                    .transition(.scale.combined(with: .opacity))
+            }
 
             if let toast = captureToast {
                 Text(toast)
@@ -1747,6 +1811,45 @@ struct ContentView: View {
     private func resetTemporarySettings() {
         performSettingUpdate(label: "一時変更リセット") { api in
             try await api.resetTemporarySettings()
+        }
+    }
+
+    private func performMeteringCalibrate() {
+        isMetering = true
+        meteringResult = nil
+        meteringToast = "測光開始: 5秒待機 → 10秒間撮影..."
+        errorMessage = nil
+
+        let apiClient = api
+        let generator = UINotificationFeedbackGenerator()
+        generator.prepare()
+
+        Task {
+            do {
+                let result = try await apiClient.meteringCalibrate(settleSeconds: 5, captureSeconds: 10)
+                await MainActor.run {
+                    isMetering = false
+                    if result.success, let rec = result.recommendation {
+                        meteringResult = rec
+                        let photoCount = result.photos?.count ?? 0
+                        meteringToast = "測光完了 (\(photoCount)枚撮影)"
+                        generator.notificationOccurred(.success)
+                    } else {
+                        meteringToast = "測光失敗: \(result.error ?? "unknown")"
+                        generator.notificationOccurred(.error)
+                    }
+                }
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                await MainActor.run { meteringToast = nil }
+            } catch {
+                await MainActor.run {
+                    isMetering = false
+                    meteringToast = "測光エラー: \(error.localizedDescription)"
+                    generator.notificationOccurred(.error)
+                }
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                await MainActor.run { meteringToast = nil }
+            }
         }
     }
 

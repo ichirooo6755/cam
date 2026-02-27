@@ -4,7 +4,7 @@ set -e
 
 PICAM_SSID="PiCamera"
 PICAM_PASS="picamera123"
-RETURN_SSID="Aaa"
+RETURN_SSID="AaaのiPhone"
 PI_HOST="192.168.4.1"
 DIAG_FILE="/Users/sugawaraichirou/Documents/アプリ/diag_output.txt"
 

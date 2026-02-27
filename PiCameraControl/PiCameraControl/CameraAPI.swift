@@ -243,6 +243,79 @@ actor CameraAPI {
         try await updateSettings([:], resetTemporary: true)
     }
 
+    // MARK: - 測光キャリブレーション
+
+    struct MeteringResult: Codable {
+        let success: Bool
+        let settleSeconds: Int?
+        let captureSeconds: Int?
+        let photos: [MeteringPhoto]?
+        let recommendation: MeteringRecommendation?
+        let error: String?
+
+        enum CodingKeys: String, CodingKey {
+            case success
+            case settleSeconds = "settle_seconds"
+            case captureSeconds = "capture_seconds"
+            case photos, recommendation, error
+        }
+    }
+
+    struct MeteringPhoto: Codable {
+        let filename: String?
+        let index: Int?
+        let aeGain: Double?
+        let aeExposureUs: Double?
+        let lux: Double?
+        let fileSize: Int?
+
+        enum CodingKeys: String, CodingKey {
+            case filename, index, lux
+            case aeGain = "ae_gain"
+            case aeExposureUs = "ae_exposure_us"
+            case fileSize = "file_size"
+        }
+    }
+
+    struct MeteringRecommendation: Codable {
+        let avgGain: Double?
+        let avgExposureUs: Int?
+        let avgLux: Double?
+        let recommendedIso: Int?
+        let recommendedShutterUs: Int?
+
+        enum CodingKeys: String, CodingKey {
+            case avgLux = "avg_lux"
+            case avgGain = "avg_gain"
+            case avgExposureUs = "avg_exposure_us"
+            case recommendedIso = "recommended_iso"
+            case recommendedShutterUs = "recommended_shutter_us"
+        }
+    }
+
+    func meteringCalibrate(settleSeconds: Int = 5, captureSeconds: Int = 10) async throws -> MeteringResult {
+        guard let url = URL(string: "\(baseURL)/api/metering/calibrate") else {
+            throw CameraAPIError.invalidURL
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = TimeInterval(settleSeconds + captureSeconds + 15)
+
+        let body: [String: Any] = [
+            "settle_seconds": settleSeconds,
+            "capture_seconds": captureSeconds,
+        ]
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let (data, response) = try await session.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+            throw CameraAPIError.serverError
+        }
+        return try JSONDecoder().decode(MeteringResult.self, from: data)
+    }
+
     // MARK: - 撮影
 
     func captureWithMetadata(

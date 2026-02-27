@@ -866,6 +866,8 @@ class APIHandler(BaseHTTPRequestHandler):
             self.scan_wifi_networks()
         elif parsed.path == '/api/metering':
             self.serve_metering_recommendation()
+        elif parsed.path == '/api/metering/calibrate':
+            self.metering_calibrate()
         else:
             self.send_error(404)
 
@@ -948,6 +950,95 @@ class APIHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(json.dumps({'success': False, 'error': str(e)}).encode())
     
+    def metering_calibrate(self):
+        """測光キャリブレーション: AE収束を待ってから複数枚撮影し適正露出を計測"""
+        service_stopped = False
+        try:
+            data = _read_json_body(self)
+            if data is None:
+                return
+
+            settle = int(data.get('settle_seconds', 5))
+            capture = int(data.get('capture_seconds', 10))
+            settle = max(2, min(settle, 15))
+            capture = max(5, min(capture, 30))
+
+            stop_result = subprocess.run(
+                ['sudo', '-n', 'systemctl', 'stop', 'camera-service'],
+                capture_output=True, text=True, check=False,
+            )
+            if stop_result.returncode != 0:
+                self.send_response(500)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({
+                    'success': False, 'error': 'Failed to stop camera-service',
+                }).encode())
+                return
+
+            service_stopped = True
+            for _ in range(10):
+                status = subprocess.run(
+                    ['systemctl', 'is-active', 'camera-service'],
+                    capture_output=True, text=True, check=False,
+                )
+                if status.stdout.strip() in ('inactive', 'failed', 'deactivating'):
+                    break
+                time.sleep(0.3)
+
+            script_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'metering_calibrate.py')
+            if not os.path.exists(script_path):
+                script_path = '/home/pi/metering_calibrate.py'
+
+            timeout_sec = settle + capture + 10
+            result = subprocess.run(
+                ['python3', script_path,
+                 f'--settle={settle}', f'--capture={capture}'],
+                capture_output=True, text=True, timeout=timeout_sec,
+            )
+
+            if result.returncode != 0:
+                logger.error(f"Metering calibrate failed: {result.stderr}")
+                self.send_response(500)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({
+                    'success': False,
+                    'error': f'Calibration script failed: {result.stderr[:500]}',
+                }).encode())
+                return
+
+            try:
+                output = json.loads(result.stdout)
+            except json.JSONDecodeError:
+                output = {'success': False, 'error': 'Invalid script output', 'raw': result.stdout[:500]}
+
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps(output).encode())
+
+        except subprocess.TimeoutExpired:
+            logger.error("Metering calibrate timed out")
+            self.send_response(500)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({
+                'success': False, 'error': 'Calibration timed out',
+            }).encode())
+        except Exception as e:
+            logger.error(f"Metering calibrate error: {e}")
+            self.send_response(500)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({'success': False, 'error': str(e)}).encode())
+        finally:
+            if service_stopped:
+                subprocess.run(
+                    ['sudo', '-n', 'systemctl', 'start', 'camera-service'],
+                    capture_output=True, text=True, check=False,
+                )
+
     def serve_photo_list(self):
         """写真一覧を返す"""
         try:
