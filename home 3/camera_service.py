@@ -281,6 +281,88 @@ def _apply_camera_controls(camera: Picamera2, settings: dict, profile: dict) -> 
         camera.set_controls(controls)
 
 
+# --- 適応型露出フィードバック ---
+# フィルムカメラ内蔵用途: 撮影後に写真の平均輝度を分析し、
+# 次の撮影のAnalogueGain（ISO相当）を自動調整する。
+# フィルムカメラ側のSSが変わっても自動で追従する。
+_adaptive_gain = None  # None=未初期化（設定のISO値を使用）
+_ADAPTIVE_TARGET_BRIGHTNESS = 115  # 目標平均輝度（0-255）
+_ADAPTIVE_TOLERANCE = 30           # この範囲内なら調整しない
+_ADAPTIVE_GAIN_MIN = 1.0           # ISO 100
+_ADAPTIVE_GAIN_MAX = 16.0          # ISO 1600
+
+
+def _analyze_brightness(filepath: str) -> float:
+    """撮影した写真の平均輝度を返す（0-255）"""
+    try:
+        from PIL import Image
+        with Image.open(filepath) as img:
+            small = img.resize((160, 120))
+            if small.mode != 'L':
+                small = small.convert('L')
+            pixels = list(small.getdata())
+            return sum(pixels) / len(pixels) if pixels else 128.0
+    except Exception:
+        pass
+    try:
+        arr = np.fromfile(filepath, dtype=np.uint8)
+        if len(arr) > 1000:
+            sample = arr[len(arr)//4 : len(arr)*3//4]
+            return float(np.mean(sample))
+    except Exception:
+        pass
+    return -1.0
+
+
+def _adapt_exposure(camera: 'Picamera2', filepath: str, settings: dict) -> None:
+    """撮影結果に基づいてAnalogueGainを自動調整する"""
+    global _adaptive_gain
+
+    iso_value = settings.get('iso', 'auto')
+    if iso_value == 'auto':
+        return
+
+    brightness = _analyze_brightness(filepath)
+    if brightness < 0:
+        return
+
+    if _adaptive_gain is None:
+        try:
+            _adaptive_gain = float(int(iso_value)) / 100.0
+        except (ValueError, TypeError):
+            _adaptive_gain = 2.0
+
+    target = _ADAPTIVE_TARGET_BRIGHTNESS
+    tolerance = _ADAPTIVE_TOLERANCE
+
+    if abs(brightness - target) <= tolerance:
+        logger.info("Adaptive exposure: brightness=%.1f (OK, gain=%.2f)", brightness, _adaptive_gain)
+        return
+
+    if brightness < 5:
+        ratio = 4.0
+    elif brightness > 250:
+        ratio = 0.25
+    else:
+        ratio = target / max(brightness, 1.0)
+        ratio = max(0.5, min(2.0, ratio))
+
+    new_gain = _adaptive_gain * ratio
+    new_gain = max(_ADAPTIVE_GAIN_MIN, min(_ADAPTIVE_GAIN_MAX, new_gain))
+
+    logger.info(
+        "Adaptive exposure: brightness=%.1f → gain %.2f→%.2f (ISO %d→%d)",
+        brightness, _adaptive_gain, new_gain,
+        int(_adaptive_gain * 100), int(new_gain * 100),
+    )
+
+    _adaptive_gain = new_gain
+    try:
+        camera.set_controls({'AnalogueGain': new_gain})
+    except Exception as e:
+        logger.warning("Failed to apply adaptive gain: %s", e)
+
+
 def capture_photo(camera, settings: dict, profile: dict, detected_at: float = None) -> dict:
     """1枚だけ撮影して保存。画像処理は一切行わない。"""
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
@@ -327,6 +409,13 @@ def capture_photo(camera, settings: dict, profile: dict, detected_at: float = No
             quality,
         )
         _record_capture()
+
+        # 適応型露出: 撮影結果の明るさから次のISO（gain）を自動調整
+        try:
+            _adapt_exposure(camera, filepath, settings)
+        except Exception as e:
+            logger.debug("Adaptive exposure analysis failed: %s", e)
+
         return {'success': True, 'filepath': filepath, 'delay_ms': delay_ms}
 
     except Exception as e:
