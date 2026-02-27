@@ -379,22 +379,37 @@ def capture_photo(camera, settings: dict, profile: dict, detected_at: float = No
         camera.options["quality"] = quality
         capture_start = time.time()
 
-        # 即座にキャプチャ（モード切り替えなし）
-        # switch_mode_and_capture_fileは高解像度切替に2-4秒かかり、
-        # フィルムカメラのシャッターが閉じた後に撮影してしまうため使用しない。
-        request = camera.capture_request()
-        try:
+        camera_mode = settings.get('camera_mode', 'standard')
+        use_hires = camera_mode in ('quality', 'raw') or raw_mode
+
+        if use_hires:
+            # 高画質モード: 4056x3040にモード切替して撮影（2-4秒かかる）
+            # ⚠ フィルムカメラのシャッター後に撮影するため光が写らない可能性あり
+            logger.warning(
+                "High-res capture (%s): switching to full resolution. "
+                "Expect 2-4s delay — light may be gone.",
+                camera_mode,
+            )
             if raw_mode:
                 try:
-                    request.save_dng(filepath)
+                    camera.switch_mode_and_capture_file(
+                        camera.still_configuration, filepath, format='dng')
                 except Exception as dng_err:
-                    logger.warning("DNG save failed (%s), falling back to JPEG", dng_err)
+                    logger.warning("DNG capture failed (%s), falling back to JPEG", dng_err)
                     filepath = filepath.replace('.dng', '.jpg')
-                    request.save("main", filepath)
+                    camera.options["quality"] = quality
+                    camera.switch_mode_and_capture_file(
+                        camera.still_configuration, filepath)
             else:
+                camera.switch_mode_and_capture_file(
+                    camera.still_configuration, filepath)
+        else:
+            # 通常モード: 現在のフレームを即座にキャプチャ（遅延なし）
+            request = camera.capture_request()
+            try:
                 request.save("main", filepath)
-        finally:
-            request.release()
+            finally:
+                request.release()
 
         # WiFi AP安定化: 撮影完了後にCPUを明示的にyieldし、
         # WiFi APプロセスがビーコンフレームを送出できるようにする
