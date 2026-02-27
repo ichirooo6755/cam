@@ -1278,13 +1278,16 @@ struct PhotoEditorView: View {
                             applySmartAutoEdit()
                         } label: {
                             ZStack(alignment: .topTrailing) {
-                                Image(systemName: isAutoEditMode ? "wand.and.stars" : "wand.and.stars")
+                                Image(systemName: "wand.and.stars")
                                     .foregroundColor(isAutoEditMode ? .purple : .primary)
+                                    .symbolEffect(.bounce, value: appliedCorrections.count)
                                 if !appliedCorrections.isEmpty {
-                                    Circle()
-                                        .fill(Color.purple)
-                                        .frame(width: 8, height: 8)
-                                        .offset(x: 3, y: -3)
+                                    Text("\(appliedCorrections.count)")
+                                        .font(.system(size: 9, weight: .bold))
+                                        .foregroundColor(.white)
+                                        .frame(width: 14, height: 14)
+                                        .background(Circle().fill(Color.purple))
+                                        .offset(x: 5, y: -5)
                                 }
                             }
                         }
@@ -1383,7 +1386,9 @@ struct PhotoEditorView: View {
                     onCancel: {
                         showFeedbackPanel = false
                         isSavingToApp = false
-                    }
+                    },
+                    referenceImage: referencePhoto,
+                    similarityScore: calculateCurrentSimilarityScore()
                 )
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }
@@ -1426,6 +1431,11 @@ struct PhotoEditorView: View {
 
     private var controlsArea: some View {
         VStack(spacing: MinimalSpacing.md) {
+            // リファレンス写真バナー
+            if let refPhoto = referencePhoto {
+                referenceBanner(photo: refPhoto)
+            }
+
             // アイコングリッド
             IconGridSelector(selectedCategory: $selectedCategory)
 
@@ -1439,7 +1449,59 @@ struct PhotoEditorView: View {
             .frame(maxHeight: .infinity)
         }
         .padding(MinimalSpacing.md)
-        .background(Color(.systemBackground).opacity(0.95))
+        .background(MinimalTheme.Background.surfaceDark.opacity(0.98))
+    }
+
+    private func referenceBanner(photo: UIImage) -> some View {
+        HStack(spacing: 10) {
+            Image(uiImage: photo)
+                .resizable()
+                .aspectRatio(contentMode: .fill)
+                .frame(width: 44, height: 44)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(Color.orange, lineWidth: 1.5)
+                )
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("参考写真を設定中")
+                    .font(.caption.weight(.semibold))
+                    .foregroundColor(.orange)
+                Text("SmartAutoEditに反映されます")
+                    .font(.system(size: 10))
+                    .foregroundColor(.gray)
+            }
+
+            Spacer()
+
+            Button {
+                showReferencePicker = true
+            } label: {
+                Image(systemName: "arrow.triangle.2.circlepath")
+                    .font(.caption)
+                    .foregroundColor(.orange)
+            }
+
+            Button {
+                referencePhoto = nil
+                referenceAnalysis = nil
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.caption)
+                    .foregroundColor(.gray)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                .fill(Color.orange.opacity(0.1))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10)
+                        .stroke(Color.orange.opacity(0.3), lineWidth: 1)
+                )
+        )
     }
 
     @ViewBuilder
@@ -1452,11 +1514,43 @@ struct PhotoEditorView: View {
             sliderRow(title: "シャドウ", value: $settings.shadowBoost, range: 0...1, step: 0.02)
 
         case .color:
+            // SmartAutoEdit検出結果バッジ
+            if let analysis = smartAnalysis {
+                HStack(spacing: 8) {
+                    if analysis.irScore > 0.1 {
+                        HStack(spacing: 4) {
+                            Image(systemName: "camera.filters")
+                                .font(.caption2)
+                            Text("IR: \(Int(analysis.irScore * 100))%")
+                                .font(.caption2.weight(.semibold))
+                        }
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(Color.red.opacity(0.2))
+                        .foregroundColor(.red)
+                        .cornerRadius(8)
+                    }
+                    if analysis.wbDeviation > 0.1 {
+                        HStack(spacing: 4) {
+                            Image(systemName: "circle.lefthalf.filled")
+                                .font(.caption2)
+                            Text("WB: \(Int(analysis.wbDeviation * 100))%")
+                                .font(.caption2.weight(.semibold))
+                        }
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(Color.blue.opacity(0.2))
+                        .foregroundColor(.blue)
+                        .cornerRadius(8)
+                    }
+                    Spacer()
+                }
+            }
+
             HStack {
                 Button(action: {
                     settings.autoWhiteBalance.toggle()
                     if settings.autoWhiteBalance {
-                        // Auto WB適用時に温度/ティントをリセット
                         settings.temperature = 0
                         settings.tint = 0
                     }
@@ -1482,8 +1576,19 @@ struct PhotoEditorView: View {
             sliderRow(title: "自然な彩度", value: $settings.vibrance, range: -1...1, step: 0.02)
             sliderRow(title: "モノクロ", value: $settings.monochrome, range: 0...1, step: 0.02)
 
-            Toggle("IR赤み自動補正", isOn: $settings.irAutoCorrect)
-                .toggleStyle(SwitchToggleStyle(tint: .blue))
+            HStack {
+                Toggle("IR赤み自動補正", isOn: $settings.irAutoCorrect)
+                    .toggleStyle(SwitchToggleStyle(tint: .blue))
+                if let analysis = smartAnalysis, analysis.irScore > 0.1 {
+                    Text("検出: \(Int(analysis.irScore * 100))%")
+                        .font(.caption2.weight(.bold))
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.red.opacity(0.15))
+                        .foregroundColor(.red)
+                        .cornerRadius(6)
+                }
+            }
             if settings.irAutoCorrect {
                 sliderRow(title: "IR補正強度", value: $settings.irCorrectionStrength, range: 0...1, step: 0.02)
             }
@@ -1772,28 +1877,6 @@ struct PhotoEditorView: View {
         settingsBeforeEdit = nil
     }
 
-    private func applyAutoEdit() {
-        // 画像を分析
-        guard let analysis = ImageAnalyzer.analyze(image: originalImage) else {
-            return
-        }
-
-        imageAnalysis = analysis
-
-        // 学習データを取得
-        let learningData = AutoEditEvaluation.fetchForTraining(minRating: 4, context: viewContext)
-
-        // 設定を提案
-        let suggested = AutoEditEngine.suggestSettings(for: analysis, learningData: learningData)
-
-        // 予測設定を保存（後で評価記録に使用）
-        predictedSettings = suggested
-
-        // 設定を適用
-        settings = suggested
-        isAutoEditMode = true
-    }
-
     private func applySmartAutoEdit() {
         guard let analysis = SmartAutoEditEngine.analyze(image: originalImage) else {
             return
@@ -1817,6 +1900,15 @@ struct PhotoEditorView: View {
         appliedCorrections = corrections
         settings = suggested
         isAutoEditMode = true
+    }
+
+    private func calculateCurrentSimilarityScore() -> Int? {
+        guard let refPhoto = referencePhoto,
+              let editedImg = previewImage else { return nil }
+        return SmartAutoEditEngine.calculateSimilarityScore(
+            editedImage: editedImg,
+            referenceImage: refPhoto
+        )
     }
 
     private func applyInfraredPreset() {

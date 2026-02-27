@@ -359,6 +359,43 @@ enum SmartAutoEditEngine {
         #endif
     }
 
+    // MARK: - Similarity Score
+
+    /// 編集結果とリファレンス写真の類似度スコアを計算 (0〜100)
+    /// 明るさ(30%), コントラスト(20%), 彩度(20%), 色バランス(30%) の加重平均
+    static func calculateSimilarityScore(edited: SmartAnalysis, reference: SmartAnalysis) -> Int {
+        let e = edited.base
+        let r = reference.base
+
+        // 明るさ類似度 (0-1, 差が小さいほど1に近い)
+        let brightnessSim = 1.0 - clamp(abs(e.brightness - r.brightness) * 2.0, 0, 1)
+
+        // コントラスト類似度
+        let contrastSim = 1.0 - clamp(abs(e.contrast - r.contrast) * 2.0, 0, 1)
+
+        // 彩度類似度
+        let saturationSim = 1.0 - clamp(abs(e.saturation - r.saturation) * 2.0, 0, 1)
+
+        // 色バランス類似度 (RGB各チャンネルの差の平均)
+        let rDiff = abs(e.colorBalance.r - r.colorBalance.r)
+        let gDiff = abs(e.colorBalance.g - r.colorBalance.g)
+        let bDiff = abs(e.colorBalance.b - r.colorBalance.b)
+        let colorSim = 1.0 - clamp((rDiff + gDiff + bDiff) / 3.0 * 3.0, 0, 1)
+
+        // 加重平均
+        let score = brightnessSim * 0.30 + contrastSim * 0.20 + saturationSim * 0.20 + colorSim * 0.30
+        return Int(clamp(score * 100, 0, 100))
+    }
+
+    /// UIImageペアから類似度スコアを計算（便利メソッド）
+    static func calculateSimilarityScore(editedImage: UIImage, referenceImage: UIImage) -> Int? {
+        guard let editedAnalysis = analyze(image: editedImage),
+              let referenceAnalysis = analyze(image: referenceImage) else {
+            return nil
+        }
+        return calculateSimilarityScore(edited: editedAnalysis, reference: referenceAnalysis)
+    }
+
     // MARK: - Helpers
 
     private static func clamp(_ value: Double, _ lo: Double, _ hi: Double) -> Double {

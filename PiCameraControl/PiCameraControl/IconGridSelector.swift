@@ -97,7 +97,11 @@ struct IconGridSelector: View {
                 .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
-        .minimalCard()
+        .padding(.vertical, 2)
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(MinimalTheme.Background.surfaceDark)
+        )
     }
 }
 

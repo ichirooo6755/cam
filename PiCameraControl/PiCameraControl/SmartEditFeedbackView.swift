@@ -12,6 +12,10 @@ struct SmartEditFeedbackView: View {
     let onRate: (Int) -> Void
     let onCancel: () -> Void
 
+    // リファレンス写真関連
+    var referenceImage: UIImage? = nil
+    var similarityScore: Int? = nil
+
     @State private var selectedRating: Int = 3
     @State private var compareMode: CompareMode = .slider
     @State private var sliderPosition: CGFloat = 0.5
@@ -20,9 +24,19 @@ struct SmartEditFeedbackView: View {
         case sideBySide = "並列"
         case slider = "スライダー"
         case tap = "タップ"
+        case reference = "参考写真"
     }
 
     @State private var showingOriginal = false
+
+    /// リファレンスが無い場合に表示するモード一覧
+    private var availableModes: [CompareMode] {
+        if referenceImage != nil {
+            return CompareMode.allCases
+        } else {
+            return [.sideBySide, .slider, .tap]
+        }
+    }
 
     var body: some View {
         ZStack {
@@ -49,6 +63,12 @@ struct SmartEditFeedbackView: View {
                 correctionBadges
                     .padding(.horizontal)
 
+                // 類似度ゲージ
+                if let score = similarityScore, referenceImage != nil {
+                    similarityGauge(score: score)
+                        .padding(.horizontal)
+                }
+
                 // Before/After comparison
                 comparisonView
                     .frame(maxHeight: 300)
@@ -57,7 +77,7 @@ struct SmartEditFeedbackView: View {
 
                 // Compare mode selector
                 Picker("比較モード", selection: $compareMode) {
-                    ForEach(CompareMode.allCases, id: \.self) { mode in
+                    ForEach(availableModes, id: \.self) { mode in
                         Text(mode.rawValue).tag(mode)
                     }
                 }
@@ -67,6 +87,12 @@ struct SmartEditFeedbackView: View {
                 // Star rating
                 starRatingView
                     .padding(.horizontal)
+
+                // 類似度ヒント
+                if let score = similarityScore, referenceImage != nil {
+                    similarityHint(score: score)
+                        .padding(.horizontal)
+                }
 
                 // Action buttons
                 HStack(spacing: 16) {
@@ -97,6 +123,63 @@ struct SmartEditFeedbackView: View {
                 .padding(.horizontal)
             }
             .padding(.vertical, 20)
+        }
+    }
+
+    // MARK: - Similarity Gauge
+
+    private func similarityGauge(score: Int) -> some View {
+        VStack(spacing: 6) {
+            HStack {
+                Text("参考写真との類似度")
+                    .font(.caption.weight(.medium))
+                    .foregroundColor(.gray)
+                Spacer()
+                Text("\(score)%")
+                    .font(.caption.weight(.bold))
+                    .foregroundColor(similarityColor(score: score))
+            }
+
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(Color.gray.opacity(0.3))
+                        .frame(height: 8)
+
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(similarityColor(score: score))
+                        .frame(width: geo.size.width * CGFloat(score) / 100.0, height: 8)
+                }
+            }
+            .frame(height: 8)
+        }
+    }
+
+    private func similarityColor(score: Int) -> Color {
+        if score >= 80 { return .green }
+        if score >= 60 { return .orange }
+        return .red
+    }
+
+    private func similarityHint(score: Int) -> some View {
+        let message: String
+        if score >= 90 {
+            message = "参考写真にとても近い仕上がりです"
+        } else if score >= 70 {
+            message = "参考写真に近い雰囲気になっています"
+        } else if score >= 50 {
+            message = "参考写真と異なる部分があります。手動で微調整してみてください"
+        } else {
+            message = "参考写真とかなり異なります。色温度や明るさを確認してください"
+        }
+
+        return HStack(spacing: 6) {
+            Image(systemName: "lightbulb.fill")
+                .font(.caption2)
+                .foregroundColor(.yellow)
+            Text(message)
+                .font(.caption2)
+                .foregroundColor(.gray)
         }
     }
 
@@ -163,6 +246,8 @@ struct SmartEditFeedbackView: View {
             sliderCompareView
         case .tap:
             tapCompareView
+        case .reference:
+            referenceCompareView
         }
     }
 
@@ -280,7 +365,39 @@ struct SmartEditFeedbackView: View {
         }
     }
 
+    private var referenceCompareView: some View {
+        HStack(spacing: 2) {
+            VStack(spacing: 4) {
+                Text("参考写真")
+                    .font(.caption2.weight(.bold))
+                    .foregroundColor(.orange)
+                if let ref = referenceImage {
+                    Image(uiImage: ref)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                } else {
+                    Color.gray.opacity(0.3)
+                        .overlay(
+                            Text("未設定")
+                                .font(.caption)
+                                .foregroundColor(.gray)
+                        )
+                }
+            }
+            VStack(spacing: 4) {
+                Text("AFTER")
+                    .font(.caption2.weight(.bold))
+                    .foregroundColor(.purple)
+                Image(uiImage: editedImage)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+            }
+        }
+    }
+
     // MARK: - Star Rating
+
+    private static let starLabels = ["やり直し", "微妙", "普通", "良い", "完璧"]
 
     private var starRatingView: some View {
         VStack(spacing: 8) {
@@ -288,16 +405,21 @@ struct SmartEditFeedbackView: View {
                 .font(.subheadline)
                 .foregroundColor(.gray)
 
-            HStack(spacing: 12) {
+            HStack(spacing: 8) {
                 ForEach(1...5, id: \.self) { star in
                     Button {
                         withAnimation(.easeInOut(duration: 0.15)) {
                             selectedRating = star
                         }
                     } label: {
-                        Image(systemName: star <= selectedRating ? "star.fill" : "star")
-                            .font(.title2)
-                            .foregroundColor(star <= selectedRating ? .yellow : .gray)
+                        VStack(spacing: 2) {
+                            Image(systemName: star <= selectedRating ? "star.fill" : "star")
+                                .font(.title3)
+                                .foregroundColor(star <= selectedRating ? .yellow : .gray)
+                            Text(Self.starLabels[star - 1])
+                                .font(.system(size: 8))
+                                .foregroundColor(star == selectedRating ? .yellow : .gray)
+                        }
                     }
                 }
             }
