@@ -201,7 +201,7 @@ struct ContentView: View {
     @State private var isLoading: Bool = false
     @State private var isCapturing: Bool = false
     @State private var isMetering: Bool = false
-    @State private var meteringResult: CameraAPI.MeteringRecommendation? = nil
+    @State private var meteringResult: CameraAPI.MeteringCalibrationRec? = nil
     @State private var meteringToast: String? = nil
     @State private var isSwitchingWiFi: Bool = false
     @State private var isScanning: Bool = false
@@ -218,7 +218,6 @@ struct ContentView: View {
     @State private var captureToast: String? = nil
     @State private var sensorStatus: SensorRuntimeStatus? = nil
     @State private var meteringRecommendation: MeteringRecommendation? = nil
-    @State private var isMetering: Bool = false
     @StateObject private var captureLocationProvider = CaptureLocationProvider()
 
     // Section expansion state

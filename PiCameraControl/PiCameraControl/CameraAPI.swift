@@ -250,7 +250,7 @@ actor CameraAPI {
         let settleSeconds: Int?
         let captureSeconds: Int?
         let photos: [MeteringPhoto]?
-        let recommendation: MeteringRecommendation?
+        let recommendation: MeteringCalibrationRec?
         let error: String?
 
         enum CodingKeys: String, CodingKey {
@@ -277,7 +277,7 @@ actor CameraAPI {
         }
     }
 
-    struct MeteringRecommendation: Codable {
+    struct MeteringCalibrationRec: Codable {
         let avgGain: Double?
         let avgExposureUs: Int?
         let avgLux: Double?

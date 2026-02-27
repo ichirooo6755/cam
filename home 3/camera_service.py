@@ -215,18 +215,17 @@ def _apply_camera_controls(camera: Picamera2, settings: dict, profile: dict) -> 
     wb_value = settings.get('white_balance', 'auto')
 
     manual_exposure = iso_value != 'auto' or shutter_value != 'auto'
-    controls['AeEnable'] = not manual_exposure
 
-    # AEモード時: フィルムカメラ内部は真っ暗なのでAEが暗所に過剰適応し、
-    # シャッターが開いた瞬間に白飛びする。FrameDurationLimitsで最大露光を制限し、
-    # AeConstraintMode.Highlightでハイライト保護を有効にして防止する。
-    if not manual_exposure and libcamera is not None:
-        controls['FrameDurationLimits'] = (8333, 33333)  # 30-120fps, max 33ms
-        if hasattr(libcamera.controls, 'AeConstraintModeEnum'):
-            controls['AeConstraintMode'] = libcamera.controls.AeConstraintModeEnum.Highlight
-        controls['ExposureValue'] = -1.0  # 1段アンダー補正（白飛び防止）
+    # フィルムカメラ内蔵用途: AEは暗所に過剰適応するため常にマニュアル露出を使用。
+    # 適応型フィードバック(_adaptive_gain)が撮影結果から自動でgainを調整する。
+    # auto設定でも内部的にはAeEnable=Falseでgainを直接制御する。
+    controls['AeEnable'] = False
 
-    if iso_value != 'auto':
+    # 適応型gainが設定されている場合はそれを優先
+    if _adaptive_gain is not None:
+        controls['AnalogueGain'] = max(_ADAPTIVE_GAIN_MIN, min(_ADAPTIVE_GAIN_MAX, _adaptive_gain))
+        logger.info("Using adaptive gain: %.2f (ISO %d)", _adaptive_gain, int(_adaptive_gain * 100))
+    elif iso_value != 'auto':
         try:
             gain = int(iso_value) / 100.0
             controls['AnalogueGain'] = max(1.0, min(160.0, gain))
@@ -318,19 +317,19 @@ def _adapt_exposure(camera: 'Picamera2', filepath: str, settings: dict) -> None:
     """撮影結果に基づいてAnalogueGainを自動調整する"""
     global _adaptive_gain
 
-    iso_value = settings.get('iso', 'auto')
-    if iso_value == 'auto':
-        return
-
     brightness = _analyze_brightness(filepath)
     if brightness < 0:
         return
 
+    iso_value = settings.get('iso', 'auto')
     if _adaptive_gain is None:
-        try:
-            _adaptive_gain = float(int(iso_value)) / 100.0
-        except (ValueError, TypeError):
-            _adaptive_gain = 2.0
+        if iso_value != 'auto':
+            try:
+                _adaptive_gain = float(int(iso_value)) / 100.0
+            except (ValueError, TypeError):
+                _adaptive_gain = 2.0
+        else:
+            _adaptive_gain = 2.0  # auto時のデフォルト: ISO 200相当
 
     target = _ADAPTIVE_TARGET_BRIGHTNESS
     tolerance = _ADAPTIVE_TOLERANCE
