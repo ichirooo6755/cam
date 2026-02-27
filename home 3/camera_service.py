@@ -233,12 +233,12 @@ def _apply_camera_controls(camera: Picamera2, settings: dict, profile: dict) -> 
     shutter_value = settings.get('shutter_speed', 'auto')
     wb_value = settings.get('white_balance', 'auto')
 
-    manual_exposure = iso_value != 'auto' or shutter_value != 'auto'
-
-    # フィルムカメラ内蔵用途: AEは暗所に過剰適応するため常にマニュアル露出を使用。
-    # 適応型フィードバック(_adaptive_gain)が撮影結果から自動でgainを調整する。
-    # auto設定でも内部的にはAeEnable=Falseでgainを直接制御する。
-    controls['AeEnable'] = False
+    # フィルムカメラ内蔵用途: カメラ内部は真っ暗だがシャッターが開くと明るい光が一瞬入る。
+    # AeEnable=FalseだとISPのDigitalGainが暗部に合わせて増幅し白飛びする。
+    # AeEnable=True + FrameDurationLimitsで高フレームレートを維持し、
+    # AEに露出を任せるのが正しい。
+    controls['AeEnable'] = True
+    controls['FrameDurationLimits'] = (8333, 33333)  # 30-120fps
 
     # ユーザーが明示的にISO値を設定した場合はそれを最優先で使用
     if iso_value != 'auto':
@@ -252,17 +252,7 @@ def _apply_camera_controls(camera: Picamera2, settings: dict, profile: dict) -> 
         controls['AnalogueGain'] = max(_ADAPTIVE_GAIN_MIN, min(_ADAPTIVE_GAIN_MAX, _adaptive_gain))
         logger.info("Using adaptive gain: %.2f (ISO %d)", _adaptive_gain, int(_adaptive_gain * 100))
 
-    if shutter_value != 'auto':
-        try:
-            if isinstance(shutter_value, str) and '/' in shutter_value:
-                numerator, denominator = shutter_value.split('/', 1)
-                exposure_seconds = float(numerator) / float(denominator)
-                exposure_time = int(exposure_seconds * 1_000_000)
-            else:
-                exposure_time = int(shutter_value)
-            controls['ExposureTime'] = exposure_time
-        except ValueError:
-            logger.warning(f"Invalid shutter value: {shutter_value}")
+    # shutter_speedは無視（AEに任せる）。フレームレートはFrameDurationLimitsで制御。
 
     if libcamera is not None:
         if wb_value == 'auto':
