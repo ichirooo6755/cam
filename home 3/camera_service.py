@@ -217,6 +217,15 @@ def _apply_camera_controls(camera: Picamera2, settings: dict, profile: dict) -> 
     manual_exposure = iso_value != 'auto' or shutter_value != 'auto'
     controls['AeEnable'] = not manual_exposure
 
+    # AEモード時: フィルムカメラ内部は真っ暗なのでAEが暗所に過剰適応し、
+    # シャッターが開いた瞬間に白飛びする。FrameDurationLimitsで最大露光を制限し、
+    # AeConstraintMode.Highlightでハイライト保護を有効にして防止する。
+    if not manual_exposure and libcamera is not None:
+        controls['FrameDurationLimits'] = (8333, 33333)  # 30-120fps, max 33ms
+        if hasattr(libcamera.controls, 'AeConstraintModeEnum'):
+            controls['AeConstraintMode'] = libcamera.controls.AeConstraintModeEnum.Highlight
+        controls['ExposureValue'] = -1.0  # 1段アンダー補正（白飛び防止）
+
     if iso_value != 'auto':
         try:
             gain = int(iso_value) / 100.0
@@ -232,12 +241,6 @@ def _apply_camera_controls(camera: Picamera2, settings: dict, profile: dict) -> 
                 exposure_time = int(exposure_seconds * 1_000_000)
             else:
                 exposure_time = int(shutter_value)
-            if exposure_time > 100_000:
-                logger.warning(
-                    "Long manual exposure: %dµs (%.2fs). AE disabled. "
-                    "Risk of overexposure in bright conditions.",
-                    exposure_time, exposure_time / 1_000_000.0,
-                )
             controls['ExposureTime'] = exposure_time
         except ValueError:
             logger.warning(f"Invalid shutter value: {shutter_value}")
