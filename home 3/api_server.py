@@ -1460,14 +1460,6 @@ class APIHandler(BaseHTTPRequestHandler):
                 else:
                     new_settings.update(preset)
 
-                    # manual以外のモードではiso/shutter_speedをautoにリセット
-                    # （手動値が残ると白飛び等の露出異常が永続する問題の防止）
-                    if camera_mode != 'manual':
-                        if 'iso' not in new_settings:
-                            new_settings['iso'] = 'auto'
-                        if 'shutter_speed' not in new_settings:
-                            new_settings['shutter_speed'] = 'auto'
-
                     try:
                         if os.path.exists(SESSION_OVERRIDES_FILE):
                             os.remove(SESSION_OVERRIDES_FILE)
@@ -1909,7 +1901,7 @@ class APIHandler(BaseHTTPRequestHandler):
                 except ValueError:
                     logger.warning(f"Invalid ISO value: {iso_value}")
 
-            result = subprocess.run(cmd, capture_output=True, text=True)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
             if result.returncode == 0:
                 applied_mode = manual_mode if manual_mode and manual_mode != 'current' else settings.get('camera_mode', 'standard')
                 metadata = {
@@ -1954,7 +1946,7 @@ class APIHandler(BaseHTTPRequestHandler):
             self.wfile.write(json.dumps({'success': False, 'error': str(e)}).encode())
         finally:
             if service_stopped:
-                subprocess.run(['sudo', '-n', 'systemctl', 'start', 'camera-service'], check=False)
+                subprocess.run(['sudo', '-n', 'systemctl', 'start', 'camera-service'], check=False, timeout=15)
     
     def _save_wifi_mode(self, mode, ap_ssid=None, ap_password=None):
         """Wi-Fiモードをcamera_settings.jsonに保存"""

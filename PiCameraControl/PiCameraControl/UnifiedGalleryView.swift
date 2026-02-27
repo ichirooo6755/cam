@@ -26,6 +26,9 @@ struct UnifiedGalleryView: View {
     @State private var actionMessage: String?
     @State private var showActionAlert = false
     @State private var hasLoadedOnce = false
+    @State private var isSelectionMode = false
+    @State private var selectedIDs: Set<String> = []
+    @State private var showDeleteConfirm = false
     // @State private var showHDRComposer = false // TODO: HDRComposerView追加後に有効化
 
     private var api: SimpleCameraAPI {
@@ -55,29 +58,64 @@ struct UnifiedGalleryView: View {
             .navigationTitle("ギャラリー")
             .navigationBarTitleDisplayMode(.large)
             .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    HStack(spacing: 16) {
-                        // TODO: HDRComposerViewをプロジェクトに追加後に有効化
-                        // Button {
-                        //     showHDRComposer = true
-                        // } label: {
-                        //     Image(systemName: "photo.stack")
-                        //         .foregroundColor(.primary)
-                        // }
-
-                        PhotosPicker(selection: $selectedPhotoItem, matching: .images) {
-                            Image(systemName: "photo.on.rectangle.angled")
-                                .foregroundColor(.primary)
-                        }
-
-                        Button {
-                            loadPhotosFromServer()
-                        } label: {
-                            Image(systemName: "arrow.clockwise")
-                                .foregroundColor(.primary)
+                ToolbarItem(placement: .navigationBarLeading) {
+                    if isSelectionMode {
+                        Button(selectedIDs.count == photoGroups.count ? "全解除" : "全選択") {
+                            if selectedIDs.count == photoGroups.count {
+                                selectedIDs.removeAll()
+                            } else {
+                                selectedIDs = Set(photoGroups.map { $0.id })
+                            }
                         }
                     }
                 }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    HStack(spacing: 16) {
+                        if isSelectionMode {
+                            Button {
+                                if !selectedIDs.isEmpty {
+                                    showDeleteConfirm = true
+                                }
+                            } label: {
+                                Image(systemName: "trash")
+                                    .foregroundColor(selectedIDs.isEmpty ? .gray : .red)
+                            }
+                            .disabled(selectedIDs.isEmpty)
+
+                            Button("完了") {
+                                isSelectionMode = false
+                                selectedIDs.removeAll()
+                            }
+                        } else {
+                            Button {
+                                isSelectionMode = true
+                            } label: {
+                                Image(systemName: "checkmark.circle")
+                                    .foregroundColor(.primary)
+                            }
+
+                            PhotosPicker(selection: $selectedPhotoItem, matching: .images) {
+                                Image(systemName: "photo.on.rectangle.angled")
+                                    .foregroundColor(.primary)
+                            }
+
+                            Button {
+                                loadPhotosFromServer()
+                            } label: {
+                                Image(systemName: "arrow.clockwise")
+                                    .foregroundColor(.primary)
+                            }
+                        }
+                    }
+                }
+            }
+            .alert("削除確認", isPresented: $showDeleteConfirm) {
+                Button("削除 (\(selectedIDs.count)枚)", role: .destructive) {
+                    deleteSelectedPhotos()
+                }
+                Button("キャンセル", role: .cancel) {}
+            } message: {
+                Text("\(selectedIDs.count)枚の写真を削除しますか？この操作は取り消せません。")
             }
             .onAppear {
                 if !hasLoadedOnce {
@@ -180,13 +218,56 @@ struct UnifiedGalleryView: View {
                 GridItem(.adaptive(minimum: 150), spacing: 12)
             ], spacing: 12) {
                 ForEach(photoGroups) { group in
-                    PhotoCell(group: group, serverIP: serverIP)
-                        .onTapGesture {
-                            selectedGroup = group
+                    ZStack(alignment: .topLeading) {
+                        PhotoCell(group: group, serverIP: serverIP)
+                            .onTapGesture {
+                                if isSelectionMode {
+                                    if selectedIDs.contains(group.id) {
+                                        selectedIDs.remove(group.id)
+                                    } else {
+                                        selectedIDs.insert(group.id)
+                                    }
+                                } else {
+                                    selectedGroup = group
+                                }
+                            }
+                            .opacity(isSelectionMode && !selectedIDs.contains(group.id) ? 0.5 : 1.0)
+
+                        if isSelectionMode {
+                            Image(systemName: selectedIDs.contains(group.id) ? "checkmark.circle.fill" : "circle")
+                                .font(.system(size: 24))
+                                .foregroundColor(selectedIDs.contains(group.id) ? .blue : .white)
+                                .shadow(radius: 2)
+                                .padding(8)
                         }
+                    }
                 }
             }
             .padding()
+        }
+    }
+
+    private func deleteSelectedPhotos() {
+        let filenames = Array(selectedIDs)
+        isLoading = true
+        Task {
+            do {
+                let result = try await api.deletePhotos(filenames: filenames)
+                await MainActor.run {
+                    selectedIDs.removeAll()
+                    isSelectionMode = false
+                    loadPhotosFromServer()
+                    let count = result.deleted.count
+                    actionMessage = "\(count)枚を削除しました"
+                    showActionAlert = true
+                }
+            } catch {
+                await MainActor.run {
+                    isLoading = false
+                    actionMessage = "削除失敗: \(error.localizedDescription)"
+                    showActionAlert = true
+                }
+            }
         }
     }
 

@@ -14,7 +14,9 @@ final class ConnectionMonitor: ObservableObject {
 
     private var timer: Timer?
     private let normalInterval: TimeInterval = 5.0
-    private let fastInterval: TimeInterval = 2.0
+    private let disconnectedBaseInterval: TimeInterval = 3.0
+    private let maxPollingInterval: TimeInterval = 60.0
+    private let maxFallbackAttempts: Int = 3
     private let session: URLSession
     private var activePathMonitor: NWPathMonitor?
     private let pathMonitorQueue = DispatchQueue(label: "connectionMonitor.nw")
@@ -72,7 +74,14 @@ final class ConnectionMonitor: ObservableObject {
 
     private func scheduleTimer() {
         timer?.invalidate()
-        let interval = isConnected ? normalInterval : fastInterval
+        let interval: TimeInterval
+        if isConnected {
+            interval = normalInterval
+        } else {
+            // 失敗回数に応じて指数的に間隔を延ばす（3s→6s→12s→...→最大60s）
+            let backoff = disconnectedBaseInterval * pow(2.0, Double(min(consecutiveFailures, 5)))
+            interval = min(backoff, maxPollingInterval)
+        }
         timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in
                 await self?.checkConnection()
@@ -118,8 +127,8 @@ final class ConnectionMonitor: ObservableObject {
             consecutiveFailures += 1
             isConnected = false
 
-            // 3回連続失敗でフォールバックIPを試す
-            if consecutiveFailures >= 3 {
+            // 3回連続失敗でフォールバックIPを試す（上限あり）
+            if consecutiveFailures >= 3 && consecutiveFailures <= maxFallbackAttempts + 3 {
                 for fallback in fallbackIPs where fallback != serverIP {
                     if await tryConnect(ip: fallback) {
                         UserDefaults.standard.set(fallback, forKey: "serverIP")
