@@ -570,6 +570,7 @@ CAMERA_MODE_PRESETS = {
         'capture_cooldown': 0.5,
         'monitoring_enabled': True,
         'denoise_mode': 'off',
+        'raw_mode': False,
     },
     'standard': {
         'quality': 90,
@@ -578,6 +579,7 @@ CAMERA_MODE_PRESETS = {
         'check_interval': 0.2,
         'capture_cooldown': 1.5,
         'monitoring_enabled': True,
+        'raw_mode': False,
     },
     'quality': {
         'quality': 100,
@@ -587,6 +589,7 @@ CAMERA_MODE_PRESETS = {
         'capture_cooldown': 3.0,
         'monitoring_enabled': True,
         'denoise_mode': 'cdn_hq',
+        'raw_mode': False,
     },
     'night': {
         'quality': 95,
@@ -596,6 +599,7 @@ CAMERA_MODE_PRESETS = {
         'capture_cooldown': 3.0,
         'monitoring_enabled': True,
         'denoise_mode': 'cdn_hq',
+        'raw_mode': False,
     },
     'battery': {
         'quality': 80,
@@ -604,9 +608,11 @@ CAMERA_MODE_PRESETS = {
         'check_interval': 1.0,
         'capture_cooldown': 5.0,
         'monitoring_enabled': True,
+        'raw_mode': False,
     },
     'manual': {
         'monitoring_enabled': False,
+        'raw_mode': False,
     },
     'raw': {
         'raw_mode': True,
