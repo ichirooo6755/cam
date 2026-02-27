@@ -1369,6 +1369,14 @@ class APIHandler(BaseHTTPRequestHandler):
                 else:
                     new_settings.update(preset)
 
+                    # manual以外のモードではiso/shutter_speedをautoにリセット
+                    # （手動値が残ると白飛び等の露出異常が永続する問題の防止）
+                    if camera_mode != 'manual':
+                        if 'iso' not in new_settings:
+                            new_settings['iso'] = 'auto'
+                        if 'shutter_speed' not in new_settings:
+                            new_settings['shutter_speed'] = 'auto'
+
                     try:
                         if os.path.exists(SESSION_OVERRIDES_FILE):
                             os.remove(SESSION_OVERRIDES_FILE)

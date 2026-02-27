@@ -232,6 +232,12 @@ def _apply_camera_controls(camera: Picamera2, settings: dict, profile: dict) -> 
                 exposure_time = int(exposure_seconds * 1_000_000)
             else:
                 exposure_time = int(shutter_value)
+            if exposure_time > 100_000:
+                logger.warning(
+                    "Long manual exposure: %dµs (%.2fs). AE disabled. "
+                    "Risk of overexposure in bright conditions.",
+                    exposure_time, exposure_time / 1_000_000.0,
+                )
             controls['ExposureTime'] = exposure_time
         except ValueError:
             logger.warning(f"Invalid shutter value: {shutter_value}")
