@@ -234,11 +234,12 @@ def _apply_camera_controls(camera: Picamera2, settings: dict, profile: dict) -> 
     wb_value = settings.get('white_balance', 'auto')
 
     # フィルムカメラ内蔵用途: カメラ内部は真っ暗だがシャッターが開くと明るい光が一瞬入る。
-    # AeEnable=FalseだとISPのDigitalGainが暗部に合わせて増幅し白飛びする。
-    # AeEnable=True + FrameDurationLimitsで高フレームレートを維持し、
-    # AEに露出を任せるのが正しい。
-    controls['AeEnable'] = True
-    controls['FrameDurationLimits'] = (8333, 33333)  # 30-120fps
+    #   - AeEnable=Trueだと暗所にgain=8まで適応し、AnalogueGain指定を上書きする
+    #   - AeEnable=Falseでも DigitalGain=1.0（実測確認済み）なので白飛びしない
+    #   - ET=33msだとISPのブラックレベル補正でmainストリームが黒に潰れる（実測確認済み）
+    #   - ExposureTime=33ms（30fps）で同一フレームキャプチャと組み合わせる
+    #   - どんな環境でもカメラ内部は暗いのでこの設定で普遍的に動作する
+    controls['AeEnable'] = False
 
     # ユーザーが明示的にISO値を設定した場合はそれを最優先で使用
     if iso_value != 'auto':
@@ -251,8 +252,22 @@ def _apply_camera_controls(camera: Picamera2, settings: dict, profile: dict) -> 
         # auto時のみ適応型gainを使用（撮影結果から自動調整）
         controls['AnalogueGain'] = max(_ADAPTIVE_GAIN_MIN, min(_ADAPTIVE_GAIN_MAX, _adaptive_gain))
         logger.info("Using adaptive gain: %.2f (ISO %d)", _adaptive_gain, int(_adaptive_gain * 100))
+    else:
+        # 初回起動時: ISO 100（gain=1.0）を安全なデフォルトとして設定
+        # AEが暗所に適応してgain=8にする前に上書きする
+        controls['AnalogueGain'] = 1.0
 
-    # shutter_speedは無視（AEに任せる）。フレームレートはFrameDurationLimitsで制御。
+    if shutter_value != 'auto':
+        try:
+            if isinstance(shutter_value, str) and '/' in shutter_value:
+                numerator, denominator = shutter_value.split('/', 1)
+                exposure_seconds = float(numerator) / float(denominator)
+                exposure_time = int(exposure_seconds * 1_000_000)
+            else:
+                exposure_time = int(shutter_value)
+            controls['ExposureTime'] = exposure_time
+        except ValueError:
+            logger.warning(f"Invalid shutter value: {shutter_value}")
 
     if libcamera is not None:
         if wb_value == 'auto':
@@ -337,9 +352,9 @@ def _adapt_exposure(camera: 'Picamera2', filepath: str, settings: dict) -> None:
             try:
                 _adaptive_gain = float(int(iso_value)) / 100.0
             except (ValueError, TypeError):
-                _adaptive_gain = 2.0
+                _adaptive_gain = 1.0
         else:
-            _adaptive_gain = 2.0  # auto時のデフォルト: ISO 200相当
+            _adaptive_gain = 1.0  # ISO 100相当（安全な開始点、白飛び防止）
 
     target = _ADAPTIVE_TARGET_BRIGHTNESS
     tolerance = _ADAPTIVE_TOLERANCE
