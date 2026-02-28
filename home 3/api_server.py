@@ -1472,16 +1472,16 @@ class APIHandler(BaseHTTPRequestHandler):
                     except Exception as e:
                         logger.warning(f"Failed to clear session overrides on mode change: {e}")
             
-            # 永続設定でiso/shutter_speedをautoに戻す場合、
-            # session_overridesからも該当キーを削除（overridesが上書きする問題の防止）
-            auto_keys = [k for k in ('iso', 'shutter_speed') if new_settings.get(k) == 'auto']
-            if auto_keys and os.path.exists(SESSION_OVERRIDES_FILE):
+            # iso/shutter_speedが変更された場合、session_overridesからも
+            # 該当キーを削除（古いtemporary値が新しい設定を上書きする問題の防止）
+            changed_exposure_keys = [k for k in ('iso', 'shutter_speed') if k in new_settings]
+            if changed_exposure_keys and os.path.exists(SESSION_OVERRIDES_FILE):
                 try:
                     with open(SESSION_OVERRIDES_FILE, 'r') as f:
                         overrides = json.load(f) or {}
                     if isinstance(overrides, dict):
                         changed = False
-                        for k in auto_keys:
+                        for k in changed_exposure_keys:
                             if k in overrides:
                                 del overrides[k]
                                 changed = True
@@ -1492,7 +1492,7 @@ class APIHandler(BaseHTTPRequestHandler):
                             else:
                                 os.remove(SESSION_OVERRIDES_FILE)
                 except Exception as e:
-                    logger.warning(f"Failed to clean session overrides for auto keys: {e}")
+                    logger.warning(f"Failed to clean session overrides for changed keys: {e}")
 
             settings.update(new_settings)
             

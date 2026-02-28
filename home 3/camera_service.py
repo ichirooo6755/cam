@@ -347,14 +347,14 @@ def _adapt_exposure(camera: 'Picamera2', filepath: str, settings: dict) -> None:
         return
 
     iso_value = settings.get('iso', 'auto')
+
+    # 手動ISO設定時は適応型gainをリセット（古い値が残らないようにする）
+    if iso_value != 'auto':
+        _adaptive_gain = None
+        return
+
     if _adaptive_gain is None:
-        if iso_value != 'auto':
-            try:
-                _adaptive_gain = float(int(iso_value)) / 100.0
-            except (ValueError, TypeError):
-                _adaptive_gain = 1.0
-        else:
-            _adaptive_gain = 1.0  # ISO 100相当（安全な開始点、白飛び防止）
+        _adaptive_gain = 1.0  # ISO 100相当（安全な開始点、白飛び防止）
 
     target = _ADAPTIVE_TARGET_BRIGHTNESS
     tolerance = _ADAPTIVE_TOLERANCE
@@ -649,8 +649,8 @@ def main():
                             last_settings_load = 0  # 次ループで即リトライ
                             continue
 
-                    # カメラ制御は設定リロード時に1回だけ適用
-                    if camera is not None and not controls_applied:
+                    # カメラ制御は設定リロードごとに再適用（設定変更を確実に反映）
+                    if camera is not None:
                         _apply_camera_controls(camera, settings, active_profile)
                         controls_applied = True
                         # JPEG品質もここで設定（毎撮影時に再設定しなくて済む）
