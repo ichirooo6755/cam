@@ -239,7 +239,8 @@ def _apply_camera_controls(camera: Picamera2, settings: dict, profile: dict) -> 
     #   - ET=33msだとISPのブラックレベル補正でmainストリームが黒に潰れる（実測確認済み）
     #   - ExposureTime=33ms（30fps）で同一フレームキャプチャと組み合わせる
     #   - どんな環境でもカメラ内部は暗いのでこの設定で普遍的に動作する
-    controls['AeEnable'] = False
+    manual_exposure = iso_value != 'auto' or shutter_value != 'auto'
+    controls['AeEnable'] = not manual_exposure
 
     # ユーザーが明示的にISO値を設定した場合はそれを最優先で使用
     if iso_value != 'auto':
@@ -268,6 +269,8 @@ def _apply_camera_controls(camera: Picamera2, settings: dict, profile: dict) -> 
             controls['ExposureTime'] = exposure_time
         except ValueError:
             logger.warning(f"Invalid shutter value: {shutter_value}")
+
+    logger.info("Controls: AE=%s AG=%s ET=%s", controls.get('AeEnable'), controls.get('AnalogueGain'), controls.get('ExposureTime'))
 
     if libcamera is not None:
         if wb_value == 'auto':
@@ -421,30 +424,25 @@ def capture_photo(camera, settings: dict, profile: dict, detected_at: float = No
             # 光検知と同一フレームを保存（遅延ゼロ）
             filepath = save_request_to_file(request, filepath, settings, profile)
         else:
-            # 手動撮影等: 新しいフレームを取得
-            camera_mode = settings.get('camera_mode', 'standard')
-            use_hires = camera_mode in ('quality', 'raw') or raw_mode
-            if use_hires:
-                logger.info("High-res capture (%s): switching to full resolution.", camera_mode)
-                if raw_mode:
+            # 旧コード方式: capture_file → switch_mode_and_capture_fileフォールバック
+            if raw_mode:
+                try:
+                    camera.capture_file(filepath, format='dng')
+                except Exception as dng_err:
                     try:
                         camera.switch_mode_and_capture_file(
                             camera.still_configuration, filepath, format='dng')
-                    except Exception as dng_err:
-                        logger.warning("DNG capture failed (%s), falling back to JPEG", dng_err)
+                    except Exception as dng_err2:
+                        logger.warning("DNG capture failed (%s / %s), falling back to JPEG", dng_err, dng_err2)
                         filepath = filepath.replace('.dng', '.jpg')
                         camera.options["quality"] = quality
-                        camera.switch_mode_and_capture_file(
-                            camera.still_configuration, filepath)
-                else:
+                        camera.capture_file(filepath)
+            else:
+                try:
+                    camera.capture_file(filepath)
+                except Exception:
                     camera.switch_mode_and_capture_file(
                         camera.still_configuration, filepath)
-            else:
-                new_req = camera.capture_request()
-                try:
-                    filepath = save_request_to_file(new_req, filepath, settings, profile)
-                finally:
-                    new_req.release()
 
         # WiFi AP安定化
         time.sleep(0.15)
@@ -677,18 +675,12 @@ def main():
                 time.sleep(check_interval)
                 continue
 
-            # --- 光検知ループ（同一フレーム検知+撮影） ---
-            # capture_request()でフレームを取得し、そのフレームで光検知判定。
-            # 光があればそのフレームそのものをファイルに保存（遅延ゼロ）。
-            request = None
+            # --- 光検知ループ（旧コード方式: 軽量・高速） ---
             try:
-                request = camera.capture_request()
-                brightness, lux, ae_gain, ae_exposure_us = get_sensor_sample_from_request(request)
+                brightness, lux, ae_gain, ae_exposure_us = get_sensor_sample(camera)
 
                 if last_brightness is None:
                     last_brightness = brightness
-                    request.release()
-                    request = None
                     time.sleep(check_interval)
                     continue
 
@@ -704,8 +696,6 @@ def main():
                 sensor_state['last_change_amount'] = round(float(change_amount), 3)
 
                 if change_amount < 0:
-                    request.release()
-                    request = None
                     time.sleep(check_interval)
                     continue
 
@@ -716,19 +706,14 @@ def main():
                 sensor_state['last_change_percent'] = round(float(change_percent), 3)
 
                 # --- 撮影判定 ---
-                should_capture = (
-                    change_percent >= threshold
-                    and change_amount >= MIN_CHANGE_AMOUNT
-                    and current_time - last_capture_time >= capture_cooldown
-                )
+                if (change_percent >= threshold
+                        and change_amount >= MIN_CHANGE_AMOUNT
+                        and current_time - last_capture_time >= capture_cooldown):
 
-                if should_capture:
                     if not _rate_limit_ok():
                         logger.warning(
                             "Rate limit (%d/min). Skipping.", _active_max_per_minute)
                         sensor_state['state'] = 'rate_limited'
-                        request.release()
-                        request = None
                         time.sleep(check_interval)
                         continue
 
@@ -736,34 +721,19 @@ def main():
                         "Light detected: lux=%.2f, change=%.1f%%, thr=%d",
                         brightness, change_percent, threshold,
                     )
-
                     detected_at = time.time()
                     sensor_state['last_detected_at'] = datetime.now().isoformat()
 
-                    # 同一フレームを保存（requestを渡すことで遅延ゼロ）
                     result = capture_photo(
-                        camera, settings, active_profile,
-                        detected_at=detected_at, request=request)
-                    request.release()
-                    request = None
-
+                        camera, settings, active_profile, detected_at=detected_at)
                     if result['success']:
                         last_capture_time = time.time()
                         sensor_state['last_capture_at'] = datetime.now().isoformat()
                         sensor_state['last_detect_to_capture_ms'] = result.get('delay_ms')
-                else:
-                    request.release()
-                    request = None
 
             except Exception as e:
                 logger.error(f"Detection error: {e}")
                 sensor_state['last_error'] = str(e)
-            finally:
-                if request is not None:
-                    try:
-                        request.release()
-                    except Exception:
-                        pass
 
             # --- センサーステータス書き込み ---
             if current_time - last_sensor_status_write >= SENSOR_STATUS_WRITE_INTERVAL:
