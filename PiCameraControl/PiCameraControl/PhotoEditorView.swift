@@ -1728,13 +1728,15 @@ struct PhotoEditorView: View {
         }
     }
 
+    @State private var toneCurveChannel: Int = 0
+
     private var toneCurveControls: some View {
-        let tcBinding = Binding(get: { settings.toneCurve }, set: { settings.toneCurve = $0 })
-        return VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Text("トーンカーブ（5点制御）")
-                    .font(.caption.weight(.semibold))
+                Text("TONE CURVE")
+                    .font(.system(size: 11, weight: .bold, design: .monospaced))
                     .foregroundColor(.secondary)
+                    .tracking(2)
                 Spacer()
                 Button("リセット") {
                     settings.toneCurve = .default
@@ -1742,47 +1744,160 @@ struct PhotoEditorView: View {
                 .font(.caption.weight(.bold))
             }
 
-            // Masterチャンネル
-            toneCurveChannelSection(title: "Master", curve: tcBinding.master, color: .white)
+            // チャンネルタブ
+            HStack(spacing: 0) {
+                ForEach(Array(["Master", "R", "G", "B"].enumerated()), id: \.offset) { idx, label in
+                    let colors: [Color] = [.white, .red, .green, .blue]
+                    Button {
+                        toneCurveChannel = idx
+                    } label: {
+                        Text(label)
+                            .font(.system(size: 12, weight: .bold, design: .monospaced))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 8)
+                            .background(toneCurveChannel == idx ? colors[idx].opacity(0.25) : Color.clear)
+                            .foregroundColor(toneCurveChannel == idx ? colors[idx] : .gray)
+                    }
+                }
+            }
+            .background(Color(red: 0.12, green: 0.12, blue: 0.14))
+            .cornerRadius(8)
 
-            Divider().padding(.vertical, 8)
+            // グラフ
+            let curveBinding: Binding<ToneCurve> = {
+                switch toneCurveChannel {
+                case 1: return Binding(get: { settings.toneCurve.red }, set: { settings.toneCurve.red = $0 })
+                case 2: return Binding(get: { settings.toneCurve.green }, set: { settings.toneCurve.green = $0 })
+                case 3: return Binding(get: { settings.toneCurve.blue }, set: { settings.toneCurve.blue = $0 })
+                default: return Binding(get: { settings.toneCurve.master }, set: { settings.toneCurve.master = $0 })
+                }
+            }()
+            let curveColor: Color = [Color.white, .red, .green, .blue][toneCurveChannel]
 
-            // Redチャンネル
-            toneCurveChannelSection(title: "Red", curve: tcBinding.red, color: .red)
+            ToneCurveGraphView(curve: curveBinding, color: curveColor)
+                .frame(height: 220)
+                .padding(4)
+                .background(Color(red: 0.08, green: 0.08, blue: 0.10))
+                .cornerRadius(12)
 
-            Divider().padding(.vertical, 8)
-
-            // Greenチャンネル
-            toneCurveChannelSection(title: "Green", curve: tcBinding.green, color: .green)
-
-            Divider().padding(.vertical, 8)
-
-            // Blueチャンネル
-            toneCurveChannelSection(title: "Blue", curve: tcBinding.blue, color: .blue)
-
-            Text("📝 0.0=黒, 0.25=ダークトーン, 0.5=中間, 0.75=ハイライト, 1.0=白")
-                .font(.caption2)
-                .foregroundColor(.gray)
-                .padding(.top, 8)
+            HStack(spacing: 0) {
+                Text("暗")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundColor(.gray)
+                Spacer()
+                Text("← 入力 →")
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundColor(.gray.opacity(0.6))
+                Spacer()
+                Text("明")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundColor(.gray)
+            }
+            .padding(.horizontal, 8)
         }
     }
 
-    private func toneCurveChannelSection(title: String, curve: Binding<ToneCurve>, color: Color) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(title.uppercased())
-                .font(.caption2.weight(.bold))
-                .foregroundColor(color.opacity(0.8))
+    // MARK: - トーンカーブグラフ
 
-            // 5点制御: points[0]=0.0, points[1]=0.25, points[2]=0.5, points[3]=0.75, points[4]=1.0
-            sliderRow(title: "0.0 (黒)", value: curve.points[0], range: 0...1, step: 0.01)
-            sliderRow(title: "0.25 (ダーク)", value: curve.points[1], range: 0...1, step: 0.01)
-            sliderRow(title: "0.5 (中間)", value: curve.points[2], range: 0...1, step: 0.01)
-            sliderRow(title: "0.75 (ハイライト)", value: curve.points[3], range: 0...1, step: 0.01)
-            sliderRow(title: "1.0 (白)", value: curve.points[4], range: 0...1, step: 0.01)
+    struct ToneCurveGraphView: View {
+        @Binding var curve: ToneCurve
+        var color: Color
+        @State private var draggingIndex: Int? = nil
+
+        var body: some View {
+            GeometryReader { geo in
+                let w = geo.size.width
+                let h = geo.size.height
+                let pad: CGFloat = 20
+
+                ZStack {
+                    // グリッド線
+                    Path { path in
+                        for i in 0...4 {
+                            let x = pad + CGFloat(i) / 4.0 * (w - pad * 2)
+                            path.move(to: CGPoint(x: x, y: pad))
+                            path.addLine(to: CGPoint(x: x, y: h - pad))
+                            let y = pad + CGFloat(i) / 4.0 * (h - pad * 2)
+                            path.move(to: CGPoint(x: pad, y: y))
+                            path.addLine(to: CGPoint(x: w - pad, y: y))
+                        }
+                    }
+                    .stroke(Color.gray.opacity(0.15), lineWidth: 0.5)
+
+                    // 対角線（無調整基準）
+                    Path { path in
+                        path.move(to: CGPoint(x: pad, y: h - pad))
+                        path.addLine(to: CGPoint(x: w - pad, y: pad))
+                    }
+                    .stroke(Color.gray.opacity(0.3), style: StrokeStyle(lineWidth: 1, dash: [4, 4]))
+
+                    // カーブパス
+                    let pts = curvePoints(w: w, h: h, pad: pad)
+                    Path { path in
+                        guard pts.count == 5 else { return }
+                        path.move(to: pts[0])
+                        for i in 0..<4 {
+                            let p0 = pts[i]
+                            let p1 = pts[i + 1]
+                            let dx = (p1.x - p0.x) * 0.4
+                            path.addCurve(
+                                to: p1,
+                                control1: CGPoint(x: p0.x + dx, y: p0.y),
+                                control2: CGPoint(x: p1.x - dx, y: p1.y)
+                            )
+                        }
+                    }
+                    .stroke(color, lineWidth: 2.5)
+
+                    // ドラッグ可能なコントロールポイント
+                    ForEach(0..<5, id: \.self) { i in
+                        let pt = pts[i]
+                        let isDragging = draggingIndex == i
+                        Circle()
+                            .fill(isDragging ? color : Color(red: 0.2, green: 0.2, blue: 0.22))
+                            .frame(width: isDragging ? 20 : 14, height: isDragging ? 20 : 14)
+                            .overlay(Circle().stroke(color, lineWidth: 2))
+                            .position(pt)
+                            .gesture(
+                                DragGesture(minimumDistance: 0)
+                                    .onChanged { value in
+                                        draggingIndex = i
+                                        let graphH = h - pad * 2
+                                        let newY = max(pad, min(h - pad, value.location.y))
+                                        let normalized = 1.0 - Double((newY - pad) / graphH)
+                                        curve.points[i] = max(0, min(1, normalized))
+                                    }
+                                    .onEnded { _ in
+                                        draggingIndex = nil
+                                    }
+                            )
+                    }
+
+                    // 軸ラベル
+                    VStack {
+                        Text("出力")
+                            .font(.system(size: 8, weight: .bold))
+                            .foregroundColor(.gray.opacity(0.5))
+                            .rotationEffect(.degrees(-90))
+                        Spacer()
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.leading, 2)
+                }
+            }
         }
-        .padding(12)
-        .background(Color(red: 0.15, green: 0.15, blue: 0.17))
-        .cornerRadius(12)
+
+        private func curvePoints(w: CGFloat, h: CGFloat, pad: CGFloat) -> [CGPoint] {
+            let xPositions: [CGFloat] = [0, 0.25, 0.5, 0.75, 1.0]
+            let graphW = w - pad * 2
+            let graphH = h - pad * 2
+            return (0..<5).map { i in
+                CGPoint(
+                    x: pad + xPositions[i] * graphW,
+                    y: h - pad - CGFloat(curve.points[i]) * graphH
+                )
+            }
+        }
     }
 
     private var presetsControls: some View {

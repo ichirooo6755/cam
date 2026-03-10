@@ -391,6 +391,9 @@ struct ContentView: View {
                                 if !manualModeEnabled {
                                     Divider()
                                     thresholdModule
+
+                                    Divider()
+                                    detectionIntervalModule
                                 }
                             }
                             .padding(.top, 8)
@@ -911,47 +914,41 @@ struct ContentView: View {
     }
 
     private var isoQuickModule: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 12) {
                 Text("ISO")
                     .font(.caption2.weight(.black))
                     .foregroundColor(.secondary)
-                Spacer()
+                    .frame(width: 50, alignment: .leading)
+
                 Text(selectedISO.label)
-                    .font(.system(size: 13, weight: .bold, design: .monospaced))
+                    .font(.system(size: 18, weight: .bold, design: .monospaced))
                     .foregroundColor(.blue)
+                    .frame(minWidth: 60)
 
-                HStack(spacing: 8) {
-                    Button {
-                        shiftISO(step: -1)
-                    } label: {
-                        Image(systemName: "minus")
-                            .font(.caption.weight(.bold))
-                    }
-                    .buttonStyle(.bordered)
+                Spacer()
 
-                    Button {
-                        shiftISO(step: 1)
-                    } label: {
-                        Image(systemName: "plus")
-                            .font(.caption.weight(.bold))
-                    }
-                    .buttonStyle(.bordered)
-                }
-            }
-
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    ForEach(ISOOption.allCases) { option in
-                        quickChip(
-                            title: option.label,
-                            active: selectedISO == option,
-                            activeColor: .blue
-                        ) {
-                            selectedISO = option
-                            updateISO(option)
+                VStack(spacing: 2) {
+                    Text("\u{2191} 高感度")
+                        .font(.system(size: 8, weight: .semibold))
+                        .foregroundColor(.blue.opacity(0.6))
+                    HStack(spacing: 8) {
+                        Button { shiftISO(step: -1) } label: {
+                            Image(systemName: "minus")
+                                .font(.caption.weight(.bold))
+                                .frame(width: 32, height: 32)
                         }
+                        .buttonStyle(.bordered)
+                        Button { shiftISO(step: 1) } label: {
+                            Image(systemName: "plus")
+                                .font(.caption.weight(.bold))
+                                .frame(width: 32, height: 32)
+                        }
+                        .buttonStyle(.bordered)
                     }
+                    Text("\u{2193} 低感度")
+                        .font(.system(size: 8, weight: .semibold))
+                        .foregroundColor(.blue.opacity(0.6))
                 }
             }
         }
@@ -1086,116 +1083,149 @@ struct ContentView: View {
     }
 
     private var shutterPickerModule: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 12) {
                 Text("SHUTTER")
                     .font(.caption2.weight(.black))
                     .foregroundColor(.secondary)
-                Spacer()
+                    .frame(width: 60, alignment: .leading)
+
                 Text(selectedShutterSpeed.label)
-                    .font(.system(size: 13, weight: .bold, design: .monospaced))
+                    .font(.system(size: 18, weight: .bold, design: .monospaced))
                     .foregroundColor(.indigo)
+                    .frame(minWidth: 70)
 
-                HStack(spacing: 8) {
-                    Button {
-                        shiftShutter(step: -1)
-                    } label: {
-                        Image(systemName: "minus")
-                            .font(.caption.weight(.bold))
-                    }
-                    .buttonStyle(.bordered)
+                Spacer()
 
-                    Button {
-                        shiftShutter(step: 1)
-                    } label: {
-                        Image(systemName: "plus")
-                            .font(.caption.weight(.bold))
+                VStack(spacing: 2) {
+                    Text("\u{2191} 明るい(長)")
+                        .font(.system(size: 8, weight: .semibold))
+                        .foregroundColor(.indigo.opacity(0.6))
+                    HStack(spacing: 8) {
+                        Button { shiftShutter(step: -1) } label: {
+                            Image(systemName: "minus")
+                                .font(.caption.weight(.bold))
+                                .frame(width: 32, height: 32)
+                        }
+                        .buttonStyle(.bordered)
+                        Button { shiftShutter(step: 1) } label: {
+                            Image(systemName: "plus")
+                                .font(.caption.weight(.bold))
+                                .frame(width: 32, height: 32)
+                        }
+                        .buttonStyle(.bordered)
                     }
-                    .buttonStyle(.bordered)
+                    Text("\u{2193} 暗い(短)")
+                        .font(.system(size: 8, weight: .semibold))
+                        .foregroundColor(.indigo.opacity(0.6))
                 }
             }
 
-            // Auto
+            // Autoチップ
             quickChip(title: "Auto", active: selectedShutterSpeed == .auto, activeColor: .indigo) {
                 selectedShutterSpeed = .auto
                 updateShutterSpeed(.auto)
-            }
-
-            // 高速 (1/8000〜1/125)
-            let fastOptions = shutterOptions.filter { ($0.microseconds ?? 0) > 0 && ($0.microseconds ?? 0) <= 8000 }
-            if !fastOptions.isEmpty {
-                Text("HIGH SPEED")
-                    .font(.system(size: 9, weight: .bold, design: .monospaced))
-                    .foregroundColor(.secondary.opacity(0.6))
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 6) {
-                        ForEach(fastOptions, id: \.self) { opt in
-                            quickChip(title: opt.label, active: selectedShutterSpeed == opt, activeColor: .indigo) {
-                                selectedShutterSpeed = opt
-                                updateShutterSpeed(opt)
-                            }
-                        }
-                    }
-                }
-            }
-
-            // 標準 (1/60〜1/2)
-            let midOptions = shutterOptions.filter { ($0.microseconds ?? 0) > 8000 && ($0.microseconds ?? 0) <= 500000 }
-            if !midOptions.isEmpty {
-                Text("STANDARD")
-                    .font(.system(size: 9, weight: .bold, design: .monospaced))
-                    .foregroundColor(.secondary.opacity(0.6))
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 6) {
-                        ForEach(midOptions, id: \.self) { opt in
-                            quickChip(title: opt.label, active: selectedShutterSpeed == opt, activeColor: .indigo) {
-                                selectedShutterSpeed = opt
-                                updateShutterSpeed(opt)
-                            }
-                        }
-                    }
-                }
-            }
-
-            // 長時間 (1s〜)
-            let slowOptions = shutterOptions.filter { ($0.microseconds ?? 0) > 500000 }
-            if !slowOptions.isEmpty {
-                Text("LONG EXPOSURE")
-                    .font(.system(size: 9, weight: .bold, design: .monospaced))
-                    .foregroundColor(.secondary.opacity(0.6))
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 6) {
-                        ForEach(slowOptions, id: \.self) { opt in
-                            quickChip(title: opt.label, active: selectedShutterSpeed == opt, activeColor: .orange) {
-                                selectedShutterSpeed = opt
-                                updateShutterSpeed(opt)
-                            }
-                        }
-                    }
-                }
             }
         }
     }
 
     private var thresholdModule: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text("DETECTION THRESHOLD")
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 12) {
+                Text("THRESHOLD")
                     .font(.caption2.weight(.black))
                     .foregroundColor(.secondary)
-                Spacer()
-                Text("\(Int(detectionThreshold))%")
-                    .font(.caption.weight(.bold))
-                    .monospacedDigit()
-                    .foregroundColor(.blue)
-            }
+                    .frame(width: 80, alignment: .leading)
 
-            Slider(value: $detectionThreshold, in: 0...100, step: 1) { editing in
-                if !editing {
-                    updateThreshold(Int(detectionThreshold))
+                Text("\(Int(detectionThreshold))%")
+                    .font(.system(size: 18, weight: .bold, design: .monospaced))
+                    .foregroundColor(.teal)
+                    .frame(minWidth: 50)
+
+                Spacer()
+
+                VStack(spacing: 2) {
+                    Text("\u{2191} 敏感")
+                        .font(.system(size: 8, weight: .semibold))
+                        .foregroundColor(.teal.opacity(0.6))
+                    HStack(spacing: 8) {
+                        Button {
+                            detectionThreshold = max(0, detectionThreshold - 5)
+                            updateThreshold(Int(detectionThreshold))
+                        } label: {
+                            Image(systemName: "minus")
+                                .font(.caption.weight(.bold))
+                                .frame(width: 32, height: 32)
+                        }
+                        .buttonStyle(.bordered)
+                        Button {
+                            detectionThreshold = min(100, detectionThreshold + 5)
+                            updateThreshold(Int(detectionThreshold))
+                        } label: {
+                            Image(systemName: "plus")
+                                .font(.caption.weight(.bold))
+                                .frame(width: 32, height: 32)
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                    Text("\u{2193} 鉈感")
+                        .font(.system(size: 8, weight: .semibold))
+                        .foregroundColor(.teal.opacity(0.6))
                 }
             }
-            .accentColor(.blue)
+        }
+    }
+
+    @State private var detectionIntervalSec: Double = 0.2
+
+    private var detectionIntervalModule: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 12) {
+                Text("CHECK")
+                    .font(.caption2.weight(.black))
+                    .foregroundColor(.secondary)
+                    .frame(width: 50, alignment: .leading)
+
+                Text(String(format: "%.1f s", detectionIntervalSec))
+                    .font(.system(size: 18, weight: .bold, design: .monospaced))
+                    .foregroundColor(.orange)
+                    .frame(minWidth: 50)
+
+                Text("(秒に1回)")
+                    .font(.system(size: 9))
+                    .foregroundColor(.secondary)
+
+                Spacer()
+
+                VStack(spacing: 2) {
+                    Text("\u{2191} 頻繁")
+                        .font(.system(size: 8, weight: .semibold))
+                        .foregroundColor(.orange.opacity(0.6))
+                    HStack(spacing: 8) {
+                        Button {
+                            detectionIntervalSec = max(0.1, detectionIntervalSec - 0.1)
+                            updateDetectionInterval(detectionIntervalSec)
+                        } label: {
+                            Image(systemName: "minus")
+                                .font(.caption.weight(.bold))
+                                .frame(width: 32, height: 32)
+                        }
+                        .buttonStyle(.bordered)
+                        Button {
+                            detectionIntervalSec = min(5.0, detectionIntervalSec + 0.1)
+                            updateDetectionInterval(detectionIntervalSec)
+                        } label: {
+                            Image(systemName: "plus")
+                                .font(.caption.weight(.bold))
+                                .frame(width: 32, height: 32)
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                    Text("\u{2193} 省電力")
+                        .font(.system(size: 8, weight: .semibold))
+                        .foregroundColor(.orange.opacity(0.6))
+                }
+            }
         }
     }
 
@@ -1869,6 +1899,15 @@ struct ContentView: View {
             validate: { $0.detectionThreshold == value }
         ) { api in
             try await api.updateDetectionThreshold(value)
+        }
+    }
+
+    private func updateDetectionInterval(_ seconds: Double) {
+        performSettingUpdate(
+            label: "検知間隔",
+            validate: { _ in true }
+        ) { api in
+            try await api.updateSettings(["check_interval": seconds], temporary: true)
         }
     }
 
