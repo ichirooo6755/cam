@@ -86,6 +86,7 @@ ALLOWED_SETTINGS_KEYS = {
     'denoise_mode',
     'sharpness',
     'stabilization',
+    'detection_fps',
 }
 
 ALLOWED_WHITE_BALANCE = {'auto', 'daylight', 'cloudy', 'tungsten', 'fluorescent', 'shade'}

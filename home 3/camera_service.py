@@ -134,6 +134,14 @@ MODE_PROFILES = {
 }
 _DEFAULT_PROFILE = MODE_PROFILES['standard']
 
+# --- フレームレートプリセット (IMX477) ---
+# fpsに対応する解像度とFrameDuration制限
+FPS_PRESETS = {
+    30: {'main_size': (1920, 1080), 'frame_duration': 33333},
+    40: {'main_size': (2028, 1520), 'frame_duration': 25000},
+    120: {'main_size': (1332, 990), 'frame_duration': 8333},
+}
+
 DEFAULT_SETTINGS = {
     'camera_mode': 'standard',
     'brightness_threshold': 30,
@@ -615,7 +623,18 @@ def main():
                 except Exception:
                     width, height = 1920, 1080
 
-                desired_size = (width, height)
+                # フレームレートプリセット: detection_fpsが指定されていれば解像度を自動調整
+                detection_fps = settings.get('detection_fps')
+                if detection_fps is not None:
+                    try:
+                        detection_fps = int(detection_fps)
+                    except (TypeError, ValueError):
+                        detection_fps = None
+                fps_preset = FPS_PRESETS.get(detection_fps) if detection_fps else None
+                if fps_preset:
+                    desired_size = fps_preset['main_size']
+                else:
+                    desired_size = (width, height)
                 desired_lores = active_profile['lores_size']
 
                 sensor_state.update({
@@ -669,6 +688,14 @@ def main():
                                 lores={"size": desired_lores},
                             )
                             cam.configure(config)
+                            # フレームレート制御: detection_fps指定時はFrameDurationを設定
+                            if fps_preset:
+                                try:
+                                    fd = fps_preset['frame_duration']
+                                    cam.set_controls({'FrameDurationLimits': (fd, fd)})
+                                    logger.info("FrameDuration set to %dµs (~%dfps)", fd, detection_fps)
+                                except Exception as e:
+                                    logger.warning("Failed to set FrameDurationLimits: %s", e)
                             cam.start()
                             camera = cam
                             current_main_size = desired_size

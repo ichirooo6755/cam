@@ -113,6 +113,129 @@ extension View {
     }
 }
 
+// MARK: - Drag Value Controls
+
+struct DragOptionControl<T: Hashable>: View {
+    var title: String
+    @Binding var selected: T
+    var options: [T]
+    var label: (T) -> String
+    var upLabel: String
+    var downLabel: String
+    var color: Color
+    var onChange: (T) -> Void
+
+    @State private var isDragging = false
+    @State private var dragStartIndex: Int = 0
+
+    private var currentIndex: Int {
+        options.firstIndex(of: selected) ?? 0
+    }
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Text(title)
+                .font(.caption2.weight(.black))
+                .foregroundColor(.secondary)
+                .frame(width: 65, alignment: .leading)
+
+            VStack(spacing: 1) {
+                Text("\u{25B2} \(upLabel)")
+                    .font(.system(size: 7, weight: .bold))
+                    .foregroundColor(color.opacity(isDragging ? 0.9 : 0.4))
+
+                Text(label(selected))
+                    .font(.system(size: 20, weight: .black, design: .monospaced))
+                    .foregroundColor(color)
+                    .frame(minWidth: 70, minHeight: 44)
+                    .background(RoundedRectangle(cornerRadius: 10).fill(color.opacity(isDragging ? 0.15 : 0.05)))
+                    .gesture(
+                        DragGesture(minimumDistance: 4)
+                            .onChanged { g in
+                                if !isDragging {
+                                    isDragging = true
+                                    dragStartIndex = currentIndex
+                                }
+                                let steps = Int(-g.translation.height / 28)
+                                let idx = max(0, min(options.count - 1, dragStartIndex + steps))
+                                if idx != currentIndex {
+                                    selected = options[idx]
+                                    onChange(options[idx])
+                                }
+                            }
+                            .onEnded { _ in isDragging = false }
+                    )
+
+                Text("\u{25BC} \(downLabel)")
+                    .font(.system(size: 7, weight: .bold))
+                    .foregroundColor(color.opacity(isDragging ? 0.9 : 0.4))
+            }
+
+            Spacer()
+        }
+    }
+}
+
+struct DragNumberControl: View {
+    var title: String
+    @Binding var value: Double
+    var range: ClosedRange<Double>
+    var step: Double
+    var format: (Double) -> String
+    var upLabel: String
+    var downLabel: String
+    var color: Color
+    var onEnd: ((Double) -> Void)?
+
+    @State private var isDragging = false
+    @State private var dragStartValue: Double = 0
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Text(title)
+                .font(.caption2.weight(.black))
+                .foregroundColor(.secondary)
+                .frame(width: 65, alignment: .leading)
+
+            VStack(spacing: 1) {
+                Text("\u{25B2} \(upLabel)")
+                    .font(.system(size: 7, weight: .bold))
+                    .foregroundColor(color.opacity(isDragging ? 0.9 : 0.4))
+
+                Text(format(value))
+                    .font(.system(size: 20, weight: .black, design: .monospaced))
+                    .foregroundColor(color)
+                    .frame(minWidth: 70, minHeight: 44)
+                    .background(RoundedRectangle(cornerRadius: 10).fill(color.opacity(isDragging ? 0.15 : 0.05)))
+                    .gesture(
+                        DragGesture(minimumDistance: 4)
+                            .onChanged { g in
+                                if !isDragging {
+                                    isDragging = true
+                                    dragStartValue = value
+                                }
+                                let span = range.upperBound - range.lowerBound
+                                let delta = -g.translation.height / 180 * span
+                                let raw = dragStartValue + delta
+                                let stepped = (raw / step).rounded() * step
+                                value = max(range.lowerBound, min(range.upperBound, stepped))
+                            }
+                            .onEnded { _ in
+                                isDragging = false
+                                onEnd?(value)
+                            }
+                    )
+
+                Text("\u{25BC} \(downLabel)")
+                    .font(.system(size: 7, weight: .bold))
+                    .foregroundColor(color.opacity(isDragging ? 0.9 : 0.4))
+            }
+
+            Spacer()
+        }
+    }
+}
+
 // MARK: - Components
 
 struct GlassToggle: View {
@@ -394,6 +517,9 @@ struct ContentView: View {
 
                                     Divider()
                                     detectionIntervalModule
+
+                                    Divider()
+                                    fpsPresetModule
                                 }
                             }
                             .padding(.top, 8)
@@ -914,44 +1040,16 @@ struct ContentView: View {
     }
 
     private var isoQuickModule: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 12) {
-                Text("ISO")
-                    .font(.caption2.weight(.black))
-                    .foregroundColor(.secondary)
-                    .frame(width: 50, alignment: .leading)
-
-                Text(selectedISO.label)
-                    .font(.system(size: 18, weight: .bold, design: .monospaced))
-                    .foregroundColor(.blue)
-                    .frame(minWidth: 60)
-
-                Spacer()
-
-                VStack(spacing: 2) {
-                    Text("\u{2191} 高感度")
-                        .font(.system(size: 8, weight: .semibold))
-                        .foregroundColor(.blue.opacity(0.6))
-                    HStack(spacing: 8) {
-                        Button { shiftISO(step: -1) } label: {
-                            Image(systemName: "minus")
-                                .font(.caption.weight(.bold))
-                                .frame(width: 32, height: 32)
-                        }
-                        .buttonStyle(.bordered)
-                        Button { shiftISO(step: 1) } label: {
-                            Image(systemName: "plus")
-                                .font(.caption.weight(.bold))
-                                .frame(width: 32, height: 32)
-                        }
-                        .buttonStyle(.bordered)
-                    }
-                    Text("\u{2193} 低感度")
-                        .font(.system(size: 8, weight: .semibold))
-                        .foregroundColor(.blue.opacity(0.6))
-                }
-            }
-        }
+        DragOptionControl(
+            title: "ISO",
+            selected: $selectedISO,
+            options: Array(ISOOption.allCases),
+            label: { $0.label },
+            upLabel: "高感度",
+            downLabel: "低感度",
+            color: .blue,
+            onChange: { updateISO($0) }
+        )
     }
 
     private var whiteBalanceModule: some View {
@@ -1083,172 +1181,64 @@ struct ContentView: View {
     }
 
     private var shutterPickerModule: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 12) {
-                Text("SHUTTER")
-                    .font(.caption2.weight(.black))
-                    .foregroundColor(.secondary)
-                    .frame(width: 60, alignment: .leading)
-
-                Text(selectedShutterSpeed.label)
-                    .font(.system(size: 18, weight: .bold, design: .monospaced))
-                    .foregroundColor(.indigo)
-                    .frame(minWidth: 70)
-
-                Spacer()
-
-                VStack(spacing: 2) {
-                    Text("\u{2191} 明るい(長)")
-                        .font(.system(size: 8, weight: .semibold))
-                        .foregroundColor(.indigo.opacity(0.6))
-                    HStack(spacing: 8) {
-                        Button { shiftShutter(step: -1) } label: {
-                            Image(systemName: "minus")
-                                .font(.caption.weight(.bold))
-                                .frame(width: 32, height: 32)
-                        }
-                        .buttonStyle(.bordered)
-                        Button { shiftShutter(step: 1) } label: {
-                            Image(systemName: "plus")
-                                .font(.caption.weight(.bold))
-                                .frame(width: 32, height: 32)
-                        }
-                        .buttonStyle(.bordered)
-                    }
-                    Text("\u{2193} 暗い(短)")
-                        .font(.system(size: 8, weight: .semibold))
-                        .foregroundColor(.indigo.opacity(0.6))
-                }
-            }
-
-            // Autoチップ
-            quickChip(title: "Auto", active: selectedShutterSpeed == .auto, activeColor: .indigo) {
-                selectedShutterSpeed = .auto
-                updateShutterSpeed(.auto)
-            }
-        }
+        DragOptionControl(
+            title: "SHUTTER",
+            selected: $selectedShutterSpeed,
+            options: shutterOptions,
+            label: { $0.label },
+            upLabel: "明るい(長)",
+            downLabel: "暗い(短)",
+            color: .indigo,
+            onChange: { updateShutterSpeed($0) }
+        )
     }
 
     private var thresholdModule: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 12) {
-                Text("THRESHOLD")
-                    .font(.caption2.weight(.black))
-                    .foregroundColor(.secondary)
-                    .frame(width: 80, alignment: .leading)
-
-                Text("\(Int(detectionThreshold))%")
-                    .font(.system(size: 18, weight: .bold, design: .monospaced))
-                    .foregroundColor(.teal)
-                    .frame(minWidth: 50)
-
-                Spacer()
-
-                VStack(spacing: 2) {
-                    Text("\u{2191} 敏感")
-                        .font(.system(size: 8, weight: .semibold))
-                        .foregroundColor(.teal.opacity(0.6))
-                    HStack(spacing: 8) {
-                        Button {
-                            detectionThreshold = max(0, detectionThreshold - 5)
-                            updateThreshold(Int(detectionThreshold))
-                        } label: {
-                            Image(systemName: "minus")
-                                .font(.caption.weight(.bold))
-                                .frame(width: 32, height: 32)
-                        }
-                        .buttonStyle(.bordered)
-                        Button {
-                            detectionThreshold = min(100, detectionThreshold + 5)
-                            updateThreshold(Int(detectionThreshold))
-                        } label: {
-                            Image(systemName: "plus")
-                                .font(.caption.weight(.bold))
-                                .frame(width: 32, height: 32)
-                        }
-                        .buttonStyle(.bordered)
-                    }
-                    Text("\u{2193} 鉈感")
-                        .font(.system(size: 8, weight: .semibold))
-                        .foregroundColor(.teal.opacity(0.6))
-                }
-            }
-        }
+        DragNumberControl(
+            title: "THRESHOLD",
+            value: $detectionThreshold,
+            range: 1...100,
+            step: 1,
+            format: { "\(Int($0))%" },
+            upLabel: "敏感",
+            downLabel: "鉈感",
+            color: .teal,
+            onEnd: { updateThreshold(Int($0)) }
+        )
     }
 
     @State private var detectionIntervalSec: Double = 0.2
+    @State private var selectedFPS: Int = 30
 
-    private func detectionIntervalLabel(_ sec: Double) -> String {
-        if sec < 0.001 { return "最速" }
-        if sec < 1.0 { return String(format: "%dms", Int(sec * 1000)) }
-        return String(format: "%.1fs", sec)
-    }
-
-    private func detectionIntervalStep(_ sec: Double) -> Double {
-        if sec < 0.1 { return 0.01 }
-        if sec < 1.0 { return 0.05 }
-        return 0.5
+    private var fpsPresetModule: some View {
+        DragOptionControl(
+            title: "FPS",
+            selected: $selectedFPS,
+            options: [30, 40, 120],
+            label: { "\($0)fps" },
+            upLabel: "高速検知",
+            downLabel: "高画質",
+            color: .green,
+            onChange: { updateFPS($0) }
+        )
     }
 
     private var detectionIntervalModule: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 12) {
-                Text("CHECK")
-                    .font(.caption2.weight(.black))
-                    .foregroundColor(.secondary)
-                    .frame(width: 50, alignment: .leading)
-
-                Text(detectionIntervalLabel(detectionIntervalSec))
-                    .font(.system(size: 18, weight: .bold, design: .monospaced))
-                    .foregroundColor(.orange)
-                    .frame(minWidth: 60)
-
-                if detectionIntervalSec < 0.001 {
-                    Text("~30fps")
-                        .font(.system(size: 9, weight: .bold))
-                        .foregroundColor(.orange.opacity(0.8))
-                } else {
-                    Text("間隔")
-                        .font(.system(size: 9))
-                        .foregroundColor(.secondary)
-                }
-
-                Spacer()
-
-                VStack(spacing: 2) {
-                    Text("\u{2191} 頻繁")
-                        .font(.system(size: 8, weight: .semibold))
-                        .foregroundColor(.orange.opacity(0.6))
-                    HStack(spacing: 8) {
-                        Button {
-                            let step = detectionIntervalStep(detectionIntervalSec)
-                            detectionIntervalSec = max(0.0, detectionIntervalSec - step)
-                            if detectionIntervalSec < 0.005 { detectionIntervalSec = 0.0 }
-                            updateDetectionInterval(detectionIntervalSec)
-                        } label: {
-                            Image(systemName: "minus")
-                                .font(.caption.weight(.bold))
-                                .frame(width: 32, height: 32)
-                        }
-                        .buttonStyle(.bordered)
-                        Button {
-                            let step = detectionIntervalStep(detectionIntervalSec)
-                            if detectionIntervalSec < 0.001 { detectionIntervalSec = 0.01 }
-                            else { detectionIntervalSec = min(5.0, detectionIntervalSec + step) }
-                            updateDetectionInterval(detectionIntervalSec)
-                        } label: {
-                            Image(systemName: "plus")
-                                .font(.caption.weight(.bold))
-                                .frame(width: 32, height: 32)
-                        }
-                        .buttonStyle(.bordered)
-                    }
-                    Text("\u{2193} 省電力")
-                        .font(.system(size: 8, weight: .semibold))
-                        .foregroundColor(.orange.opacity(0.6))
-                }
-            }
-        }
+        DragNumberControl(
+            title: "CHECK",
+            value: $detectionIntervalSec,
+            range: 0...5,
+            step: 0.01,
+            format: { v in
+                if v < 0.001 { return "最速" }
+                if v < 1.0 { return String(format: "%dms", Int(v * 1000)) }
+                return String(format: "%.1fs", v)
+            },
+            upLabel: "頻繁",
+            downLabel: "省電力",
+            color: .orange,
+            onEnd: { updateDetectionInterval($0) }
+        )
     }
 
     private var captureSection: some View {
@@ -1930,6 +1920,15 @@ struct ContentView: View {
             validate: { _ in true }
         ) { api in
             try await api.updateSettings(["check_interval": seconds], temporary: true)
+        }
+    }
+
+    private func updateFPS(_ fps: Int) {
+        performSettingUpdate(
+            label: "FPS",
+            validate: { _ in true }
+        ) { api in
+            try await api.updateSettings(["detection_fps": fps], temporary: true)
         }
     }
 

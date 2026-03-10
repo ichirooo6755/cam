@@ -67,9 +67,14 @@ struct HSLSettings: Codable, Hashable {
 // MARK: - トーンカーブ
 
 struct ToneCurve: Codable, Hashable {
-    var points: [Double]  // 5点制御 [0, 0.25, 0.5, 0.75, 1.0]
+    var points: [Double]  // 出力値（y） 5点制御
+    var inputPositions: [Double]?  // 入力値（x） nil=デフォルト [0,0.25,0.5,0.75,1.0]
 
-    static let `default` = ToneCurve(points: [0, 0.25, 0.5, 0.75, 1.0])
+    var effectiveX: [Double] {
+        inputPositions ?? [0, 0.25, 0.5, 0.75, 1.0]
+    }
+
+    static let `default` = ToneCurve(points: [0, 0.25, 0.5, 0.75, 1.0], inputPositions: nil)
 }
 
 struct ToneCurveSettings: Codable, Hashable {
@@ -1102,11 +1107,12 @@ private enum PhotoEditorRenderer {
         // Master curve適用
         if settings.master != .default {
             let pts = settings.master.points
-            filter.setValue(CIVector(x: 0.0, y: pts[0]), forKey: "inputPoint0")
-            filter.setValue(CIVector(x: 0.25, y: pts[1]), forKey: "inputPoint1")
-            filter.setValue(CIVector(x: 0.5, y: pts[2]), forKey: "inputPoint2")
-            filter.setValue(CIVector(x: 0.75, y: pts[3]), forKey: "inputPoint3")
-            filter.setValue(CIVector(x: 1.0, y: pts[4]), forKey: "inputPoint4")
+            let xp = settings.master.effectiveX
+            filter.setValue(CIVector(x: xp[0], y: pts[0]), forKey: "inputPoint0")
+            filter.setValue(CIVector(x: xp[1], y: pts[1]), forKey: "inputPoint1")
+            filter.setValue(CIVector(x: xp[2], y: pts[2]), forKey: "inputPoint2")
+            filter.setValue(CIVector(x: xp[3], y: pts[3]), forKey: "inputPoint3")
+            filter.setValue(CIVector(x: xp[4], y: pts[4]), forKey: "inputPoint4")
         }
 
         var output = filter.outputImage ?? image
@@ -1114,40 +1120,18 @@ private enum PhotoEditorRenderer {
         // RGB各チャンネルはCIColorMatrixで適用
         // （CIToneCurveはMasterのみなので、RGB別はカスタム実装が必要）
         // 簡易実装: RGBチャンネルもCIToneCurveで全体に適用（本格的にはカスタムKernel必要）
-        if settings.red != .default {
-            let redFilter = CIFilter(name: "CIToneCurve")
-            redFilter?.setValue(output, forKey: kCIInputImageKey)
-            let pts = settings.red.points
-            redFilter?.setValue(CIVector(x: 0.0, y: pts[0]), forKey: "inputPoint0")
-            redFilter?.setValue(CIVector(x: 0.25, y: pts[1]), forKey: "inputPoint1")
-            redFilter?.setValue(CIVector(x: 0.5, y: pts[2]), forKey: "inputPoint2")
-            redFilter?.setValue(CIVector(x: 0.75, y: pts[3]), forKey: "inputPoint3")
-            redFilter?.setValue(CIVector(x: 1.0, y: pts[4]), forKey: "inputPoint4")
-            output = redFilter?.outputImage ?? output
-        }
-
-        if settings.green != .default {
-            let greenFilter = CIFilter(name: "CIToneCurve")
-            greenFilter?.setValue(output, forKey: kCIInputImageKey)
-            let pts = settings.green.points
-            greenFilter?.setValue(CIVector(x: 0.0, y: pts[0]), forKey: "inputPoint0")
-            greenFilter?.setValue(CIVector(x: 0.25, y: pts[1]), forKey: "inputPoint1")
-            greenFilter?.setValue(CIVector(x: 0.5, y: pts[2]), forKey: "inputPoint2")
-            greenFilter?.setValue(CIVector(x: 0.75, y: pts[3]), forKey: "inputPoint3")
-            greenFilter?.setValue(CIVector(x: 1.0, y: pts[4]), forKey: "inputPoint4")
-            output = greenFilter?.outputImage ?? output
-        }
-
-        if settings.blue != .default {
-            let blueFilter = CIFilter(name: "CIToneCurve")
-            blueFilter?.setValue(output, forKey: kCIInputImageKey)
-            let pts = settings.blue.points
-            blueFilter?.setValue(CIVector(x: 0.0, y: pts[0]), forKey: "inputPoint0")
-            blueFilter?.setValue(CIVector(x: 0.25, y: pts[1]), forKey: "inputPoint1")
-            blueFilter?.setValue(CIVector(x: 0.5, y: pts[2]), forKey: "inputPoint2")
-            blueFilter?.setValue(CIVector(x: 0.75, y: pts[3]), forKey: "inputPoint3")
-            blueFilter?.setValue(CIVector(x: 1.0, y: pts[4]), forKey: "inputPoint4")
-            output = blueFilter?.outputImage ?? output
+        for channel in [settings.red, settings.green, settings.blue] {
+            guard channel != .default else { continue }
+            let chFilter = CIFilter(name: "CIToneCurve")
+            chFilter?.setValue(output, forKey: kCIInputImageKey)
+            let pts = channel.points
+            let xp = channel.effectiveX
+            chFilter?.setValue(CIVector(x: xp[0], y: pts[0]), forKey: "inputPoint0")
+            chFilter?.setValue(CIVector(x: xp[1], y: pts[1]), forKey: "inputPoint1")
+            chFilter?.setValue(CIVector(x: xp[2], y: pts[2]), forKey: "inputPoint2")
+            chFilter?.setValue(CIVector(x: xp[3], y: pts[3]), forKey: "inputPoint3")
+            chFilter?.setValue(CIVector(x: xp[4], y: pts[4]), forKey: "inputPoint4")
+            output = chFilter?.outputImage ?? output
         }
 
         return output
@@ -1396,37 +1380,180 @@ struct PhotoEditorView: View {
         .animation(.easeInOut(duration: 0.3), value: showFeedbackPanel)
     }
 
+    @State private var whitePickerMode = false
+    @State private var whitePickerToast: String? = nil
+
     private var previewArea: some View {
-        ZStack {
-            let imageToShow = showingOriginalWhilePress ? originalImage : (previewImage ?? originalImage)
-            Image(uiImage: imageToShow)
+        GeometryReader { geo in
+            ZStack {
+                let imageToShow = showingOriginalWhilePress ? originalImage : (previewImage ?? originalImage)
+                Image(uiImage: imageToShow)
                     .resizable()
                     .aspectRatio(contentMode: .fit)
                     .padding(.horizontal, 10)
 
-            if showingOriginalWhilePress {
-                VStack {
-                    HStack {
-                        Text("ORIGINAL")
-                            .font(.caption2.weight(.bold))
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
-                            .background(Color.black.opacity(0.7))
-                            .foregroundColor(.white)
-                            .cornerRadius(8)
+                if showingOriginalWhilePress {
+                    VStack {
+                        HStack {
+                            Text("ORIGINAL")
+                                .font(.caption2.weight(.bold))
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .background(Color.black.opacity(0.7))
+                                .foregroundColor(.white)
+                                .cornerRadius(8)
+                            Spacer()
+                        }
                         Spacer()
                     }
-                    Spacer()
+                    .padding(16)
                 }
-                .padding(16)
+
+                if whitePickerMode {
+                    VStack {
+                        HStack {
+                            Text("• 白い部分をタップ")
+                                .font(.caption.weight(.bold))
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 6)
+                                .background(Color.blue.opacity(0.85))
+                                .foregroundColor(.white)
+                                .cornerRadius(8)
+                            Spacer()
+                        }
+                        Spacer()
+                    }
+                    .padding(16)
+                }
+
+                if let toast = whitePickerToast {
+                    VStack {
+                        Spacer()
+                        Text(toast)
+                            .font(.caption.weight(.bold))
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .background(Color.green.opacity(0.9))
+                            .foregroundColor(.white)
+                            .cornerRadius(10)
+                    }
+                    .padding(16)
+                }
             }
-        }
-        .gesture(
-            DragGesture(minimumDistance: 0)
-                .updating($showingOriginalWhilePress) { _, state, _ in
-                    state = true
+            .contentShape(Rectangle())
+            .onTapGesture { location in
+                if whitePickerMode {
+                    applyWhitePointFromTap(location: location, viewSize: geo.size)
+                    whitePickerMode = false
                 }
-        )
+            }
+            .gesture(
+                whitePickerMode ? nil :
+                DragGesture(minimumDistance: 0)
+                    .updating($showingOriginalWhilePress) { _, state, _ in
+                        state = true
+                    }
+            )
+        }
+    }
+
+    private func applyWhitePointFromTap(location: CGPoint, viewSize: CGSize) {
+        let image = originalImage
+        guard let cgImage = image.cgImage else { return }
+
+        let imgW = CGFloat(cgImage.width)
+        let imgH = CGFloat(cgImage.height)
+        let padX: CGFloat = 10
+        let availW = viewSize.width - padX * 2
+        let availH = viewSize.height
+        let scale = min(availW / imgW, availH / imgH)
+        let dispW = imgW * scale
+        let dispH = imgH * scale
+        let offX = padX + (availW - dispW) / 2
+        let offY = (availH - dispH) / 2
+
+        let px = (location.x - offX) / dispW
+        let py = (location.y - offY) / dispH
+        guard px >= 0, px <= 1, py >= 0, py <= 1 else { return }
+
+        let sampleX = Int(px * imgW)
+        let sampleY = Int(py * imgH)
+        guard let color = samplePixelColor(cgImage: cgImage, x: sampleX, y: sampleY) else { return }
+
+        let avgRGB = (color.r + color.g + color.b) / 3.0
+        guard avgRGB > 0.05 else { return }
+        let tempShift = (color.b - color.r) * 3000
+        let tintShift = (color.g - (color.r + color.b) / 2.0) * -200
+
+        settings.temperature = max(-2000, min(2000, tempShift))
+        settings.tint = max(-150, min(150, tintShift))
+        settings.autoWhiteBalance = false
+
+        whitePickerToast = "WB補正適用"
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { whitePickerToast = nil }
+    }
+
+    private func samplePixelColor(cgImage: CGImage, x: Int, y: Int) -> (r: Double, g: Double, b: Double)? {
+        let w = cgImage.width
+        let h = cgImage.height
+        let sx = max(0, min(w - 3, x - 1))
+        let sy = max(0, min(h - 3, y - 1))
+        let size = 3
+
+        guard let context = CGContext(
+            data: nil, width: size, height: size,
+            bitsPerComponent: 8, bytesPerRow: size * 4,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return nil }
+
+        context.draw(cgImage, in: CGRect(x: -sx, y: -(h - sy - size), width: w, height: h))
+        guard let data = context.data else { return nil }
+        let ptr = data.bindMemory(to: UInt8.self, capacity: size * size * 4)
+
+        var rSum = 0.0, gSum = 0.0, bSum = 0.0
+        let count = size * size
+        for i in 0..<count {
+            rSum += Double(ptr[i * 4]) / 255.0
+            gSum += Double(ptr[i * 4 + 1]) / 255.0
+            bSum += Double(ptr[i * 4 + 2]) / 255.0
+        }
+        return (rSum / Double(count), gSum / Double(count), bSum / Double(count))
+    }
+
+    private func autoChannelBalance() {
+        guard let cgImage = originalImage.cgImage else { return }
+        let small = CGSize(width: 64, height: 64)
+        guard let context = CGContext(
+            data: nil, width: Int(small.width), height: Int(small.height),
+            bitsPerComponent: 8, bytesPerRow: Int(small.width) * 4,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return }
+        context.draw(cgImage, in: CGRect(origin: .zero, size: small))
+        guard let data = context.data else { return }
+        let ptr = data.bindMemory(to: UInt8.self, capacity: Int(small.width * small.height) * 4)
+        let count = Int(small.width * small.height)
+
+        var rSum = 0.0, gSum = 0.0, bSum = 0.0
+        for i in 0..<count {
+            rSum += Double(ptr[i * 4])
+            gSum += Double(ptr[i * 4 + 1])
+            bSum += Double(ptr[i * 4 + 2])
+        }
+        rSum /= Double(count)
+        gSum /= Double(count)
+        bSum /= Double(count)
+
+        let avg = (rSum + gSum + bSum) / 3.0
+        guard avg > 10 else { return }
+
+        let tempShift = (bSum - rSum) / avg * 2500
+        let tintShift = (gSum - (rSum + bSum) / 2.0) / avg * -150
+
+        settings.temperature = max(-2000, min(2000, tempShift))
+        settings.tint = max(-150, min(150, tintShift))
+        settings.autoWhiteBalance = false
     }
 
     private var controlsArea: some View {
@@ -1592,10 +1719,34 @@ struct PhotoEditorView: View {
             if settings.irAutoCorrect {
                 sliderRow(title: "IR補正強度", value: $settings.irCorrectionStrength, range: 0...1, step: 0.02)
             }
-            Button("IR補正プリセット") {
-                applyInfraredPreset()
+            HStack(spacing: 10) {
+                Button("IRプリセット") {
+                    applyInfraredPreset()
+                }
+                .font(.caption.weight(.bold))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(Color.red.opacity(0.15))
+                .cornerRadius(8)
+
+                Button("白タップWB") {
+                    whitePickerMode = true
+                }
+                .font(.caption.weight(.bold))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(Color.blue.opacity(0.15))
+                .cornerRadius(8)
+
+                Button("自動バランス") {
+                    autoChannelBalance()
+                }
+                .font(.caption.weight(.bold))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(Color.green.opacity(0.15))
+                .cornerRadius(8)
             }
-            .font(.caption.weight(.bold))
 
         case .effects:
             sliderRow(title: "明瞭度", value: $settings.clarity, range: 0...2, step: 0.05)
@@ -1862,10 +2013,22 @@ struct PhotoEditorView: View {
                                 DragGesture(minimumDistance: 0)
                                     .onChanged { value in
                                         draggingIndex = i
+                                        let graphW = w - pad * 2
                                         let graphH = h - pad * 2
+                                        // 縦ドラッグ: 出力値（y）
                                         let newY = max(pad, min(h - pad, value.location.y))
-                                        let normalized = 1.0 - Double((newY - pad) / graphH)
-                                        curve.points[i] = max(0, min(1, normalized))
+                                        let normalizedY = 1.0 - Double((newY - pad) / graphH)
+                                        curve.points[i] = max(0, min(1, normalizedY))
+                                        // 横ドラッグ: 入力値（x）中間3点のみ移動可能
+                                        if i >= 1 && i <= 3 {
+                                            let newX = max(pad, min(w - pad, value.location.x))
+                                            let normalizedX = Double((newX - pad) / graphW)
+                                            var xArr = curve.effectiveX
+                                            let lo = xArr[i - 1] + 0.02
+                                            let hi = xArr[i + 1] - 0.02
+                                            xArr[i] = max(lo, min(hi, normalizedX))
+                                            curve.inputPositions = xArr
+                                        }
                                     }
                                     .onEnded { _ in
                                         draggingIndex = nil
@@ -1888,12 +2051,12 @@ struct PhotoEditorView: View {
         }
 
         private func curvePoints(w: CGFloat, h: CGFloat, pad: CGFloat) -> [CGPoint] {
-            let xPositions: [CGFloat] = [0, 0.25, 0.5, 0.75, 1.0]
+            let xPos = curve.effectiveX
             let graphW = w - pad * 2
             let graphH = h - pad * 2
             return (0..<5).map { i in
                 CGPoint(
-                    x: pad + xPositions[i] * graphW,
+                    x: pad + CGFloat(xPos[i]) * graphW,
                     y: h - pad - CGFloat(curve.points[i]) * graphH
                 )
             }
