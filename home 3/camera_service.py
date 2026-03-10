@@ -72,7 +72,7 @@ MODE_PROFILES = {
         'check_interval': 0.0,
         'min_cooldown': 0.3,
         'max_per_minute': 60,
-        'lores_size': (64, 48),
+        'lores_size': (128, 96),
         'quality': 70,
         'denoise_override': 'off',
         'wifi_sleep': 0.0,
