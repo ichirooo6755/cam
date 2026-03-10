@@ -1789,6 +1789,10 @@ struct ContentView: View {
         enableStabilization = settings.stabilization
         enableRawMode = settings.rawMode
         manualModeEnabled = !settings.monitoringEnabled
+        detectionIntervalSec = settings.checkInterval
+        if let fps = settings.detectionFps {
+            selectedFPS = fps
+        }
 
         isApplyingRemoteSettings = false
     }

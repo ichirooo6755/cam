@@ -23,6 +23,7 @@ struct CameraSettings: Codable {
     var enableTimestamp: Bool
     var stabilization: Bool  // 手ぶれ補正（電子式）
     var rawMode: Bool  // RAW（DNG）撮影モード
+    var detectionFps: Int?  // 検知フレームレート（30/40/120）
 
     enum CodingKeys: String, CodingKey {
         case cameraMode = "camera_mode"
@@ -42,6 +43,7 @@ struct CameraSettings: Codable {
         case enableTimestamp = "enable_timestamp"
         case stabilization
         case rawMode = "raw_mode"
+        case detectionFps = "detection_fps"
     }
 
     init(from decoder: Decoder) throws {
@@ -79,6 +81,8 @@ struct CameraSettings: Codable {
             try container.decodeIfPresent(Bool.self, forKey: .stabilization) ?? true
         rawMode =
             try container.decodeIfPresent(Bool.self, forKey: .rawMode) ?? false
+        detectionFps =
+            try container.decodeIfPresent(Int.self, forKey: .detectionFps)
     }
 }
 
