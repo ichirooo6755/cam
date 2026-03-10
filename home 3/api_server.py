@@ -680,6 +680,25 @@ def _read_sensor_status_cached() -> dict:
         pass
     return _sensor_status_cache.get('data', {})
 
+_settings_cache = {'mtime_main': 0.0, 'mtime_over': 0.0, 'data': None}
+
+def _load_effective_settings_cached():
+    global _settings_cache
+    try:
+        mt_main = os.path.getmtime(SETTINGS_FILE) if os.path.exists(SETTINGS_FILE) else 0.0
+        mt_over = os.path.getmtime(SESSION_OVERRIDES_FILE) if os.path.exists(SESSION_OVERRIDES_FILE) else 0.0
+        if (mt_main == _settings_cache['mtime_main']
+                and mt_over == _settings_cache['mtime_over']
+                and _settings_cache['data'] is not None):
+            return _settings_cache['data']
+        data = _load_effective_settings()
+        _settings_cache = {'mtime_main': mt_main, 'mtime_over': mt_over, 'data': data}
+        return data
+    except Exception:
+        if _settings_cache['data'] is not None:
+            return _settings_cache['data']
+        return _load_effective_settings()
+
 def _load_effective_settings():
     settings = DEFAULT_SETTINGS.copy()
     if os.path.exists(SETTINGS_FILE):
@@ -902,7 +921,7 @@ class APIHandler(BaseHTTPRequestHandler):
         try:
             sensor = _read_sensor_status_cached()
 
-            settings = _load_effective_settings()
+            settings = _load_effective_settings_cached()
             payload = {
                 'success': True,
                 'sensor': sensor,
@@ -934,7 +953,7 @@ class APIHandler(BaseHTTPRequestHandler):
 
             sensor = _read_sensor_status_cached()
 
-            settings = _load_effective_settings()
+            settings = _load_effective_settings_cached()
 
             target_iso = data.get('target_iso')
             if target_iso == 'auto':
@@ -1108,6 +1127,23 @@ class APIHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(html.encode())
     
+    def _sendfile_or_copy(self, filepath):
+        """os.sendfileでゼロコピー転送、失敗時はshutilフォールバック"""
+        try:
+            with open(filepath, 'rb') as f:
+                fd_in = f.fileno()
+                fd_out = self.wfile.fileno()
+                offset = 0
+                size = os.fstat(fd_in).st_size
+                while offset < size:
+                    sent = os.sendfile(fd_out, fd_in, offset, size - offset)
+                    if sent == 0:
+                        break
+                    offset += sent
+        except (OSError, AttributeError):
+            with open(filepath, 'rb') as f:
+                shutil.copyfileobj(f, self.wfile)
+
     def serve_photo_file(self, path):
         """写真ファイルを配信"""
         try:
@@ -1131,8 +1167,9 @@ class APIHandler(BaseHTTPRequestHandler):
             self.send_header('Content-Type', content_type)
             self.send_header('Content-Length', os.path.getsize(filepath))
             self.end_headers()
-            with open(filepath, 'rb') as f:
-                shutil.copyfileobj(f, self.wfile)
+            self._sendfile_or_copy(filepath)
+        except (BrokenPipeError, ConnectionResetError):
+            return
         except Exception as e:
             logger.error(f"Error serving photo: {e}")
             self.send_error(500)
@@ -1179,8 +1216,9 @@ class APIHandler(BaseHTTPRequestHandler):
             self.send_header('Content-Type', content_type)
             self.send_header('Content-Length', os.path.getsize(content_path))
             self.end_headers()
-            with open(content_path, 'rb') as f:
-                shutil.copyfileobj(f, self.wfile)
+            self._sendfile_or_copy(content_path)
+        except (BrokenPipeError, ConnectionResetError):
+            return
         except Exception as e:
             logger.error(f"Error serving photo (POST): {e}")
             self.send_error(500)

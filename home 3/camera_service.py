@@ -27,6 +27,11 @@ from picamera2 import Picamera2
 import numpy as np
 
 try:
+    from PIL import Image as _PILImage
+except ImportError:
+    _PILImage = None
+
+try:
     import libcamera
 except ImportError:
     libcamera = None
@@ -332,16 +337,15 @@ _ADAPTIVE_GAIN_MAX = 16.0          # ISO 1600
 
 def _analyze_brightness(filepath: str) -> float:
     """撮影した写真の平均輝度を返す（0-255）"""
-    try:
-        from PIL import Image
-        with Image.open(filepath) as img:
-            small = img.resize((160, 120))
-            if small.mode != 'L':
-                small = small.convert('L')
-            pixels = list(small.getdata())
-            return sum(pixels) / len(pixels) if pixels else 128.0
-    except Exception:
-        pass
+    if _PILImage is not None:
+        try:
+            with _PILImage.open(filepath) as img:
+                small = img.resize((80, 60))
+                if small.mode != 'L':
+                    small = small.convert('L')
+                return float(np.mean(np.asarray(small)))
+        except Exception:
+            pass
     try:
         arr = np.fromfile(filepath, dtype=np.uint8)
         if len(arr) > 1000:
@@ -798,7 +802,11 @@ def main():
                 write_sensor_status(sensor_state)
                 last_sensor_status_write = current_time
 
-            time.sleep(check_interval)
+            # adaptive sleep: ループ処理時間を差し引いて正確なポーリング間隔を維持
+            elapsed = time.time() - current_time
+            remaining = check_interval - elapsed
+            if remaining > 0.001:
+                time.sleep(remaining)
 
     except KeyboardInterrupt:
         logger.info("Service stopped by user")
