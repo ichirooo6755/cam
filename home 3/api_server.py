@@ -21,6 +21,7 @@ try:
 except ImportError:
     Image = None
 from http.server import HTTPServer, BaseHTTPRequestHandler
+from socketserver import ThreadingMixIn
 from urllib.parse import urlparse
 
 logging.basicConfig(level=logging.INFO)
@@ -32,7 +33,7 @@ THUMBNAIL_MAX_DIM_DEFAULT = 300
 THUMBNAIL_QUALITY = 75
 SETTINGS_FILE = '/home/pi/camera_settings.json'
 SESSION_OVERRIDES_FILE = '/home/pi/camera_session_overrides.json'
-SENSOR_STATUS_FILE = '/home/pi/sensor_status.json'
+SENSOR_STATUS_FILE = '/run/picamera/sensor_status.json'
 BOOT_NETWORK_APPLIED_MARKERS = (
     '/run/picamera_boot_network_applied',
     '/tmp/picamera_boot_network_applied',
@@ -845,8 +846,9 @@ def _ensure_thumbnail(filepath, max_dim):
         logger.warning(f"Thumbnail generation failed: {e}")
         return None
 
-class ReusableHTTPServer(HTTPServer):
+class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
     allow_reuse_address = True
+    daemon_threads = True
 
 class APIHandler(BaseHTTPRequestHandler):
     
@@ -2090,7 +2092,7 @@ def main():
     threading.Thread(target=_wifi_recovery_watchdog_loop, daemon=True).start()
     
     server_address = ('0.0.0.0', 8001)
-    httpd = ReusableHTTPServer(server_address, APIHandler)
+    httpd = ThreadedHTTPServer(server_address, APIHandler)
     logger.info("API Server running on port 8001")
     httpd.serve_forever()
 

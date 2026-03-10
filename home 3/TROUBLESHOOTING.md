@@ -1640,3 +1640,31 @@ curl -sS -X POST "$BASE/api/photo/meta" \
 - `api_server.py` に `_read_sensor_status_cached()` を追加（mtime比較でファイル再読み込みをスキップ）
 - `sensor_status.json` にタイミング分解情報を追加（`last_camera_ms`, `last_wifi_sleep_ms`）
 - iOSアプリの `CameraStatusView` に CAPTURE PERFORMANCE セクションを追加（D→C色分け + CAM/WIFI/OTHER分解表示）
+
+### 改善: アーキテクチャレベルの最適化（言語変更不要）
+**症状**
+- 検知から撮影まで「新フレーム待ち」が発生（30-100ms）
+- sensor_status.jsonのSD書き込みが2秒ごとに発生（SDカード寿命・レイテンシ）
+- HTTPサーバがシングルスレッドで同時リクエスト処理不可
+
+**原因**
+1. `capture_metadata()` で明るさ判定後、`capture_file()` で**別フレーム**を撮影していた
+2. `sensor_status.json` がSDカード上（`/home/pi/`）に配置されていた
+3. `HTTPServer` が `BaseHTTPRequestHandler` ベースで逐次処理のみ
+4. CPUガバナーが `ondemand`（省電力モード）のまま
+
+**解決策**
+- `capture_request()` で**検知フレームをそのまま保存**（同一フレーム撮影方式）
+  - 「検知→新フレーム待ち」の30-100msを完全除去
+  - `finally` ブロックで必ず `request.release()` を保証
+- `SENSOR_STATUS_FILE` を `/run/picamera/sensor_status.json`（tmpfs = RAM）に移動
+  - `RuntimeDirectory=picamera` で systemd がtmpfsディレクトリを自動作成
+  - SD書き込み削減 + 読み書きレイテンシ大幅短縮
+- `ThreadedHTTPServer(ThreadingMixIn, HTTPServer)` で並行リクエスト処理
+  - `daemon_threads=True` でプロセス終了時にスレッドが自動停止
+- `ExecStartPre` で CPUガバナーを `performance` に設定
+  - 撮影時のCPUクロック昇圧待ちを除去
+
+**言語変更の検討結果**
+- Python継続が最適と判断: picamera2がPython専用、CPU処理の実体はC++（libcamera/numpy）
+- ボトルネックは言語速度ではなくI/O・待機・アーキテクチャ設計にあった

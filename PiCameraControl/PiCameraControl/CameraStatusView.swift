@@ -84,6 +84,9 @@ struct CameraStatusView: View {
             .onAppear {
                 Task { await refreshStatus() }
             }
+            .onReceive(Timer.publish(every: 3, on: .main, in: .common).autoconnect()) { _ in
+                Task { await refreshStatus() }
+            }
             .alert("エラー", isPresented: $showError) {
                 Button("OK") {
                     errorMessage = nil

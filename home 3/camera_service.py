@@ -47,7 +47,8 @@ logger = logging.getLogger(__name__)
 PHOTOS_DIR = '/home/pi/photos'
 SETTINGS_FILE = '/home/pi/camera_settings.json'
 SESSION_OVERRIDES_FILE = '/home/pi/camera_session_overrides.json'
-SENSOR_STATUS_FILE = '/home/pi/sensor_status.json'
+SENSOR_STATUS_FILE = '/run/picamera/sensor_status.json'
+_SENSOR_STATUS_DIR = '/run/picamera'
 
 BRIGHTNESS_THRESHOLD = 30
 MIN_CHANGE_AMOUNT = 5
@@ -148,6 +149,7 @@ DEFAULT_SETTINGS = {
 }
 
 os.makedirs(PHOTOS_DIR, exist_ok=True)
+os.makedirs(_SENSOR_STATUS_DIR, exist_ok=True)
 
 # --- レートリミッター ---
 _capture_timestamps: deque = deque()
@@ -708,12 +710,19 @@ def main():
                 time.sleep(check_interval)
                 continue
 
-            # --- 光検知ループ（旧コード方式: 軽量・高速） ---
+            # --- 光検知ループ（同一フレーム撮影方式） ---
+            # capture_request() で取得したフレームで明るさを判定し、
+            # トリガ時はそのフレームをそのまま保存。
+            # 「検知→新フレーム待ち」の遅延を完全に除去する。
+            request = None
             try:
-                brightness, lux, ae_gain, ae_exposure_us = get_sensor_sample(camera)
+                request = camera.capture_request()
+                brightness, lux, ae_gain, ae_exposure_us = get_sensor_sample_from_request(request)
 
                 if last_brightness is None:
                     last_brightness = brightness
+                    request.release()
+                    request = None
                     time.sleep(check_interval)
                     continue
 
@@ -729,6 +738,8 @@ def main():
                 sensor_state['last_change_amount'] = round(float(change_amount), 3)
 
                 if change_amount < 0:
+                    request.release()
+                    request = None
                     time.sleep(check_interval)
                     continue
 
@@ -747,6 +758,8 @@ def main():
                         logger.warning(
                             "Rate limit (%d/min). Skipping.", _active_max_per_minute)
                         sensor_state['state'] = 'rate_limited'
+                        request.release()
+                        request = None
                         time.sleep(check_interval)
                         continue
 
@@ -757,8 +770,12 @@ def main():
                     detected_at = time.time()
                     sensor_state['last_detected_at'] = datetime.now().isoformat()
 
+                    # 同一フレームを保存（検知フレーム = 撮影フレーム）
                     result = capture_photo(
-                        camera, settings, active_profile, detected_at=detected_at)
+                        camera, settings, active_profile,
+                        detected_at=detected_at, request=request)
+                    request.release()
+                    request = None
                     if result['success']:
                         last_capture_time = time.time()
                         sensor_state['last_capture_at'] = datetime.now().isoformat()
@@ -769,6 +786,12 @@ def main():
             except Exception as e:
                 logger.error(f"Detection error: {e}")
                 sensor_state['last_error'] = str(e)
+            finally:
+                if request is not None:
+                    try:
+                        request.release()
+                    except Exception:
+                        pass
 
             # --- センサーステータス書き込み ---
             if current_time - last_sensor_status_write >= SENSOR_STATUS_WRITE_INTERVAL:
