@@ -584,18 +584,27 @@ def main():
                 profile_cooldown = active_profile['min_cooldown']
                 _active_max_per_minute = active_profile['max_per_minute']
 
-                try:
-                    user_check = float(settings.get('check_interval', profile_check))
-                except (TypeError, ValueError):
-                    user_check = profile_check
-                # ユーザー値をプロファイル下限でクランプ（0.0=フレームレート限界）
-                check_interval = max(profile_check, min(user_check, 5.0))
+                # check_interval: ユーザー明示値があればそれを使い、なければプロファイル値
+                # DEFAULT_SETTINGSの0.5がプロファイルの0.0を潰さないようにする
+                raw_check = settings.get('check_interval')
+                if raw_check is not None and raw_check != DEFAULT_SETTINGS.get('check_interval'):
+                    try:
+                        user_check = float(raw_check)
+                    except (TypeError, ValueError):
+                        user_check = profile_check
+                    check_interval = max(profile_check, min(user_check, 5.0))
+                else:
+                    check_interval = profile_check
 
-                try:
-                    user_cooldown = float(settings.get('capture_cooldown', profile_cooldown))
-                except (TypeError, ValueError):
-                    user_cooldown = profile_cooldown
-                capture_cooldown = max(profile_cooldown, min(user_cooldown, 30.0))
+                raw_cooldown = settings.get('capture_cooldown')
+                if raw_cooldown is not None and raw_cooldown != DEFAULT_SETTINGS.get('capture_cooldown'):
+                    try:
+                        user_cooldown = float(raw_cooldown)
+                    except (TypeError, ValueError):
+                        user_cooldown = profile_cooldown
+                    capture_cooldown = max(profile_cooldown, min(user_cooldown, 30.0))
+                else:
+                    capture_cooldown = profile_cooldown
 
                 monitoring_enabled = bool(settings.get('monitoring_enabled', True))
                 try:
