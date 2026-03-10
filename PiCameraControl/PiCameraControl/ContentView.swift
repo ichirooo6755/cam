@@ -1178,6 +1178,18 @@ struct ContentView: View {
 
     @State private var detectionIntervalSec: Double = 0.2
 
+    private func detectionIntervalLabel(_ sec: Double) -> String {
+        if sec < 0.001 { return "最速" }
+        if sec < 1.0 { return String(format: "%dms", Int(sec * 1000)) }
+        return String(format: "%.1fs", sec)
+    }
+
+    private func detectionIntervalStep(_ sec: Double) -> Double {
+        if sec < 0.1 { return 0.01 }
+        if sec < 1.0 { return 0.05 }
+        return 0.5
+    }
+
     private var detectionIntervalModule: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 12) {
@@ -1186,14 +1198,20 @@ struct ContentView: View {
                     .foregroundColor(.secondary)
                     .frame(width: 50, alignment: .leading)
 
-                Text(String(format: "%.1f s", detectionIntervalSec))
+                Text(detectionIntervalLabel(detectionIntervalSec))
                     .font(.system(size: 18, weight: .bold, design: .monospaced))
                     .foregroundColor(.orange)
-                    .frame(minWidth: 50)
+                    .frame(minWidth: 60)
 
-                Text("(秒に1回)")
-                    .font(.system(size: 9))
-                    .foregroundColor(.secondary)
+                if detectionIntervalSec < 0.001 {
+                    Text("~30fps")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundColor(.orange.opacity(0.8))
+                } else {
+                    Text("間隔")
+                        .font(.system(size: 9))
+                        .foregroundColor(.secondary)
+                }
 
                 Spacer()
 
@@ -1203,7 +1221,9 @@ struct ContentView: View {
                         .foregroundColor(.orange.opacity(0.6))
                     HStack(spacing: 8) {
                         Button {
-                            detectionIntervalSec = max(0.1, detectionIntervalSec - 0.1)
+                            let step = detectionIntervalStep(detectionIntervalSec)
+                            detectionIntervalSec = max(0.0, detectionIntervalSec - step)
+                            if detectionIntervalSec < 0.005 { detectionIntervalSec = 0.0 }
                             updateDetectionInterval(detectionIntervalSec)
                         } label: {
                             Image(systemName: "minus")
@@ -1212,7 +1232,9 @@ struct ContentView: View {
                         }
                         .buttonStyle(.bordered)
                         Button {
-                            detectionIntervalSec = min(5.0, detectionIntervalSec + 0.1)
+                            let step = detectionIntervalStep(detectionIntervalSec)
+                            if detectionIntervalSec < 0.001 { detectionIntervalSec = 0.01 }
+                            else { detectionIntervalSec = min(5.0, detectionIntervalSec + step) }
                             updateDetectionInterval(detectionIntervalSec)
                         } label: {
                             Image(systemName: "plus")

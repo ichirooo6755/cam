@@ -7,7 +7,7 @@ Camera: Raspberry Pi Camera Module HQ (12.3MP)
 Sensor: Sony IMX477 (7.9mm diagonal, 1.55μm pixel)
 
 モード別パフォーマンスプロファイル:
-  reaction  : 検知→撮影レイテンシ最小。100ms ポーリング、0.5s クールダウン、denoise OFF
+  reaction  : 検知→撮影レイテンシ最小。全フレーム監視（~30fps）、0.3s クールダウン、denoise OFF
   standard  : 汎用高速。200ms ポーリング、1.5s クールダウン
   manual    : standard と同等
   quality   : 最高画質。500ms ポーリング、3s クールダウン、cdn_hq
@@ -69,10 +69,10 @@ SENSOR_STATUS_WRITE_INTERVAL = 2.0
 # denoise_override  : None=設定に従う / 文字列=強制上書き
 MODE_PROFILES = {
     'reaction': {
-        'check_interval': 0.1,
-        'min_cooldown': 0.5,
-        'max_per_minute': 24,
-        'lores_size': (128, 96),
+        'check_interval': 0.0,
+        'min_cooldown': 0.3,
+        'max_per_minute': 60,
+        'lores_size': (64, 48),
         'quality': 70,
         'denoise_override': 'off',
         'wifi_sleep': 0.0,
@@ -588,8 +588,8 @@ def main():
                     user_check = float(settings.get('check_interval', profile_check))
                 except (TypeError, ValueError):
                     user_check = profile_check
-                # ユーザーがもっと速い値を指定してもプロファイル下限を尊重
-                check_interval = max(profile_check, min(user_check, 2.0))
+                # ユーザー値をプロファイル下限でクランプ（0.0=フレームレート限界）
+                check_interval = max(profile_check, min(user_check, 5.0))
 
                 try:
                     user_cooldown = float(settings.get('capture_cooldown', profile_cooldown))
@@ -802,11 +802,12 @@ def main():
                 write_sensor_status(sensor_state)
                 last_sensor_status_write = current_time
 
-            # adaptive sleep: ループ処理時間を差し引いて正確なポーリング間隔を維持
-            elapsed = time.time() - current_time
-            remaining = check_interval - elapsed
-            if remaining > 0.001:
-                time.sleep(remaining)
+            # adaptive sleep: check_interval=0ならsleep無し（フレームレート限界で監視）
+            if check_interval > 0.001:
+                elapsed = time.time() - current_time
+                remaining = check_interval - elapsed
+                if remaining > 0.001:
+                    time.sleep(remaining)
 
     except KeyboardInterrupt:
         logger.info("Service stopped by user")
