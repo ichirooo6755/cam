@@ -16,3 +16,13 @@
 - **症状**: 設定画面（`ContentView` の `settingsView`）の中央に不要な `previewArea` とそれが含む要素（フォーカスピーキングなど）が表示され、意図しないレイアウトになっていた。
 - **原因**: 以前の実装に紐づいていた `previewArea` プロパティの呼び出しや定義がそのまま残っていた。
 - **解決策**: `ContentView.swift` にあった `previewArea` の定義ならびに利用箇所を全て削除し、設定画面をすっきりさせました。
+
+## Performance Optimization (2026-03-10)
+
+### 検知→撮影レイテンシ（D→C）短縮
+- **WiFi sleep モード別化**: reaction=0ms, standard=80ms, quality=100ms, battery=150ms（旧: 全モード固定150ms）
+- **適応型露出をバックグラウンド化**: `_adapt_exposure()` を撮影パスから分離し、メインループ復帰を高速化
+- **レートリミッター最適化**: `list.pop(0)` → `deque.popleft()` (O(1))
+- **APIキャッシュ**: `sensor_status.json` のmtimeベースキャッシュで不要な再パースを回避
+- **タイミング分解記録**: `last_camera_ms` / `last_wifi_sleep_ms` をsensor_statusに追加
+- **iOS CAPTURE PERFORMANCE セクション**: D→Cレイテンシ色分け表示 + CAM/WIFI/OTHER分解バー

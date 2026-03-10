@@ -20,6 +20,8 @@ import os
 import time
 import json
 import logging
+import threading
+from collections import deque
 from datetime import datetime
 from picamera2 import Picamera2
 import numpy as np
@@ -67,6 +69,7 @@ MODE_PROFILES = {
         'lores_size': (128, 96),
         'quality': 70,
         'denoise_override': 'off',
+        'wifi_sleep': 0.0,
     },
     'standard': {
         'check_interval': 0.2,
@@ -75,6 +78,7 @@ MODE_PROFILES = {
         'lores_size': (160, 120),
         'quality': 90,
         'denoise_override': None,
+        'wifi_sleep': 0.08,
     },
     'manual': {
         'check_interval': 0.2,
@@ -83,6 +87,7 @@ MODE_PROFILES = {
         'lores_size': (160, 120),
         'quality': 90,
         'denoise_override': None,
+        'wifi_sleep': 0.08,
     },
     'quality': {
         'check_interval': 0.5,
@@ -91,6 +96,7 @@ MODE_PROFILES = {
         'lores_size': (160, 120),
         'quality': 100,
         'denoise_override': 'cdn_hq',
+        'wifi_sleep': 0.10,
     },
     'night': {
         'check_interval': 0.5,
@@ -99,6 +105,7 @@ MODE_PROFILES = {
         'lores_size': (160, 120),
         'quality': 95,
         'denoise_override': 'cdn_hq',
+        'wifi_sleep': 0.10,
     },
     'raw': {
         'check_interval': 0.5,
@@ -107,6 +114,7 @@ MODE_PROFILES = {
         'lores_size': (160, 120),
         'quality': 100,
         'denoise_override': None,
+        'wifi_sleep': 0.10,
     },
     'battery': {
         'check_interval': 1.0,
@@ -115,6 +123,7 @@ MODE_PROFILES = {
         'lores_size': (128, 96),
         'quality': 80,
         'denoise_override': None,
+        'wifi_sleep': 0.15,
     },
 }
 _DEFAULT_PROFILE = MODE_PROFILES['standard']
@@ -141,14 +150,14 @@ DEFAULT_SETTINGS = {
 os.makedirs(PHOTOS_DIR, exist_ok=True)
 
 # --- レートリミッター ---
-_capture_timestamps = []
+_capture_timestamps: deque = deque()
 _active_max_per_minute = 15
 
 def _rate_limit_ok() -> bool:
     now = time.time()
     cutoff = now - 60.0
     while _capture_timestamps and _capture_timestamps[0] < cutoff:
-        _capture_timestamps.pop(0)
+        _capture_timestamps.popleft()
     return len(_capture_timestamps) < _active_max_per_minute
 
 def _record_capture():
@@ -390,6 +399,14 @@ def _adapt_exposure(camera: 'Picamera2', filepath: str, settings: dict) -> None:
         logger.warning("Failed to apply adaptive gain: %s", e)
 
 
+def _adapt_exposure_background(camera, filepath, settings):
+    """適応型露出をバックグラウンドスレッドで実行"""
+    try:
+        _adapt_exposure(camera, filepath, settings)
+    except Exception as e:
+        logger.debug("Adaptive exposure background error: %s", e)
+
+
 def save_request_to_file(request, filepath, settings, profile):
     """キャプチャリクエストをファイルに保存。リクエストのreleaseは呼び出し元が行う。"""
     raw_mode = settings.get('raw_mode', False)
@@ -444,8 +461,13 @@ def capture_photo(camera, settings: dict, profile: dict, detected_at: float = No
                     camera.switch_mode_and_capture_file(
                         camera.still_configuration, filepath)
 
-        # WiFi AP安定化
-        time.sleep(0.15)
+        camera_done = time.time()
+        camera_ms = round((camera_done - capture_start) * 1000.0, 1)
+
+        # WiFi AP安定化（モード別: reactionは0ms、batteryは150ms）
+        wifi_sleep_s = profile.get('wifi_sleep', 0.15)
+        if wifi_sleep_s > 0:
+            time.sleep(wifi_sleep_s)
 
         capture_end = time.time()
         delay_ms = None
@@ -453,21 +475,29 @@ def capture_photo(camera, settings: dict, profile: dict, detected_at: float = No
             delay_ms = round((capture_end - detected_at) * 1000.0, 1)
 
         logger.info(
-            "Captured: %s (%.3fs, delay=%s, q=%d)",
+            "Captured: %s (cam=%.0fms wifi=%.0fms total=%sms q=%d)",
             os.path.basename(filepath),
-            capture_end - capture_start,
-            f"{delay_ms}ms" if delay_ms else "N/A",
+            camera_ms,
+            wifi_sleep_s * 1000,
+            f"{delay_ms}" if delay_ms else "N/A",
             quality,
         )
         _record_capture()
 
-        # 適応型露出: 撮影結果の明るさから次のISO（gain）を自動調整
-        try:
-            _adapt_exposure(camera, filepath, settings)
-        except Exception as e:
-            logger.debug("Adaptive exposure analysis failed: %s", e)
+        # 適応型露出: バックグラウンドで実行（撮影パスをブロックしない）
+        threading.Thread(
+            target=_adapt_exposure_background,
+            args=(camera, filepath, settings),
+            daemon=True,
+        ).start()
 
-        return {'success': True, 'filepath': filepath, 'delay_ms': delay_ms}
+        return {
+            'success': True,
+            'filepath': filepath,
+            'delay_ms': delay_ms,
+            'camera_ms': camera_ms,
+            'wifi_sleep_ms': round(wifi_sleep_s * 1000.0, 1),
+        }
 
     except Exception as e:
         logger.error(f"Capture failed: {e}")
@@ -520,6 +550,9 @@ def main():
         'last_capture_at': None,
         'last_detected_at': None,
         'last_detect_to_capture_ms': None,
+        'last_camera_ms': None,
+        'last_wifi_sleep_ms': None,
+        'max_per_minute': _active_max_per_minute,
     }
     last_sensor_status_write = 0.0
 
@@ -730,6 +763,8 @@ def main():
                         last_capture_time = time.time()
                         sensor_state['last_capture_at'] = datetime.now().isoformat()
                         sensor_state['last_detect_to_capture_ms'] = result.get('delay_ms')
+                        sensor_state['last_camera_ms'] = result.get('camera_ms')
+                        sensor_state['last_wifi_sleep_ms'] = result.get('wifi_sleep_ms')
 
             except Exception as e:
                 logger.error(f"Detection error: {e}")

@@ -1621,3 +1621,22 @@ curl -sS -X POST "$BASE/api/photo/meta" \
 3. iPhoneを `PiCamera` に接続
 4. アプリの右上IPが `192.168.4.1` に戻ることを確認
 5. 写真一覧が再取得できることを確認
+
+### 改善: 検知→撮影レイテンシ（D→C）の短縮
+**症状**
+- reactionモードでもD→Cが200ms以上になる
+- 撮影ごとにメインループが数百ms停止し、次の検知が遅れる
+
+**原因**
+1. WiFi安定化の `time.sleep(0.15)` が全モードで固定150ms
+2. `_adapt_exposure()` が撮影パス上で同期実行（PIL画像解析 + set_controls）
+3. レートリミッターの `list.pop(0)` が O(n)
+4. `sensor_status.json` を毎APIリクエストで再パース
+
+**解決策**
+- `wifi_sleep` をモード別に設定（reaction=0ms, standard=80ms, battery=150ms）
+- `_adapt_exposure()` をバックグラウンドスレッドで実行（撮影パスをブロックしない）
+- レートリミッターを `collections.deque` に変更（O(1) popleft）
+- `api_server.py` に `_read_sensor_status_cached()` を追加（mtime比較でファイル再読み込みをスキップ）
+- `sensor_status.json` にタイミング分解情報を追加（`last_camera_ms`, `last_wifi_sleep_ms`）
+- iOSアプリの `CameraStatusView` に CAPTURE PERFORMANCE セクションを追加（D→C色分け + CAM/WIFI/OTHER分解表示）

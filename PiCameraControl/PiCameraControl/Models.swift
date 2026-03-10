@@ -377,6 +377,9 @@ struct SensorRuntimeStatus: Codable {
     let lastCaptureAt: String?
     let lastDetectedAt: String?
     let lastDetectToCaptureMs: Double?
+    let lastCameraMs: Double?
+    let lastWifiSleepMs: Double?
+    let maxPerMinute: Int?
     let updatedAt: String?
 
     enum CodingKeys: String, CodingKey {
@@ -397,6 +400,9 @@ struct SensorRuntimeStatus: Codable {
         case lastCaptureAt = "last_capture_at"
         case lastDetectedAt = "last_detected_at"
         case lastDetectToCaptureMs = "last_detect_to_capture_ms"
+        case lastCameraMs = "last_camera_ms"
+        case lastWifiSleepMs = "last_wifi_sleep_ms"
+        case maxPerMinute = "max_per_minute"
         case updatedAt = "updated_at"
     }
 }

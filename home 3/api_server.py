@@ -660,6 +660,25 @@ METERING_SHUTTER_US_STOPS = [
     20_000_000,
 ]
 
+_sensor_status_cache = {'mtime': 0.0, 'data': {}}
+
+def _read_sensor_status_cached() -> dict:
+    global _sensor_status_cache
+    try:
+        if not os.path.exists(SENSOR_STATUS_FILE):
+            return {}
+        mtime = os.path.getmtime(SENSOR_STATUS_FILE)
+        if mtime == _sensor_status_cache['mtime']:
+            return _sensor_status_cache['data']
+        with open(SENSOR_STATUS_FILE, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            _sensor_status_cache = {'mtime': mtime, 'data': data}
+            return data
+    except Exception:
+        pass
+    return _sensor_status_cache.get('data', {})
+
 def _load_effective_settings():
     settings = DEFAULT_SETTINGS.copy()
     if os.path.exists(SETTINGS_FILE):
@@ -879,12 +898,7 @@ class APIHandler(BaseHTTPRequestHandler):
 
     def serve_sensor_status(self):
         try:
-            sensor = {}
-            if os.path.exists(SENSOR_STATUS_FILE):
-                with open(SENSOR_STATUS_FILE, 'r', encoding='utf-8') as f:
-                    loaded = json.load(f)
-                    if isinstance(loaded, dict):
-                        sensor = loaded
+            sensor = _read_sensor_status_cached()
 
             settings = _load_effective_settings()
             payload = {
@@ -916,12 +930,7 @@ class APIHandler(BaseHTTPRequestHandler):
             if data is None:
                 return
 
-            sensor = {}
-            if os.path.exists(SENSOR_STATUS_FILE):
-                with open(SENSOR_STATUS_FILE, 'r', encoding='utf-8') as f:
-                    loaded = json.load(f)
-                    if isinstance(loaded, dict):
-                        sensor = loaded
+            sensor = _read_sensor_status_cached()
 
             settings = _load_effective_settings()
 

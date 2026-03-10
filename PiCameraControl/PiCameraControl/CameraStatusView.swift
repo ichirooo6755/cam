@@ -43,6 +43,11 @@ struct CameraStatusView: View {
                         // 測光セクション
                         meteringSection
 
+                        // パフォーマンス
+                        if let sensor = sensorStatus {
+                            capturePerformanceSection(sensor)
+                        }
+
                         // センサー情報
                         if let sensor = sensorStatus {
                             sensorInfoSection(sensor)
@@ -255,6 +260,103 @@ struct CameraStatusView: View {
                 .fill(MinimalTheme.Background.surface)
                 .shadow(color: .black.opacity(0.3), radius: 10, y: 5)
         )
+    }
+
+    // MARK: - キャプチャパフォーマンスセクション
+
+    private func capturePerformanceSection(_ sensor: SensorRuntimeStatus) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("CAPTURE PERFORMANCE")
+                .font(.system(size: 11, weight: .bold, design: .monospaced))
+                .foregroundColor(.red.opacity(0.7))
+                .tracking(2)
+
+            // D→C レイテンシ（色分け）
+            if let d2c = sensor.lastDetectToCaptureMs {
+                HStack(spacing: 12) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("D\u{2192}C")
+                            .font(.system(size: 10, weight: .bold, design: .monospaced))
+                            .foregroundColor(.gray)
+                        Text(String(format: "%.0f ms", d2c))
+                            .font(.system(size: 28, weight: .black, design: .monospaced))
+                            .foregroundColor(d2cColor(d2c))
+                    }
+
+                    Spacer()
+
+                    // タイミング分解バー
+                    VStack(alignment: .trailing, spacing: 4) {
+                        if let cam = sensor.lastCameraMs {
+                            timingRow(label: "CAM", ms: cam, color: .blue)
+                        }
+                        if let wifi = sensor.lastWifiSleepMs {
+                            timingRow(label: "WIFI", ms: wifi, color: .orange)
+                        }
+                        if let cam = sensor.lastCameraMs, let wifi = sensor.lastWifiSleepMs {
+                            let other = max(0, d2c - cam - wifi)
+                            if other > 1 {
+                                timingRow(label: "OTHER", ms: other, color: .gray)
+                            }
+                        }
+                    }
+                }
+            } else {
+                Text("\u{2014}")
+                    .font(.system(size: 20, weight: .bold, design: .monospaced))
+                    .foregroundColor(.gray)
+            }
+
+            Divider()
+                .background(Color.gray.opacity(0.3))
+
+            // ループ設定
+            HStack(spacing: 16) {
+                if let interval = sensor.checkInterval {
+                    miniStat(label: "POLL", value: String(format: "%.0fms", interval * 1000))
+                }
+                if let cooldown = sensor.captureCooldown {
+                    miniStat(label: "COOL", value: String(format: "%.1fs", cooldown))
+                }
+                if let maxPm = sensor.maxPerMinute {
+                    miniStat(label: "MAX", value: "\(maxPm)/m")
+                }
+            }
+        }
+        .padding(20)
+        .background(
+            RoundedRectangle(cornerRadius: 16)
+                .fill(MinimalTheme.Background.surface)
+                .shadow(color: .black.opacity(0.3), radius: 10, y: 5)
+        )
+    }
+
+    private func d2cColor(_ ms: Double) -> Color {
+        if ms < 200 { return .green }
+        if ms < 500 { return .yellow }
+        return .red
+    }
+
+    private func timingRow(label: String, ms: Double, color: Color) -> some View {
+        HStack(spacing: 6) {
+            Text(label)
+                .font(.system(size: 9, weight: .bold, design: .monospaced))
+                .foregroundColor(.gray)
+            Text(String(format: "%.0fms", ms))
+                .font(.system(size: 12, weight: .bold, design: .monospaced))
+                .foregroundColor(color)
+        }
+    }
+
+    private func miniStat(label: String, value: String) -> some View {
+        VStack(spacing: 2) {
+            Text(label)
+                .font(.system(size: 9, weight: .bold, design: .monospaced))
+                .foregroundColor(.gray)
+            Text(value)
+                .font(.system(size: 12, weight: .bold, design: .monospaced))
+                .foregroundColor(.white.opacity(0.8))
+        }
     }
 
     // MARK: - センサー情報セクション
