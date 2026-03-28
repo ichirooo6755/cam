@@ -113,128 +113,7 @@ extension View {
     }
 }
 
-// MARK: - Drag Value Controls
-
-struct DragOptionControl<T: Hashable>: View {
-    var title: String
-    @Binding var selected: T
-    var options: [T]
-    var label: (T) -> String
-    var upLabel: String
-    var downLabel: String
-    var color: Color
-    var onChange: (T) -> Void
-
-    @State private var isDragging = false
-    @State private var dragStartIndex: Int = 0
-
-    private var currentIndex: Int {
-        options.firstIndex(of: selected) ?? 0
-    }
-
-    var body: some View {
-        HStack(spacing: 12) {
-            Text(title)
-                .font(.caption2.weight(.black))
-                .foregroundColor(.secondary)
-                .frame(width: 65, alignment: .leading)
-
-            VStack(spacing: 1) {
-                Text("\u{25B2} \(upLabel)")
-                    .font(.system(size: 7, weight: .bold))
-                    .foregroundColor(color.opacity(isDragging ? 0.9 : 0.4))
-
-                Text(label(selected))
-                    .font(.system(size: 20, weight: .black, design: .monospaced))
-                    .foregroundColor(color)
-                    .frame(minWidth: 70, minHeight: 44)
-                    .background(RoundedRectangle(cornerRadius: 10).fill(color.opacity(isDragging ? 0.15 : 0.05)))
-                    .gesture(
-                        DragGesture(minimumDistance: 4)
-                            .onChanged { g in
-                                if !isDragging {
-                                    isDragging = true
-                                    dragStartIndex = currentIndex
-                                }
-                                let steps = Int(-g.translation.height / 28)
-                                let idx = max(0, min(options.count - 1, dragStartIndex + steps))
-                                if idx != currentIndex {
-                                    selected = options[idx]
-                                    onChange(options[idx])
-                                }
-                            }
-                            .onEnded { _ in isDragging = false }
-                    )
-
-                Text("\u{25BC} \(downLabel)")
-                    .font(.system(size: 7, weight: .bold))
-                    .foregroundColor(color.opacity(isDragging ? 0.9 : 0.4))
-            }
-
-            Spacer()
-        }
-    }
-}
-
-struct DragNumberControl: View {
-    var title: String
-    @Binding var value: Double
-    var range: ClosedRange<Double>
-    var step: Double
-    var format: (Double) -> String
-    var upLabel: String
-    var downLabel: String
-    var color: Color
-    var onEnd: ((Double) -> Void)?
-
-    @State private var isDragging = false
-    @State private var dragStartValue: Double = 0
-
-    var body: some View {
-        HStack(spacing: 12) {
-            Text(title)
-                .font(.caption2.weight(.black))
-                .foregroundColor(.secondary)
-                .frame(width: 65, alignment: .leading)
-
-            VStack(spacing: 1) {
-                Text("\u{25B2} \(upLabel)")
-                    .font(.system(size: 7, weight: .bold))
-                    .foregroundColor(color.opacity(isDragging ? 0.9 : 0.4))
-
-                Text(format(value))
-                    .font(.system(size: 20, weight: .black, design: .monospaced))
-                    .foregroundColor(color)
-                    .frame(minWidth: 70, minHeight: 44)
-                    .background(RoundedRectangle(cornerRadius: 10).fill(color.opacity(isDragging ? 0.15 : 0.05)))
-                    .gesture(
-                        DragGesture(minimumDistance: 4)
-                            .onChanged { g in
-                                if !isDragging {
-                                    isDragging = true
-                                    dragStartValue = value
-                                }
-                                let span = range.upperBound - range.lowerBound
-                                let delta = -g.translation.height / 180 * span
-                                let raw = dragStartValue + delta
-                                let stepped = (raw / step).rounded() * step
-                                value = max(range.lowerBound, min(range.upperBound, stepped))
-                            }
-                            .onEnded { _ in
-                                isDragging = false
-                                onEnd?(value)
-                            }
-                    )
-
-                Text("\u{25BC} \(downLabel)")
-                    .font(.system(size: 7, weight: .bold))
-                    .foregroundColor(color.opacity(isDragging ? 0.9 : 0.4))
-            }
-
-            Spacer()
-        }
-    }
-}
+// MARK: - (DragOptionControl / DragNumberControl 削除済み: Apple純正コントロールに置換)
 
 // MARK: - Components
 
@@ -417,6 +296,27 @@ struct ContentView: View {
                     VStack(spacing: 24) {
 
                         syncBanner
+
+                        // カメラ未検出バナー
+                        if sensorStatus?.state == "camera_unavailable" {
+                            HStack(spacing: 10) {
+                                Image(systemName: "exclamationmark.triangle.fill")
+                                    .foregroundColor(.yellow)
+                                    .font(.system(size: 16, weight: .semibold))
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("カメラ未検出")
+                                        .font(.caption.weight(.bold))
+                                    Text("CSIケーブルの接続を確認してください")
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                }
+                                Spacer()
+                            }
+                            .padding(12)
+                            .background(Color.yellow.opacity(0.15))
+                            .cornerRadius(10)
+                            .padding(.horizontal, 4)
+                        }
 
                         // 光検知（常時表示）
                         monitoringQuickSection
@@ -1040,16 +940,19 @@ struct ContentView: View {
     }
 
     private var isoQuickModule: some View {
-        DragOptionControl(
-            title: "ISO",
-            selected: $selectedISO,
-            options: Array(ISOOption.allCases),
-            label: { $0.label },
-            upLabel: "高感度",
-            downLabel: "低感度",
-            color: .blue,
-            onChange: { updateISO($0) }
-        )
+        LabeledContent {
+            Picker("ISO", selection: $selectedISO) {
+                ForEach(ISOOption.allCases, id: \.self) { option in
+                    Text(option.label).tag(option)
+                }
+            }
+            .pickerStyle(.menu)
+            .onChange(of: selectedISO) { _, newValue in updateISO(newValue) }
+        } label: {
+            Text("ISO")
+                .font(.caption2.weight(.black))
+                .foregroundColor(.secondary)
+        }
     }
 
     private var whiteBalanceModule: some View {
@@ -1181,64 +1084,88 @@ struct ContentView: View {
     }
 
     private var shutterPickerModule: some View {
-        DragOptionControl(
-            title: "SHUTTER",
-            selected: $selectedShutterSpeed,
-            options: shutterOptions,
-            label: { $0.label },
-            upLabel: "明るい(長)",
-            downLabel: "暗い(短)",
-            color: .indigo,
-            onChange: { updateShutterSpeed($0) }
-        )
+        LabeledContent {
+            Picker("SHUTTER", selection: $selectedShutterSpeed) {
+                ForEach(shutterOptions, id: \.self) { option in
+                    Text(option.label).tag(option)
+                }
+            }
+            .pickerStyle(.menu)
+            .onChange(of: selectedShutterSpeed) { _, newValue in updateShutterSpeed(newValue) }
+        } label: {
+            Text("SHUTTER")
+                .font(.caption2.weight(.black))
+                .foregroundColor(.secondary)
+        }
     }
 
     private var thresholdModule: some View {
-        DragNumberControl(
-            title: "THRESHOLD",
-            value: $detectionThreshold,
-            range: 1...100,
-            step: 1,
-            format: { "\(Int($0))%" },
-            upLabel: "敏感",
-            downLabel: "鉈感",
-            color: .teal,
-            onEnd: { updateThreshold(Int($0)) }
-        )
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("THRESHOLD")
+                    .font(.caption2.weight(.black))
+                    .foregroundColor(.secondary)
+                Spacer()
+                Text("\(Int(detectionThreshold))%")
+                    .font(.caption.weight(.semibold))
+                    .monospacedDigit()
+                    .foregroundColor(.teal)
+            }
+            Slider(value: $detectionThreshold, in: 1...100, step: 1) {
+                EmptyView()
+            } onEditingChanged: { editing in
+                if !editing { updateThreshold(Int(detectionThreshold)) }
+            }
+            .tint(.teal)
+        }
     }
 
     @State private var detectionIntervalSec: Double = 0.2
     @State private var selectedFPS: Int = 30
 
+    private var intervalDisplayLabel: String {
+        let v = detectionIntervalSec
+        if v < 0.001 { return "最速" }
+        if v < 1.0 { return String(format: "%dms", Int(v * 1000)) }
+        return String(format: "%.1fs", v)
+    }
+
     private var fpsPresetModule: some View {
-        DragOptionControl(
-            title: "FPS",
-            selected: $selectedFPS,
-            options: [30, 40, 120],
-            label: { "\($0)fps" },
-            upLabel: "高速検知",
-            downLabel: "高画質",
-            color: .green,
-            onChange: { updateFPS($0) }
-        )
+        VStack(alignment: .leading, spacing: 8) {
+            Text("FPS")
+                .font(.caption2.weight(.black))
+                .foregroundColor(.secondary)
+            Picker("FPS", selection: $selectedFPS) {
+                ForEach([30, 40, 120], id: \.self) { fps in
+                    Text("\(fps)fps").tag(fps)
+                }
+            }
+            .pickerStyle(.segmented)
+            .onChange(of: selectedFPS) { _, newValue in updateFPS(newValue) }
+        }
     }
 
     private var detectionIntervalModule: some View {
-        DragNumberControl(
-            title: "CHECK",
-            value: $detectionIntervalSec,
-            range: 0...5,
-            step: 0.01,
-            format: { v in
-                if v < 0.001 { return "最速" }
-                if v < 1.0 { return String(format: "%dms", Int(v * 1000)) }
-                return String(format: "%.1fs", v)
-            },
-            upLabel: "頻繁",
-            downLabel: "省電力",
-            color: .orange,
-            onEnd: { updateDetectionInterval($0) }
-        )
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("CHECK INTERVAL")
+                    .font(.caption2.weight(.black))
+                    .foregroundColor(.secondary)
+                Spacer()
+                Text(intervalDisplayLabel)
+                    .font(.caption.weight(.semibold))
+                    .monospacedDigit()
+                    .foregroundColor(.orange)
+            }
+            HStack {
+                Slider(value: $detectionIntervalSec, in: 0...5, step: 0.1) {
+                    EmptyView()
+                } onEditingChanged: { editing in
+                    if !editing { updateDetectionInterval(detectionIntervalSec) }
+                }
+                .tint(.orange)
+            }
+        }
     }
 
     private var captureSection: some View {

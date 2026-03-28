@@ -1083,7 +1083,9 @@ class APIHandler(BaseHTTPRequestHandler):
             if os.path.exists(PHOTOS_DIR):
                 files = [
                     f for f in os.listdir(PHOTOS_DIR)
-                    if f.lower().endswith(ALLOWED_PHOTO_EXTENSIONS) and SAFE_FILENAME_PATTERN.match(f)
+                    if f.lower().endswith(ALLOWED_PHOTO_EXTENSIONS)
+                    and SAFE_FILENAME_PATTERN.match(f)
+                    and os.path.getsize(os.path.join(PHOTOS_DIR, f)) > 0
                 ]
                 files.sort(reverse=True)  # 新しい順
             
@@ -1844,8 +1846,11 @@ class APIHandler(BaseHTTPRequestHandler):
 
             settings = DEFAULT_SETTINGS.copy()
             if os.path.exists(SETTINGS_FILE):
-                with open(SETTINGS_FILE, 'r') as f:
-                    settings.update(json.load(f))
+                try:
+                    with open(SETTINGS_FILE, 'r') as f:
+                        settings.update(json.load(f))
+                except (json.JSONDecodeError, OSError) as e:
+                    logger.warning(f"Failed to load settings file (capture): {e}")
 
             if os.path.exists(SESSION_OVERRIDES_FILE):
                 try:
@@ -1957,8 +1962,37 @@ class APIHandler(BaseHTTPRequestHandler):
                 except ValueError:
                     logger.warning(f"Invalid ISO value: {iso_value}")
 
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-            if result.returncode == 0:
+            try:
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            except subprocess.TimeoutExpired:
+                try:
+                    os.remove(photo_path)
+                except OSError:
+                    pass
+                response = {'success': False, 'error': 'capture timed out (libcamera-still 30s exceeded)'}
+                self.send_response(500)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps(response).encode())
+                return
+
+            capture_ok = result.returncode == 0
+            if capture_ok:
+                # returncode==0 でも 0バイトファイルが生成されることがある（カメラ未接続等）
+                try:
+                    file_size = os.path.getsize(photo_path)
+                except OSError:
+                    file_size = 0
+                if file_size == 0:
+                    try:
+                        os.remove(photo_path)
+                    except OSError:
+                        pass
+                    capture_ok = False
+                    result_error = 'capture produced empty file (camera may not be available)'
+                    logger.warning(f"Capture produced 0-byte file: {photo_path}")
+
+            if capture_ok:
                 applied_mode = manual_mode if manual_mode and manual_mode != 'current' else settings.get('camera_mode', 'standard')
                 metadata = {
                     'timestamp': timestamp,
@@ -1988,7 +2022,8 @@ class APIHandler(BaseHTTPRequestHandler):
                 response = {'success': True, 'filename': filename, 'metadata': metadata}
                 self.send_response(200)
             else:
-                response = {'success': False, 'error': result.stderr}
+                error_msg = result.stderr if result.returncode != 0 else result_error
+                response = {'success': False, 'error': error_msg}
                 self.send_response(500)
 
             self.send_header('Content-Type', 'application/json')

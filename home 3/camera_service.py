@@ -681,6 +681,7 @@ def main():
                                 pass
                             camera = None
 
+                        cam = None
                         try:
                             cam = Picamera2()
                             config = cam.create_still_configuration(
@@ -707,8 +708,13 @@ def main():
                                 "Camera started: mode=%s, main=%s, lores=%s, cooldown=%.1fs",
                                 camera_mode, desired_size, desired_lores, capture_cooldown,
                             )
-                        except RuntimeError as cam_err:
-                            # カメラ未検出: クラッシュせず指数バックオフでリトライ
+                        except Exception as cam_err:
+                            # カメラ未検出・初期化失敗: クラッシュせず指数バックオフでリトライ
+                            if cam is not None:
+                                try:
+                                    cam.close()
+                                except Exception:
+                                    pass
                             logger.warning(
                                 "Camera not available (%s). Retrying in %.0fs...",
                                 cam_err, _camera_retry_delay,
