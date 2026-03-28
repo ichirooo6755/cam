@@ -703,8 +703,11 @@ def _load_effective_settings_cached():
 def _load_effective_settings():
     settings = DEFAULT_SETTINGS.copy()
     if os.path.exists(SETTINGS_FILE):
-        with open(SETTINGS_FILE, 'r') as f:
-            settings.update(json.load(f))
+        try:
+            with open(SETTINGS_FILE, 'r') as f:
+                settings.update(json.load(f))
+        except (json.JSONDecodeError, OSError) as e:
+            logger.warning(f"Failed to load settings file: {e}")
 
     if os.path.exists(SESSION_OVERRIDES_FILE):
         try:
@@ -2056,8 +2059,12 @@ def restore_wifi_mode_on_boot():
     try:
         if not os.path.exists(SETTINGS_FILE):
             return
-        with open(SETTINGS_FILE, 'r') as f:
-            settings = json.load(f)
+        try:
+            with open(SETTINGS_FILE, 'r') as f:
+                settings = json.load(f)
+        except (json.JSONDecodeError, OSError) as e:
+            logger.warning(f"Boot: failed to load settings: {e}")
+            return
         saved_mode = settings.get('wifi_mode')
         if not saved_mode:
             return

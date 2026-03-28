@@ -1721,7 +1721,11 @@ struct ContentView: View {
             selectedFPS = fps
         }
 
-        isApplyingRemoteSettings = false
+        // Picker の .onChange(of:) は Binding 書き換え後の次のランループで発火する。
+        // それより後にフラグを落とすことで、外部更新に起因するAPI二重送信を防ぐ。
+        DispatchQueue.main.async {
+            self.isApplyingRemoteSettings = false
+        }
     }
 
     private func performSettingUpdate(
