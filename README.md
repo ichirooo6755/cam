@@ -1,4 +1,4 @@
-# PiCamera Control System v2.0 - Bug Fixes & Updates
+# cam Ctrl v2.0
 
 ## iOS App Fixes
 
