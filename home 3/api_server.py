@@ -27,6 +27,16 @@ from urllib.parse import urlparse
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+
+def _resolve_still_binary():
+    """libcamera-still / rpicam-still のうち利用可能なものを返す。Bookworm 以降は rpicam-still が標準。"""
+    for name in ('rpicam-still', 'libcamera-still'):
+        path = shutil.which(name)
+        if path:
+            return path
+    return None
+
+
 PHOTOS_DIR = '/home/pi/photos'
 THUMBNAIL_DIR = os.path.join(PHOTOS_DIR, '_thumbs')
 THUMBNAIL_MAX_DIM_DEFAULT = 300
@@ -1936,8 +1946,20 @@ class APIHandler(BaseHTTPRequestHandler):
             filename = f"{filename}.jpg"
             photo_path = os.path.join(PHOTOS_DIR, filename)
 
+            still_bin = _resolve_still_binary()
+            if not still_bin:
+                response = {
+                    'success': False,
+                    'error': 'rpicam-still / libcamera-still が見つかりません。rpicam-apps をインストールしてください。'
+                }
+                self.send_response(500)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps(response).encode())
+                return
+
             cmd = [
-                'libcamera-still',
+                still_bin,
                 '-o', photo_path,
                 '--width', str(width),
                 '--height', str(height),
@@ -1972,7 +1994,14 @@ class APIHandler(BaseHTTPRequestHandler):
                     os.remove(photo_path)
                 except OSError:
                     pass
-                response = {'success': False, 'error': 'capture timed out (libcamera-still 30s exceeded)'}
+                response = {'success': False, 'error': f'capture timed out ({os.path.basename(still_bin)} 30s exceeded)'}
+                self.send_response(500)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps(response).encode())
+                return
+            except FileNotFoundError as e:
+                response = {'success': False, 'error': f'capture binary not found: {e}'}
                 self.send_response(500)
                 self.send_header('Content-Type', 'application/json')
                 self.end_headers()
