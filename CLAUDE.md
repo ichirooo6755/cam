@@ -23,8 +23,9 @@ cd "home 3" && bash ./wifi_cycle_test.sh
 ```
 
 ## 重要制約
-- 開発機は有線接続。Wi-Fi切替OK
+- 開発機(mac)は有線接続。Wi-Fi切替OK
 - Wi-Fi切替: `_WIFI_SWITCH_LOCK`排他、409拒否、12秒CD、自動fallback
 - API追加: `api_server.py`→`Models.swift`→`CameraAPI.swift`→deploy
 - `contact.md`で進捗確認
-- APやテザリング関係でなければ変更はpiにデプロイし、APテザリングに関係なく、gitにはpushして。
+- APやテザリング関係でなければ変更はpiにデプロイし、APテザリングに関係なく、gitにはpush/commitして。
+-問題があればgithubのissueに登録すること。
