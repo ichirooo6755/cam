@@ -1,30 +1,37 @@
-# cam Ctrl v2.0
+# PiCamera Control v2
 
-> ドキュメント整理済み: 入口は `docs/README.md` を参照してください。
+Raspberry Pi（IMX477）+ iOS アプリによる光検知・自動撮影システム。
 
-## iOS App Fixes
+## システム構成
 
-### 1. Gallery Thumbnail Display Issue
-- **症状**: ギャラリー（UnifiedGalleryView）に写真のサムネイルが表示されない。
-- **原因**: `PhotoCell` 内で `loadFromServer()` メソッドが実装されておらず、単に空の処理になっていた。`imageData` も保存される機能が入っていなかった。
-- **解決策**: `PhotoCell.loadFromServer()` を実装。`SimpleCameraAPI.downloadPhoto()` に `thumbnail: true, maxDimension: 300` を付与してリクエストし、サーバー側（Raspberry Pi）から生成済みのサムネイルを効率的に取得、表示するようにしました。`serverIP` も `PhotoGrid` から `PhotoCell` へ正しく渡すように修正しました。
+| 層 | 技術 |
+|---|---|
+| カメラ | Raspberry Pi Camera HQ (Sony IMX477, 12MP) |
+| Pi サーバー | Python / Picamera2 / Flask |
+| iOS アプリ | SwiftUI / Swift Concurrency |
+| 通信 | HTTP :8001、AP モード（192.168.4.1）またはテザリング |
 
-### 2. Photo Editor UI Layout Issue on Mobile
-- **症状**: スマートフォン（iPhone等のモバイル端末）で閲覧した際、写真編集UI(`PhotoEditorView`)がはみ出し、下部の編集用コントロールが操作・表示できない状態になっていた。
-- **原因**: 画面レイアウトの指定で `previewArea` が画面全体の大部分(`0.4`では足りず固定高さなどの影響)を占めてしまい、`controlsArea` が押し出されていた。
-- **解決策**: `GeometryReader` を活用し、`previewArea` の高さを画面全体の `0.42`（42%）に、`controlsArea` を `0.58`（58%）に厳密に分割するレイアウトへ修正しました。これによりどんな画面サイズのモバイル端末でも全コントロールが表示されます。
+## クイックスタート
 
-### 3. Settings Screen Preview Area Removal
-- **症状**: 設定画面（`ContentView` の `settingsView`）の中央に不要な `previewArea` とそれが含む要素（フォーカスピーキングなど）が表示され、意図しないレイアウトになっていた。
-- **原因**: 以前の実装に紐づいていた `previewArea` プロパティの呼び出しや定義がそのまま残っていた。
-- **解決策**: `ContentView.swift` にあった `previewArea` の定義ならびに利用箇所を全て削除し、設定画面をすっきりさせました。
+```bash
+# Pi へデプロイ（AP モード）
+cd "home 3" && bash ./update.sh 192.168.4.1
 
-## Performance Optimization (2026-03-10)
+# Pi へデプロイ（家 Wi-Fi）
+cd "home 3" && bash ./update.sh raspberrypi.local
 
-### 検知→撮影レイテンシ（D→C）短縮
-- **WiFi sleep モード別化**: reaction=0ms, standard=80ms, quality=100ms, battery=150ms（旧: 全モード固定150ms）
-- **適応型露出をバックグラウンド化**: `_adapt_exposure()` を撮影パスから分離し、メインループ復帰を高速化
-- **レートリミッター最適化**: `list.pop(0)` → `deque.popleft()` (O(1))
-- **APIキャッシュ**: `sensor_status.json` のmtimeベースキャッシュで不要な再パースを回避
-- **タイミング分解記録**: `last_camera_ms` / `last_wifi_sleep_ms` をsensor_statusに追加
-- **iOS CAPTURE PERFORMANCE セクション**: D→Cレイテンシ色分け表示 + CAM/WIFI/OTHER分解バー
+# iOS シミュレータビルド
+bash PiCameraControl/build_ios_simulator.sh
+```
+
+接続: SSID `PiCamera` / パスワード `picamera123` → `http://192.168.4.1:8001`
+
+## ドキュメント
+
+| ファイル | 内容 |
+|---|---|
+| [`docs/operations/OPERATIONS.md`](docs/operations/OPERATIONS.md) | 接続情報・API・デプロイ手順・白飛び対応 |
+| [`docs/runbook/TROUBLESHOOTING.md`](docs/runbook/TROUBLESHOOTING.md) | 総合トラブルシューティング |
+| [`docs/architecture/performance.md`](docs/architecture/performance.md) | 省電力・性能最適化方針 |
+| [`docs/changelog/DEV_STATUS_FULL.md`](docs/changelog/DEV_STATUS_FULL.md) | 直近の実施内容・未解決問題 |
+| [`docs/plans/2026-02-18-ui-ux-redesign-design.md`](docs/plans/2026-02-18-ui-ux-redesign-design.md) | UI/UX 詳細設計（参考） |
