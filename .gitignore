@@ -8,3 +8,8 @@ contact.md
 .windsurf/rules/rule.md
 wifi_cycle_test_*.log
 PROJECT_HANDOVER.md
+# 自動生成・ログ系
+.playwright-mcp/
+diag_output.txt
+**/*.xcodeproj/*.backup
+**/*.pbxproj.backup
