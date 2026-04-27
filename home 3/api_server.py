@@ -2053,7 +2053,17 @@ class APIHandler(BaseHTTPRequestHandler):
                     service_stopped = False
 
             if not capture_ok:
-                # rpicam-still fallback（IPC失敗時 or camera-service停止中）
+                # IPC失敗（camera-serviceが動作中）→ fallbackせずエラー返却
+                if ipc_result is not None and _is_camera_service_running():
+                    self.send_response(503)
+                    self.send_header('Content-Type', 'application/json')
+                    self.end_headers()
+                    self.wfile.write(json.dumps({
+                        'success': False,
+                        'error': result_error or 'IPC capture failed, camera service busy'
+                    }).encode())
+                    return
+                # 以下は既存のrpicam-still fallback（camera-service停止中の場合のみ実行）
                 if not service_stopped and service_should_stop and _is_camera_service_running():
                     stop_result = subprocess.run(
                         ['sudo', '-n', 'systemctl', 'stop', 'camera-service'],

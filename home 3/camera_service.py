@@ -692,6 +692,10 @@ def main():
         while True:
             current_time = time.time()
 
+            # --- IPC手動撮影リクエスト（クールダウン中も優先処理） ---
+            if camera is not None and os.path.exists(CAPTURE_REQUEST_FILE):
+                _handle_manual_capture_request(camera, settings, active_profile)
+
             # クールダウン中はスキップ
             if current_time - last_capture_time < capture_cooldown:
                 time.sleep(check_interval)
