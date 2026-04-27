@@ -18,7 +18,6 @@ struct PhotoGalleryView: View {
     @State private var showDeleteConfirmation: Bool = false
     @State private var selectedPhotoItem: PhotosPickerItem?
     @State private var importedImage: UIImage?
-    @State private var showHDRComposer: Bool = false
 
     private var api: SimpleCameraAPI {
         SimpleCameraAPI(baseURL: "http://\(serverIP):8001")
@@ -63,13 +62,6 @@ struct PhotoGalleryView: View {
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     HStack(spacing: 16) {
-                        Button {
-                            showHDRComposer = true
-                        } label: {
-                            Image(systemName: "photo.stack")
-                                .foregroundColor(.primary)
-                        }
-
                         PhotosPicker(selection: $selectedPhotoItem, matching: .images) {
                             Image(systemName: "photo.on.rectangle.angled")
                                 .foregroundColor(.primary)
@@ -133,9 +125,6 @@ struct PhotoGalleryView: View {
                 set: { importedImage = $0?.image }
             )) { wrapper in
                 PhotoEditorView(originalImage: wrapper.image)
-            }
-            .sheet(isPresented: $showHDRComposer) {
-                HDRComposerView()
             }
         }
     }

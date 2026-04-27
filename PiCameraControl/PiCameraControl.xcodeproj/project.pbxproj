@@ -7,6 +7,11 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		E00000010000000000000079 /* LUTEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = E00000010000000000000078 /* LUTEngine.swift */; };
+		E0000001000000000000007B /* LUTStyle.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0000001000000000000007A /* LUTStyle.swift */; };
+		E0000001000000000000007D /* StyleLibraryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0000001000000000000007C /* StyleLibraryView.swift */; };
+		E0000001000000000000007E /* PhotoGalleryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E00000010000000000000025 /* PhotoGalleryView.swift */; };
+		E0000001000000000000007F /* EditedPhotosListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E00000010000000000000031 /* EditedPhotosListView.swift */; };
 		E0000001000000000000000A /* PiCameraControlApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0000001000000000000000B /* PiCameraControlApp.swift */; };
 		E0000001000000000000000C /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0000001000000000000000D /* ContentView.swift */; };
 		E0000001000000000000000E /* CameraAPI.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0000001000000000000000F /* CameraAPI.swift */; };
@@ -37,6 +42,9 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		E00000010000000000000078 /* LUTEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LUTEngine.swift; sourceTree = "<group>"; };
+		E0000001000000000000007A /* LUTStyle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LUTStyle.swift; sourceTree = "<group>"; };
+		E0000001000000000000007C /* StyleLibraryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StyleLibraryView.swift; sourceTree = "<group>"; };
 		E0000001000000000000000B /* PiCameraControlApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiCameraControlApp.swift; sourceTree = "<group>"; };
 		E0000001000000000000000D /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		E0000001000000000000000F /* CameraAPI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraAPI.swift; sourceTree = "<group>"; };
@@ -112,6 +120,9 @@
 				E00000010000000000000077 /* PhotoPickerView.swift */,
 				A1B2C3D4E5F6A7B8C9D0E1F3 /* SmartAutoEditEngine.swift */,
 				B2C3D4E5F6A7B8C9D0E1F2A4 /* SmartEditFeedbackView.swift */,
+				E00000010000000000000078 /* LUTEngine.swift */,
+				E0000001000000000000007A /* LUTStyle.swift */,
+				E0000001000000000000007C /* StyleLibraryView.swift */,
 			);
 			path = PiCameraControl;
 			sourceTree = "<group>";
@@ -228,6 +239,11 @@
 				E00000010000000000000076 /* PhotoPickerView.swift in Sources */,
 				A1B2C3D4E5F6A7B8C9D0E1F2 /* SmartAutoEditEngine.swift in Sources */,
 				B2C3D4E5F6A7B8C9D0E1F2A3 /* SmartEditFeedbackView.swift in Sources */,
+				E00000010000000000000079 /* LUTEngine.swift in Sources */,
+				E0000001000000000000007B /* LUTStyle.swift in Sources */,
+				E0000001000000000000007D /* StyleLibraryView.swift in Sources */,
+				E0000001000000000000007E /* PhotoGalleryView.swift in Sources */,
+				E0000001000000000000007F /* EditedPhotosListView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

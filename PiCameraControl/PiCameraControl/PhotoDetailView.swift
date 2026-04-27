@@ -37,6 +37,11 @@ struct PhotoDetailView: View {
         return versions[currentVersionIndex]
     }
 
+    // RAWファイル（.dng）か判定
+    private var isRawPhoto: Bool {
+        photoGroup.id.lowercased().hasSuffix(".dng")
+    }
+
     enum DeleteMode {
         case versionOnly
         case completeFromServer
@@ -49,10 +54,8 @@ struct PhotoDetailView: View {
             VStack(spacing: 0) {
                 // カスタムツールバー
                 HStack {
-                    Button("閉じる") {
-                        dismiss()
-                    }
-                    .foregroundColor(.white)
+                    Button("閉じる") { dismiss() }
+                        .foregroundColor(.white)
 
                     Spacer()
 
@@ -68,7 +71,7 @@ struct PhotoDetailView: View {
                                 showEditor = true
                             }
                         } label: {
-                            Label("編集", systemImage: "slider.horizontal.3")
+                            Label("編集（LUT）", systemImage: "camera.filters")
                         }
 
                         Button {
@@ -87,7 +90,7 @@ struct PhotoDetailView: View {
                                 deleteMode = .versionOnly
                                 showDeleteConfirmation = true
                             } label: {
-                                Label("編集版のみ削除", systemImage: "trash")
+                                Label("この編集版を削除", systemImage: "trash")
                             }
                         }
 
@@ -120,12 +123,10 @@ struct PhotoDetailView: View {
                     .background(MinimalTheme.Background.surface)
             }
         }
-        .task {
-            loadOriginalImage()
-        }
+        .task { loadOriginalImage() }
         .fullScreenCover(isPresented: $showEditor) {
             if let image = fullImage ?? currentVersion?.image {
-                PhotoEditorView(originalImage: image)
+                PhotoEditorView(originalImage: image, photoGroup: photoGroup)
                     .environment(\.managedObjectContext, viewContext)
             }
         }
@@ -135,9 +136,7 @@ struct PhotoDetailView: View {
             }
         }
         .alert("写真を削除", isPresented: $showDeleteConfirmation) {
-            Button("削除", role: .destructive) {
-                performDelete()
-            }
+            Button("削除", role: .destructive) { performDelete() }
             Button("キャンセル", role: .cancel) {}
         } message: {
             if deleteMode == .versionOnly {
@@ -147,9 +146,7 @@ struct PhotoDetailView: View {
             }
         }
         .alert("結果", isPresented: $showActionAlert) {
-            Button("OK") {
-                actionMessage = nil
-            }
+            Button("OK") { actionMessage = nil }
         } message: {
             Text(actionMessage ?? "")
         }
@@ -167,9 +164,7 @@ struct PhotoDetailView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if isLoadingFullImage {
                 VStack(spacing: 12) {
-                    ProgressView()
-                        .scaleEffect(1.4)
-                        .tint(.white)
+                    ProgressView().scaleEffect(1.4).tint(.white)
                     Text("読み込み中...")
                         .font(MinimalTypography.caption)
                         .foregroundColor(.white.opacity(0.7))
@@ -185,7 +180,7 @@ struct PhotoDetailView: View {
 
     private var versionIndicator: some View {
         HStack(spacing: 6) {
-            ForEach(Array(versions.enumerated()), id: \.element.id) { index, version in
+            ForEach(Array(versions.enumerated()), id: \.element.id) { index, _ in
                 Circle()
                     .fill(index == currentVersionIndex ? Color.white : Color.white.opacity(0.3))
                     .frame(width: 6, height: 6)
@@ -197,28 +192,44 @@ struct PhotoDetailView: View {
     private var metadataSection: some View {
         VStack(spacing: MinimalSpacing.md) {
             // バージョン名
-            Text(currentVersion?.displayName ?? "")
-                .font(MinimalTypography.headlineMedium)
-                .foregroundColor(MinimalTheme.Text.primary)
+            HStack(spacing: 8) {
+                Text(currentVersion?.displayName ?? "")
+                    .font(MinimalTypography.headlineMedium)
+                    .foregroundColor(MinimalTheme.Text.primary)
 
-            // メタデータ
+                // RAWバッジ
+                if isRawPhoto, currentVersion?.isOriginal == true {
+                    Text("RAW")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundColor(.orange)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.orange.opacity(0.15))
+                        .cornerRadius(4)
+                }
+            }
+
             if let version = currentVersion {
                 if version.isOriginal {
-                    // オリジナル: サーバーメタデータ
                     if let metadata = photoGroup.serverMetadata {
                         metadataRow(metadata: metadata)
                     }
+                    // RAWオリジナルの注記
+                    if isRawPhoto {
+                        Text("RAWファイルはサーバーに保持されます。編集すると新しいバージョンとして保存されます。")
+                            .font(MinimalTypography.caption)
+                            .foregroundColor(MinimalTheme.Text.tertiary)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, MinimalSpacing.md)
+                    }
                 } else {
-                    // 編集版: 編集設定のサマリー
                     if let settings = version.settings {
                         editSettingsSummary(settings: settings)
                     }
                 }
 
-                // 評価
                 ratingView(version: version)
 
-                // 日時
                 Text(version.updatedAt.formatted(date: .abbreviated, time: .shortened))
                     .font(MinimalTypography.caption)
                     .foregroundColor(MinimalTheme.Text.tertiary)
@@ -229,37 +240,25 @@ struct PhotoDetailView: View {
 
     private func metadataRow(metadata: PhotoMetadata) -> some View {
         HStack(spacing: 4) {
-            if let iso = metadata.iso {
-                Text("ISO \(iso.displayString)")
-            }
+            if let iso = metadata.iso { Text("ISO \(iso.displayString)") }
             Text("•")
-            if let ss = metadata.shutterSpeed {
-                Text(ss.displayString)
-            }
+            if let ss = metadata.shutterSpeed { Text(ss.displayString) }
             Text("•")
-            if let wb = metadata.whiteBalance {
-                Text(wb.uppercased())
-            }
+            if let wb = metadata.whiteBalance { Text(wb.uppercased()) }
         }
         .font(MinimalTypography.captionMono)
         .foregroundColor(MinimalTheme.Text.secondary)
     }
 
     private func editSettingsSummary(settings: PhotoEditorSettings) -> some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: MinimalSpacing.sm) {
-                if abs(settings.exposureEV) > 0.01 {
-                    settingBadge("露出", String(format: "%+.1f", settings.exposureEV))
-                }
-                if abs(settings.contrast - 1.0) > 0.01 {
-                    settingBadge("コントラスト", String(format: "%.2f", settings.contrast))
-                }
-                if abs(settings.saturation - 1.0) > 0.01 {
-                    settingBadge("彩度", String(format: "%.2f", settings.saturation))
-                }
-                if abs(settings.temperature) > 0.01 {
-                    settingBadge("色温度", String(format: "%.0f", settings.temperature))
-                }
+        HStack(spacing: MinimalSpacing.sm) {
+            if !settings.lutStyleName.isEmpty {
+                settingBadge("LUT", settings.lutStyleName)
+                settingBadge("強度", "\(Int(settings.lutIntensity * 100))%")
+            } else {
+                Text("スタイルなし")
+                    .font(MinimalTypography.caption)
+                    .foregroundColor(MinimalTheme.Text.tertiary)
             }
         }
     }
@@ -296,14 +295,9 @@ struct PhotoDetailView: View {
     // MARK: - Image Loading
 
     private func loadOriginalImage() {
-        // 既にロード済み
         if fullImage != nil { return }
-        // Core Dataにキャッシュ済み
-        if let cached = currentVersion?.image {
-            fullImage = cached
-            return
-        }
-        // サーバーからダウンロード
+        if let cached = currentVersion?.image { fullImage = cached; return }
+
         let filename = photoGroup.id
         isLoadingFullImage = true
         Task {
@@ -311,7 +305,6 @@ struct PhotoDetailView: View {
                 let image = try await api.downloadPhoto(filename: filename)
                 await MainActor.run {
                     fullImage = image
-                    // Core Dataにキャッシュ
                     if let version = currentVersion,
                        let data = image.jpegData(compressionQuality: 0.9) {
                         version.imageData = data
@@ -320,9 +313,7 @@ struct PhotoDetailView: View {
                     isLoadingFullImage = false
                 }
             } catch {
-                await MainActor.run {
-                    isLoadingFullImage = false
-                }
+                await MainActor.run { isLoadingFullImage = false }
             }
         }
     }
@@ -337,12 +328,9 @@ struct PhotoDetailView: View {
 
     private func performDelete() {
         guard let mode = deleteMode else { return }
-
         switch mode {
-        case .versionOnly:
-            deleteVersionOnly()
-        case .completeFromServer:
-            deleteCompleteFromServer()
+        case .versionOnly: deleteVersionOnly()
+        case .completeFromServer: deleteCompleteFromServer()
         }
     }
 
@@ -353,20 +341,12 @@ struct PhotoDetailView: View {
             return
         }
 
-        // 前のバージョンに移動
-        if currentVersionIndex > 0 {
-            currentVersionIndex -= 1
-        }
+        if currentVersionIndex > 0 { currentVersionIndex -= 1 }
 
-        // PhotoGroupから削除
         photoGroup.removeFromVersions(version)
-
-        // latestVersionを更新
         if photoGroup.latestVersion == version {
             photoGroup.latestVersion = photoGroup.sortedVersions.last
         }
-
-        // Core Dataから削除
         viewContext.delete(version)
 
         do {
@@ -382,14 +362,10 @@ struct PhotoDetailView: View {
     private func deleteCompleteFromServer() {
         Task {
             do {
-                // サーバーから削除
                 let result = try await api.deletePhotos(filenames: [photoGroup.id])
-
                 await MainActor.run {
                     if result.deleted.contains(photoGroup.id) {
-                        // ローカルの全バージョンを削除
                         viewContext.delete(photoGroup)
-
                         do {
                             try viewContext.save()
                             dismiss()
@@ -416,11 +392,9 @@ struct PhotoDetailView: View {
 
 struct ShareSheet: UIViewControllerRepresentable {
     let items: [Any]
-
     func makeUIViewController(context: Context) -> UIActivityViewController {
         UIActivityViewController(activityItems: items, applicationActivities: nil)
     }
-
     func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }
 
@@ -429,11 +403,8 @@ struct ShareSheet: UIViewControllerRepresentable {
 struct PhotoDetailView_Previews: PreviewProvider {
     static var previews: some View {
         let context = PersistenceController.preview.container.viewContext
-
-        // サンプルPhotoGroup
         let group = PhotoGroup(context: context)
         group.id = "sample.jpg"
-
         let original = PhotoVersion(context: context)
         original.id = UUID()
         original.originalPhotoID = "sample.jpg"
@@ -444,7 +415,6 @@ struct PhotoDetailView_Previews: PreviewProvider {
         original.userRating = 4
         group.addToVersions(original)
         group.latestVersion = original
-
         return PhotoDetailView(photoGroup: group)
             .environment(\.managedObjectContext, context)
     }

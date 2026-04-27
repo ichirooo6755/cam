@@ -37,7 +37,7 @@ struct EditedPhotosListView: View {
         }
         .sheet(isPresented: $showPhotoDetail) {
             if let photo = detailPhoto {
-                PhotoDetailView(photo: photo)
+                EditedPhotoDetailView(photo: photo)
                     .environment(\.managedObjectContext, viewContext)
             }
         }
@@ -157,9 +157,9 @@ struct EditedPhotosListView: View {
     }
 }
 
-// MARK: - PhotoDetailView
+// MARK: - EditedPhotoDetailView
 
-struct PhotoDetailView: View {
+struct EditedPhotoDetailView: View {
     @Environment(\.managedObjectContext) private var viewContext
     @Environment(\.dismiss) private var dismiss
 
@@ -209,15 +209,13 @@ struct PhotoDetailView: View {
                             .font(.caption)
                             .foregroundColor(.secondary)
 
-                        // 設定プレビュー
+                        // 設定プレビュー（LUTスタイル）
                         if let settings = photo.settings {
                             ScrollView(.horizontal, showsIndicators: false) {
                                 HStack(spacing: 12) {
-                                    settingBadge("露出", String(format: "%.2f", settings.exposureEV))
-                                    settingBadge("コントラスト", String(format: "%.2f", settings.contrast))
-                                    settingBadge("彩度", String(format: "%.2f", settings.saturation))
-                                    if abs(settings.temperature) > 0.01 {
-                                        settingBadge("色温度", String(format: "%.0f", settings.temperature))
+                                    if !settings.lutStyleName.isEmpty {
+                                        settingBadge("LUT", settings.lutStyleName)
+                                        settingBadge("強度", String(format: "%.0f%%", settings.lutIntensity * 100))
                                     }
                                 }
                                 .padding(.horizontal)
@@ -296,18 +294,6 @@ struct PhotoDetailView: View {
             print("Failed to delete photo: \(error)")
         }
     }
-}
-
-// MARK: - ShareSheet
-
-struct ShareSheet: UIViewControllerRepresentable {
-    let items: [Any]
-
-    func makeUIViewController(context: Context) -> UIActivityViewController {
-        UIActivityViewController(activityItems: items, applicationActivities: nil)
-    }
-
-    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }
 
 // MARK: - Preview
