@@ -49,6 +49,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+CAPTURE_REQUEST_FILE = '/run/picamera/capture_request.json'
+CAPTURE_RESULT_FILE  = '/run/picamera/capture_result.json'
+_CAPTURE_IPC_TIMEOUT_SEC = 30.0
+
 PHOTOS_DIR = '/home/pi/photos'
 SETTINGS_FILE = '/home/pi/camera_settings.json'
 SESSION_OVERRIDES_FILE = '/home/pi/camera_session_overrides.json'
@@ -139,6 +143,7 @@ _DEFAULT_PROFILE = MODE_PROFILES['standard']
 FPS_PRESETS = {
     30: {'main_size': (1920, 1080), 'frame_duration': 33333},
     40: {'main_size': (2028, 1520), 'frame_duration': 25000},
+    60: {'main_size': (1640, 1232), 'frame_duration': 16666},   # IMX477 2x2 binning
     120: {'main_size': (1332, 990), 'frame_duration': 8333},
 }
 
@@ -250,6 +255,19 @@ def write_sensor_status(state: dict) -> None:
         logger.debug(f"Failed to write sensor status: {e}")
 
 
+def _write_capture_result(result: dict) -> None:
+    """IPC撮影結果を原子的に書き込む"""
+    try:
+        tmp_path = f"{CAPTURE_RESULT_FILE}.tmp"
+        payload = dict(result)
+        payload['written_at'] = time.time()
+        with open(tmp_path, 'w', encoding='utf-8') as f:
+            json.dump(payload, f, indent=2)
+        os.replace(tmp_path, CAPTURE_RESULT_FILE)
+    except Exception as e:
+        logger.warning("Failed to write capture result: %s", e)
+
+
 def _apply_camera_controls(camera: Picamera2, settings: dict, profile: dict) -> None:
     """カメラ制御パラメータを設定"""
     controls = {}
@@ -291,6 +309,12 @@ def _apply_camera_controls(camera: Picamera2, settings: dict, profile: dict) -> 
             else:
                 exposure_time = int(shutter_value)
             controls['ExposureTime'] = exposure_time
+            # ExposureTime > デフォルト FrameDuration(33ms) の場合は
+            # FrameDurationLimits を露光時間 + 余裕に広げないと V4L2 dequeue timeout になる
+            if exposure_time > 33333:
+                frame_dur = exposure_time + 10000  # 10ms 余裕
+                controls['FrameDurationLimits'] = (frame_dur, frame_dur)
+                logger.info("Long exposure %dµs: FrameDurationLimits expanded to %dµs", exposure_time, frame_dur)
         except ValueError:
             logger.warning(f"Invalid shutter value: {shutter_value}")
 
@@ -421,6 +445,99 @@ def _adapt_exposure_background(camera, filepath, settings):
         logger.debug("Adaptive exposure background error: %s", e)
 
 
+def _handle_manual_capture_request(camera, settings: dict, active_profile: dict) -> bool:
+    """
+    api_server.py からの IPC 手動撮影リクエストを処理する。
+    リクエストがあれば撮影して結果を書き込み True を返す。
+    リクエストがなければ False を返す。
+    """
+    if not os.path.exists(CAPTURE_REQUEST_FILE):
+        return False
+
+    req = None
+    try:
+        with open(CAPTURE_REQUEST_FILE, 'r', encoding='utf-8') as f:
+            req = json.load(f)
+    except Exception:
+        try:
+            os.remove(CAPTURE_REQUEST_FILE)
+        except Exception:
+            pass
+        return False
+
+    if not isinstance(req, dict) or not req.get('request_id'):
+        try:
+            os.remove(CAPTURE_REQUEST_FILE)
+        except Exception:
+            pass
+        return False
+
+    # タイムアウトチェック
+    created_at = float(req.get('created_at', 0))
+    if time.time() - created_at > _CAPTURE_IPC_TIMEOUT_SEC:
+        logger.warning("IPC capture request expired: %s", req.get('request_id'))
+        try:
+            os.remove(CAPTURE_REQUEST_FILE)
+        except Exception:
+            pass
+        _write_capture_result({
+            'success': False,
+            'error': 'request expired',
+            'request_id': req['request_id'],
+        })
+        return True
+
+    # 二重処理防止のためリクエストファイルを先に削除
+    try:
+        os.remove(CAPTURE_REQUEST_FILE)
+    except Exception:
+        return False
+
+    request_id = req['request_id']
+    logger.info("IPC manual capture request: id=%s", request_id)
+
+    # リクエストの設定でオーバーライド（解像度・品質・露出）
+    req_settings = dict(settings)
+    for key in ('width', 'height', 'quality', 'shutter_speed', 'iso',
+                'raw_mode', 'denoise_mode', 'white_balance'):
+        if key in req:
+            req_settings[key] = req[key]
+
+    req_profile = dict(active_profile)
+    if 'quality' in req:
+        try:
+            req_profile['quality'] = int(req['quality'])
+        except (TypeError, ValueError):
+            pass
+
+    # サイズ変更が必要な場合はカメラを再設定
+    req_width = int(req_settings.get('width', 1920))
+    req_height = int(req_settings.get('height', 1080))
+    current_main_size_local = camera.camera_config.get('main', {}).get('size') if camera else None
+
+    if camera is not None and current_main_size_local != (req_width, req_height):
+        try:
+            camera.stop()
+            config = camera.create_still_configuration(
+                main={'size': (req_width, req_height)},
+                lores={'size': active_profile['lores_size']},
+            )
+            camera.configure(config)
+            camera.start()
+            logger.info("IPC: camera reconfigured to %dx%d", req_width, req_height)
+        except Exception as e:
+            logger.warning("IPC: camera reconfig failed: %s", e)
+
+    result = capture_photo(camera, req_settings, req_profile)
+    result['request_id'] = request_id
+    if result.get('filepath'):
+        result['filename'] = os.path.basename(result['filepath'])
+
+    _write_capture_result(result)
+    logger.info("IPC capture done: id=%s success=%s", request_id, result.get('success'))
+    return True
+
+
 def save_request_to_file(request, filepath, settings, profile):
     """キャプチャリクエストをファイルに保存。リクエストのreleaseは呼び出し元が行う。"""
     raw_mode = settings.get('raw_mode', False)
@@ -545,6 +662,7 @@ def main():
     threshold = BRIGHTNESS_THRESHOLD
     settings = DEFAULT_SETTINGS.copy()
     last_brightness = None
+    _brightness_history: deque = deque(maxlen=3)  # 輝度スムージング用リングバッファ
     check_interval = 0.5
     capture_cooldown = 3.0
     controls_applied = False
@@ -693,8 +811,21 @@ def main():
                             if fps_preset:
                                 try:
                                     fd = fps_preset['frame_duration']
+                                    # ExposureTime が FrameDuration を超える場合は合わせて拡張
+                                    ss = settings.get('shutter_speed', 'auto')
+                                    if ss and ss != 'auto':
+                                        try:
+                                            if isinstance(ss, str) and '/' in ss:
+                                                n, d = ss.split('/', 1)
+                                                et = int(float(n) / float(d) * 1_000_000)
+                                            else:
+                                                et = int(ss)
+                                            if et > fd:
+                                                fd = et + 10000
+                                        except (ValueError, TypeError):
+                                            pass
                                     cam.set_controls({'FrameDurationLimits': (fd, fd)})
-                                    logger.info("FrameDuration set to %dµs (~%dfps)", fd, detection_fps)
+                                    logger.info("FrameDuration set to %dµs", fd)
                                 except Exception as e:
                                     logger.warning("Failed to set FrameDurationLimits: %s", e)
                             cam.start()
@@ -756,6 +887,10 @@ def main():
                 time.sleep(check_interval)
                 continue
 
+            # --- IPC手動撮影リクエストの処理 ---
+            if camera is not None:
+                _handle_manual_capture_request(camera, settings, active_profile)
+
             # --- 光検知ループ（同一フレーム撮影方式） ---
             # capture_request() で取得したフレームで明るさを判定し、
             # トリガ時はそのフレームをそのまま保存。
@@ -765,16 +900,20 @@ def main():
                 request = camera.capture_request()
                 brightness, lux, ae_gain, ae_exposure_us = get_sensor_sample_from_request(request)
 
+                _brightness_history.append(brightness)
+                smoothed_brightness = float(np.median(list(_brightness_history)))
+
                 if last_brightness is None:
-                    last_brightness = brightness
+                    last_brightness = smoothed_brightness
                     request.release()
                     request = None
                     time.sleep(check_interval)
                     continue
 
                 prev_brightness = last_brightness
-                change_amount = brightness - prev_brightness
-                last_brightness = brightness
+                change_amount = smoothed_brightness - prev_brightness
+                last_brightness = smoothed_brightness
+                brightness = smoothed_brightness  # センサーステータスにも反映
 
                 sensor_state['state'] = 'monitoring'
                 sensor_state['brightness'] = round(float(brightness), 3)

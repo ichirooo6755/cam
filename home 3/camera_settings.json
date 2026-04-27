@@ -1,6 +1,6 @@
 {
-  "iso": 100,
-  "shutter_speed": 1000000,
+  "iso": "auto",
+  "shutter_speed": "auto",
   "brightness": 50,
   "contrast": 0,
   "saturation": 0,
@@ -19,7 +19,7 @@
   "enable_multiple_exposure": false,
   "enable_2in1_composition": false,
   "enable_timestamp": false,
-  "wifi_mode": "tethering",
+  "wifi_mode": "ap",
   "ap_ssid": "PiCamera",
   "ap_password": "picamera123"
 }
