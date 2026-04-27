@@ -1,5 +1,7 @@
 # cam Ctrl v2.0
 
+> ドキュメント整理済み: 入口は `docs/README.md` を参照してください。
+
 ## iOS App Fixes
 
 ### 1. Gallery Thumbnail Display Issue
