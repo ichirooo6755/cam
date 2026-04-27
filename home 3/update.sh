@@ -36,7 +36,7 @@ scp "${SSH_OPTS[@]}" camera-service.service pi@$RASPI_HOST:/home/pi/
 scp "${SSH_OPTS[@]}" api-server.service pi@$RASPI_HOST:/home/pi/
 
 # ドキュメントの転送（オプション）
-scp "${SSH_OPTS[@]}" TROUBLESHOOTING.md pi@$RASPI_HOST:/home/pi/ 2>/dev/null || echo "TROUBLESHOOTING.md not found, skipping..."
+scp "${SSH_OPTS[@]}" ../docs/runbook/TROUBLESHOOTING.md pi@$RASPI_HOST:/home/pi/ 2>/dev/null || echo "TROUBLESHOOTING.md not found, skipping..."
 
 echo "Transfer complete."
 echo "Restarting services..."
