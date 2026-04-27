@@ -10,6 +10,7 @@ enum EditorCategory: String, CaseIterable, Identifiable {
     case toneCurve = "📊"
     case crop = "✂️"
     case radial = "⭕"
+    case style = "🎞"
     case presets = "⭐"
 
     var id: String { rawValue }
@@ -24,6 +25,7 @@ enum EditorCategory: String, CaseIterable, Identifiable {
         case .toneCurve: return "chart.line.uptrend.xyaxis"
         case .crop: return "crop"
         case .radial: return "circle.lefthalf.filled"
+        case .style: return "camera.filters"
         case .presets: return "star.fill"
         }
     }
@@ -38,6 +40,7 @@ enum EditorCategory: String, CaseIterable, Identifiable {
         case .toneCurve: return "カーブ"
         case .crop: return "切り抜き"
         case .radial: return "ラジアル"
+        case .style: return "スタイル"
         case .presets: return "プリセット"
         }
     }

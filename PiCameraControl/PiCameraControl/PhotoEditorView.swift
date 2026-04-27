@@ -134,6 +134,8 @@ struct PhotoEditorSettings: Codable, Hashable {
     var hsl: HSLSettings  // HSL調整（8色チャンネル）
     var splitToning: SplitToningSettings  // スプリットトーニング
     var toneCurve: ToneCurveSettings  // トーンカーブ（Master/RGB）
+    var lutStyleName: String   // LUTスタイル名（""=なし）
+    var lutIntensity: Double   // LUT強度 0.0〜1.0
 
     static let `default` = PhotoEditorSettings(
         exposureEV: 0,
@@ -159,7 +161,9 @@ struct PhotoEditorSettings: Codable, Hashable {
         radialMask: .default,
         hsl: .default,
         splitToning: .default,
-        toneCurve: .default
+        toneCurve: .default,
+        lutStyleName: "",
+        lutIntensity: 1.0
     )
 }
 
@@ -689,6 +693,12 @@ private enum PhotoEditorRenderer {
         // トーンカーブ
         output = applyToneCurve(to: output, settings: settings.toneCurve)
 
+        // LUT スタイル（フィルムシミュレーション）
+        if !settings.lutStyleName.isEmpty,
+           let (lutData, lutSize) = LUTEngine.shared.load(named: settings.lutStyleName) {
+            output = LUTEngine.apply(output, data: lutData, size: lutSize, intensity: settings.lutIntensity)
+        }
+
         let rect = output.extent.integral
         guard let cg = context.createCGImage(output, from: rect) else { return nil }
         return UIImage(cgImage: cg, scale: image.scale, orientation: .up)
@@ -1176,7 +1186,7 @@ private enum PhotoEditorRenderer {
 
 struct PhotoEditorView: View {
     private enum StorageKeys {
-        static let presets = "photo_editor_presets_v1"
+        static let presets = "photo_editor_presets_v2"
     }
 
     let originalImage: UIImage
@@ -1772,9 +1782,19 @@ struct PhotoEditorView: View {
         case .radial:
             radialControls
 
+        case .style:
+            styleControls
+
         case .presets:
             presetsControls
         }
+    }
+
+    private var styleControls: some View {
+        StyleLibraryView(
+            selectedStyleName: $settings.lutStyleName,
+            intensity: $settings.lutIntensity
+        )
     }
 
     private var cropControls: some View {
