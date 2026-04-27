@@ -61,9 +61,8 @@ ssh pi@192.168.4.1 "journalctl -u camera-service -n 50 --no-pager"
 ```
 
 詳細ランブック:
-- `home 3/TROUBLESHOOTING.md`
+- `docs/runbook/TROUBLESHOOTING.md`
 
 ## 8. 旧ドキュメント対応
 このファイルは次を統合した運用版です。
 - `PROJECT_HANDOVER.md`
-- `manual.md`

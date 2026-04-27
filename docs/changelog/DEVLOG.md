@@ -9,4 +9,4 @@
 - クールダウン位置と fallback 挙動の再検証が必要
 
 ## 詳細ログ
-完全版は `home 3/DEV_STATUS.md` を参照。
+完全版は `docs/changelog/DEV_STATUS_FULL.md` を参照。

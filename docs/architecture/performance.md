@@ -20,4 +20,4 @@ Pi Zero 2W の制約下で、撮影安定性とバッテリー持続時間を両
 - 消費電力低減
 
 ## 参照
-元資料: `POWER_OPTIMIZATION.md`
+関連の変更履歴は `docs/changelog/DEV_STATUS_FULL.md` を参照してください。

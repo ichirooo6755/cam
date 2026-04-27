@@ -16,4 +16,4 @@
 - 学習効果を上げる一方で、処理時間増加とのバランスを取る
 
 ## 参照
-元資料: `LEARNING_IMPROVEMENTS.md`
+詳細履歴は `docs/changelog/DEV_STATUS_FULL.md` を参照してください。

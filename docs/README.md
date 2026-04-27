@@ -8,7 +8,7 @@
 
 ## ランブック
 - `docs/runbook/exposure-whiteout.md`: 白飛び/露出トラブルの原因と対処
-- `home 3/TROUBLESHOOTING.md`: Pi 側の詳細トラブルシューティングと長期ログ
+- `docs/runbook/TROUBLESHOOTING.md`: 総合トラブルシューティング入口
 
 ## 技術メモ
 - `docs/architecture/performance.md`: 省電力と性能最適化の方針
@@ -17,13 +17,9 @@
 ## 計画・履歴
 - `docs/plans/current-plan.md`: 現在有効な作業計画
 - `docs/changelog/DEVLOG.md`: 直近開発状況（抜粋）
+- `docs/changelog/DEV_STATUS_FULL.md`: 開発状況の詳細ログ
 - `docs/plans/2026-02-18-ui-ux-redesign-design.md`: UI/UX 詳細設計（既存）
 
-## 旧ファイルの扱い
-ルート直下の以下ファイルは互換性のため残し、内容は移行先への案内に整理しました。
-- `manual.md`
-- `WHITEOUT_FIX.md`
-- `取説.md`
-- `POWER_OPTIMIZATION.md`
-- `LEARNING_IMPROVEMENTS.md`
-- `plan.md`
+## 移行メモ
+- `home 3/DEV_STATUS.md` は `docs/changelog/DEV_STATUS_FULL.md` へ移行済み
+- `home 3/TROUBLESHOOTING.md` は配布互換のため当面残置（`docs/runbook/TROUBLESHOOTING.md` から参照）

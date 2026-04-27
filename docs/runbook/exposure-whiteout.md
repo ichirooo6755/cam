@@ -37,4 +37,4 @@ ssh pi@192.168.4.1 "sudo systemctl restart camera-service api-server"
 - 1枚目は露出が外れることがあるため、連続撮影で傾向を確認する
 
 ## 詳細調査先
-- `home 3/TROUBLESHOOTING.md`
+- `docs/runbook/TROUBLESHOOTING.md`
