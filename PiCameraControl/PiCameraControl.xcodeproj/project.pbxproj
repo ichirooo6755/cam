@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		E00000010000000000000083 /* NIRRestoreProcessor.swift in Sources */ = {isa = PBXBuildFile; fileRef = E00000010000000000000082 /* NIRRestoreProcessor.swift */; };
 		E00000010000000000000081 /* LUTs in Resources */ = {isa = PBXBuildFile; fileRef = E00000010000000000000080 /* LUTs */; };
 		E00000010000000000000079 /* LUTEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = E00000010000000000000078 /* LUTEngine.swift */; };
 		E0000001000000000000007B /* LUTStyle.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0000001000000000000007A /* LUTStyle.swift */; };
@@ -43,6 +44,7 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		E00000010000000000000082 /* NIRRestoreProcessor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NIRRestoreProcessor.swift; sourceTree = "<group>"; };
 		E00000010000000000000080 /* LUTs */ = {isa = PBXFileReference; lastKnownFileType = folder; path = LUTs; sourceTree = "<group>"; };
 		E00000010000000000000078 /* LUTEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LUTEngine.swift; sourceTree = "<group>"; };
 		E0000001000000000000007A /* LUTStyle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LUTStyle.swift; sourceTree = "<group>"; };
@@ -126,6 +128,7 @@
 				E0000001000000000000007A /* LUTStyle.swift */,
 				E0000001000000000000007C /* StyleLibraryView.swift */,
 				E00000010000000000000080 /* LUTs */,
+				E00000010000000000000082 /* NIRRestoreProcessor.swift */,
 			);
 			path = PiCameraControl;
 			sourceTree = "<group>";
@@ -247,6 +250,7 @@
 				E0000001000000000000007D /* StyleLibraryView.swift in Sources */,
 				E0000001000000000000007E /* PhotoGalleryView.swift in Sources */,
 				E0000001000000000000007F /* EditedPhotosListView.swift in Sources */,
+				E00000010000000000000083 /* NIRRestoreProcessor.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

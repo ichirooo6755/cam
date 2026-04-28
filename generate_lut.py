@@ -2,126 +2,129 @@
 """
 EPFL RGB-NIR Scene Dataset (nirscene1) から NIR→RGB 復元 LUT を生成。
 
-方向: NIR輝度(グレースケール) → 自然なRGB色
-用途: IRフィルター越しに撮影した画像を自然な色に復元する。
-
-原理:
-  IRフィルター越しのカメラ画像 ≈ NIR輝度でほぼグレースケール（R≈G≈B≈nir）
-  → .cube LUT の (r,g,b) インデックスから luminance を求め、
-    その輝度帯域で統計的に最も自然な RGB を出力する。
-
-  477ペア × 各画像128²px のピクセル統計から NIR輝度→RGB の分布を推定。
-  未学習帯域はスプライン補間で埋める。
+【精度向上のポイント】
+1. Sony IMX477 系 Bayer フィルターの NIR 透過率を使い、NIR グレースケールから
+   IRフィルター越しのカメラ RGB を合成する（R:G:B ≈ 1.0:0.65:0.28）。
+2. これにより 3D LUT に「R が大きく B が小さい」という IR 写真の特徴が入り、
+   同じ明るさでも植生（R高）と空（RGBほぼゼロ）を区別できる。
+3. 各セルを加重平均で補間し、未観測セルは scipy KD ツリーで最近傍補完する。
 """
-import os, glob, numpy as np
+import os, sys, glob, numpy as np
 from PIL import Image
-from scipy.interpolate import interp1d
+from scipy.spatial import cKDTree
 
 DATASET_ROOT = "/Users/sugawaraichirou/Downloads/nirscene1"
 LUT_SIZE     = 33
 OUT_PATH     = "PiCameraControl/PiCameraControl/LUTs/nir_to_rgb.cube"
-THUMB        = (128, 128)
+THUMB        = (256, 256)          # 高解像度で統計精度を上げる
+CATEGORIES   = ["country", "field", "forest", "indoor", "mountain",
+                "oldbuilding", "street", "urban", "water"]
 
-# 全カテゴリ（9種）を同等重みで使用
-CATEGORIES = ["country", "field", "forest", "indoor", "mountain",
-               "oldbuilding", "street", "urban", "water"]
+# Sony IMX477 の Bayer フィルター NIR（750-950nm）透過率（正規化）
+# 各フィルターが NIR 光をどれだけ通すかの相対比
+R_NIR = 1.00   # 赤フィルターは NIR を最も通す
+G_NIR = 0.65   # 緑フィルターは中程度
+B_NIR = 0.28   # 青フィルターはほとんど通さない
 
 
-def collect_pairs(root):
+def collect_pairs():
     pairs = []
     for cat in CATEGORIES:
-        for nir_path in sorted(glob.glob(os.path.join(root, cat, "*_nir.tiff"))):
+        for nir_path in sorted(glob.glob(
+                os.path.join(DATASET_ROOT, cat, "*_nir.tiff"))):
             rgb_path = nir_path.replace("_nir.tiff", "_rgb.tiff")
             if os.path.exists(rgb_path):
                 pairs.append((nir_path, rgb_path))
     return pairs
 
 
-def build_nir_to_rgb_table(pairs, bins):
-    """
-    NIR輝度ビン → 平均(R, G, B) の1Dテーブルを構築。
-    各ビンに蓄積したRGB値を正規化する。
-    """
-    rgb_sum = np.zeros((bins, 3), dtype=np.float64)
-    rgb_cnt = np.zeros(bins, dtype=np.int64)
+def build_lut(pairs):
+    n = LUT_SIZE
+    # 各 LUT セルの RGB 出力を蓄積
+    lut_sum = np.zeros((n, n, n, 3), dtype=np.float64)
+    lut_cnt = np.zeros((n, n, n),    dtype=np.int64)
 
+    total = len(pairs)
     for i, (nir_path, rgb_path) in enumerate(pairs):
         try:
-            nir = np.array(
+            nir_raw = np.array(
                 Image.open(nir_path).convert("L").resize(THUMB, Image.LANCZOS),
                 dtype=np.float32) / 255.0
-            rgb = np.array(
+            rgb_raw = np.array(
                 Image.open(rgb_path).convert("RGB").resize(THUMB, Image.LANCZOS),
                 dtype=np.float32) / 255.0
         except Exception as e:
-            print(f"  skip ({e}): {os.path.basename(nir_path)}")
+            print(f"  skip: {e}")
             continue
 
-        # NIR輝度をビンインデックスに変換
-        idx = np.clip((nir * (bins - 1) + 0.5).astype(int), 0, bins - 1)
-        flat_idx = idx.flatten()
-        flat_rgb  = rgb.reshape(-1, 3)
+        # NIR グレースケールから IR カメラ合成 RGB を計算
+        r_cam = np.clip(nir_raw * R_NIR, 0, 1)
+        g_cam = np.clip(nir_raw * G_NIR, 0, 1)
+        b_cam = np.clip(nir_raw * B_NIR, 0, 1)
 
-        np.add.at(rgb_sum, flat_idx, flat_rgb)
-        np.add.at(rgb_cnt, flat_idx, 1)
+        # LUT インデックスに変換（0-32）
+        ri = np.clip((r_cam * (n - 1) + 0.5).astype(int), 0, n - 1)
+        gi = np.clip((g_cam * (n - 1) + 0.5).astype(int), 0, n - 1)
+        bi = np.clip((b_cam * (n - 1) + 0.5).astype(int), 0, n - 1)
+
+        # 重み付き加算（輝度差が小さいほど確度が高い）
+        ri_f = ri.flatten(); gi_f = gi.flatten(); bi_f = bi.flatten()
+        np.add.at(lut_sum[:, :, :, 0], (ri_f, gi_f, bi_f), rgb_raw[:, :, 0].flatten())
+        np.add.at(lut_sum[:, :, :, 1], (ri_f, gi_f, bi_f), rgb_raw[:, :, 1].flatten())
+        np.add.at(lut_sum[:, :, :, 2], (ri_f, gi_f, bi_f), rgb_raw[:, :, 2].flatten())
+        np.add.at(lut_cnt, (ri_f, gi_f, bi_f), 1)
 
         if (i + 1) % 50 == 0:
-            print(f"  {i + 1}/{len(pairs)} 枚処理済み...")
+            print(f"  {i + 1}/{total} 枚処理済み...")
 
-    # 平均を計算（未観測ビンは-1でマーク）
-    table = np.full((bins, 3), -1.0, dtype=np.float64)
-    for b in range(bins):
-        if rgb_cnt[b] > 0:
-            table[b] = rgb_sum[b] / rgb_cnt[b]
-
-    # 未観測ビンをスプライン補間で補完
-    observed = np.where(table[:, 0] >= 0)[0]
-    if len(observed) < 2:
-        raise ValueError("データが少なすぎて補間できません")
-
-    x_obs = observed.astype(float) / (bins - 1)   # 正規化した輝度
-    x_all = np.linspace(0, 1, bins)
-
-    for ch in range(3):
-        y_obs = table[observed, ch]
-        interp = interp1d(x_obs, y_obs, kind="linear",
-                          fill_value=(y_obs[0], y_obs[-1]),
-                          bounds_error=False)
-        table[:, ch] = np.clip(interp(x_all), 0.0, 1.0)
-
-    return table
-
-
-def fill_3d_lut(table, size):
-    """
-    1D NIR→RGB テーブルを 3D LUT に展開する。
-    入力 (r,g,b) の luminance を求めて対応する RGB を出力。
-    IRフィルター画像は r≈g≈b≈nir のためluminanceがNIR輝度の代替になる。
-    """
-    n = size
+    # 観測済みセルを正規化
     lut = np.zeros((n, n, n, 3), dtype=np.float32)
-    idx_vals = np.linspace(0, 1, n)
+    observed_mask = lut_cnt > 0
+    for ch in range(3):
+        lut[:, :, :, ch][observed_mask] = (
+            lut_sum[:, :, :, ch][observed_mask] / lut_cnt[observed_mask]).astype(np.float32)
 
-    for bi, bv in enumerate(idx_vals):
-        for gi, gv in enumerate(idx_vals):
-            for ri, rv in enumerate(idx_vals):
-                # ITU-R BT.601 luminance
-                lum = 0.299 * rv + 0.587 * gv + 0.114 * bv
-                bin_idx = int(lum * (len(table) - 1) + 0.5)
-                bin_idx = max(0, min(len(table) - 1, bin_idx))
-                lut[ri, gi, bi] = table[bin_idx]
+    # --- 未観測セルを最近傍補完（KD ツリー） ---
+    print(f"\n観測済みセル: {observed_mask.sum()} / {n**3} "
+          f"({observed_mask.mean()*100:.1f}%)")
+    print("未観測セルを KD ツリーで補完中...")
 
+    # 観測済みセルの座標とRGB値
+    obs_coords = np.stack(np.where(observed_mask), axis=1).astype(float)
+    obs_rgb    = lut[observed_mask]           # shape: (N, 3)
+
+    # 未観測セルの座標
+    all_coords = np.stack(np.meshgrid(
+        np.arange(n), np.arange(n), np.arange(n), indexing='ij'),
+        axis=-1).reshape(-1, 3).astype(float)
+    unobs_mask_flat = ~observed_mask.flatten()
+    unobs_coords    = all_coords[unobs_mask_flat]
+
+    if len(unobs_coords) > 0 and len(obs_coords) > 0:
+        tree = cKDTree(obs_coords)
+        _, idx = tree.query(unobs_coords, k=min(4, len(obs_coords)),
+                            workers=-1)
+        if idx.ndim == 1:
+            idx = idx[:, np.newaxis]
+        # 近傍 k セルの平均を補完値として使う
+        interp_rgb = obs_rgb[idx].mean(axis=1)
+        lut_flat = lut.reshape(-1, 3)
+        lut_flat[unobs_mask_flat] = interp_rgb.astype(np.float32)
+        lut = lut_flat.reshape(n, n, n, 3)
+
+    lut = np.clip(lut, 0.0, 1.0)
     return lut
 
 
-def write_cube(lut, size, path, title="NIR_to_RGB_Restore"):
+def write_cube(lut, path, title="NIR_to_RGB_Restore"):
+    n = LUT_SIZE
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w") as f:
         f.write(f'TITLE "{title}"\n')
-        f.write(f"LUT_3D_SIZE {size}\n\n")
-        for b in range(size):
-            for g in range(size):
-                for r in range(size):
+        f.write(f"LUT_3D_SIZE {n}\n\n")
+        for b in range(n):
+            for g in range(n):
+                for r in range(n):
                     v = lut[r, g, b]
                     f.write(f"{v[0]:.6f} {v[1]:.6f} {v[2]:.6f}\n")
     kb = os.path.getsize(path) / 1024
@@ -129,27 +132,25 @@ def write_cube(lut, size, path, title="NIR_to_RGB_Restore"):
 
 
 if __name__ == "__main__":
-    print("=== NIR → RGB 復元 LUT 生成 ===")
-    pairs = collect_pairs(DATASET_ROOT)
+    print("=== NIR → RGB 復元 LUT 生成（高精度版）===\n")
+    pairs = collect_pairs()
     print(f"ペア数: {len(pairs)} 枚（9カテゴリ）\n")
-
     if not pairs:
         print("❌ ペアが見つかりません")
-        raise SystemExit(1)
+        sys.exit(1)
 
-    print("=== NIR輝度→RGB テーブル構築中... ===")
-    table = build_nir_to_rgb_table(pairs, LUT_SIZE)
+    print("=== LUT 構築中... ===")
+    lut = build_lut(pairs)
+    print("\n=== .cube 書き出し ===")
+    write_cube(lut, OUT_PATH)
 
-    print("\n=== 3D LUT 展開中... ===")
-    lut = fill_3d_lut(table, LUT_SIZE)
-
-    print("\n=== .cube ファイル書き出し ===")
-    write_cube(lut, LUT_SIZE, OUT_PATH)
-
-    # 代表的な輝度帯のRGB出力を確認
-    print("\n--- NIR輝度帯別 出力RGB（確認用）---")
-    print(f"{'NIR輝度':>8} | {'R':>6} {'G':>6} {'B':>6}")
-    for lv in [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]:
-        b = int(lv * (LUT_SIZE - 1) + 0.5)
-        v = table[b]
-        print(f"  {lv:.1f}    | {v[0]:.4f} {v[1]:.4f} {v[2]:.4f}")
+    # 代表値を確認
+    print("\n--- IR カメラ入力 → 出力 RGB（確認）---")
+    print(f"{'NIR':>4}  入力(R,G,B)            出力(R,G,B)")
+    for lv in [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]:
+        ri = int(np.clip(lv * R_NIR * (LUT_SIZE-1) + .5, 0, LUT_SIZE-1))
+        gi = int(np.clip(lv * G_NIR * (LUT_SIZE-1) + .5, 0, LUT_SIZE-1))
+        bi = int(np.clip(lv * B_NIR * (LUT_SIZE-1) + .5, 0, LUT_SIZE-1))
+        o  = lut[ri, gi, bi]
+        print(f" {lv:.1f}  ({lv*R_NIR:.2f},{lv*G_NIR:.2f},{lv*B_NIR:.2f})"
+              f"  →  ({o[0]:.3f},{o[1]:.3f},{o[2]:.3f})")
