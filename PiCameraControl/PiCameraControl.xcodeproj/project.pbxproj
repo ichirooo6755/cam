@@ -209,6 +209,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				E00000010000000000000012 /* Assets.xcassets in Resources */,
+				E00000010000000000000081 /* LUTs in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
