@@ -447,6 +447,20 @@ def _adapt_exposure_background(camera, filepath, settings):
         logger.debug("Adaptive exposure background error: %s", e)
 
 
+def _is_camera_frontend_timeout_error(err: Exception) -> bool:
+    """libcamera frontend timeout 系の既知エラーかを判定"""
+    text = str(err).lower()
+    keywords = (
+        'frontend has timed out',
+        'dequeue timer',
+        'camera frontend',
+        'v4l2',
+        'pipeline_base',
+        'timeout',
+    )
+    return any(k in text for k in keywords)
+
+
 def _handle_manual_capture_request(camera, settings: dict, active_profile: dict) -> bool:
     """
     api_server.py からの IPC 手動撮影リクエストを処理する。
@@ -984,6 +998,27 @@ def main():
             except Exception as e:
                 logger.error(f"Detection error: {e}")
                 sensor_state['last_error'] = str(e)
+                if _is_camera_frontend_timeout_error(e):
+                    logger.warning(
+                        "Camera frontend timeout detected. Reinitializing camera pipeline..."
+                    )
+                    sensor_state['state'] = 'camera_recovering'
+                    if camera is not None:
+                        try:
+                            camera.stop()
+                        except Exception:
+                            pass
+                        try:
+                            camera.close()
+                        except Exception:
+                            pass
+                        camera = None
+                    current_main_size = None
+                    current_lores_size = None
+                    last_brightness = None
+                    controls_applied = False
+                    last_settings_load = 0  # 次ループで即再初期化
+                    time.sleep(1.0)
             finally:
                 if request is not None:
                     try:
