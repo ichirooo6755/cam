@@ -61,6 +61,8 @@ _SENSOR_STATUS_DIR = '/run/picamera'
 
 BRIGHTNESS_THRESHOLD = 30
 MIN_CHANGE_AMOUNT = 5
+DARK_SCENE_BRIGHTNESS_CUTOFF = 20.0
+DARK_SCENE_MIN_CHANGE_AMOUNT = 0.8
 SETTINGS_RELOAD_INTERVAL = 2.0
 SENSOR_STATUS_WRITE_INTERVAL = 2.0
 
@@ -88,7 +90,7 @@ MODE_PROFILES = {
         'lores_size': (160, 120),
         'quality': 90,
         'denoise_override': None,
-        'wifi_sleep': 0.08,
+        'wifi_sleep': 0.15,
     },
     'manual': {
         'check_interval': 0.2,
@@ -97,7 +99,7 @@ MODE_PROFILES = {
         'lores_size': (160, 120),
         'quality': 90,
         'denoise_override': None,
-        'wifi_sleep': 0.08,
+        'wifi_sleep': 0.15,
     },
     'quality': {
         'check_interval': 0.5,
@@ -106,7 +108,7 @@ MODE_PROFILES = {
         'lores_size': (160, 120),
         'quality': 100,
         'denoise_override': 'cdn_hq',
-        'wifi_sleep': 0.10,
+        'wifi_sleep': 0.15,
     },
     'night': {
         'check_interval': 0.5,
@@ -115,7 +117,7 @@ MODE_PROFILES = {
         'lores_size': (160, 120),
         'quality': 95,
         'denoise_override': 'cdn_hq',
-        'wifi_sleep': 0.10,
+        'wifi_sleep': 0.15,
     },
     'raw': {
         'check_interval': 0.5,
@@ -124,7 +126,7 @@ MODE_PROFILES = {
         'lores_size': (160, 120),
         'quality': 100,
         'denoise_override': None,
-        'wifi_sleep': 0.10,
+        'wifi_sleep': 0.15,
     },
     'battery': {
         'check_interval': 1.0,
@@ -939,8 +941,15 @@ def main():
                 sensor_state['last_change_percent'] = round(float(change_percent), 3)
 
                 # --- 撮影判定 ---
+                required_change_amount = MIN_CHANGE_AMOUNT
+                if prev_brightness < DARK_SCENE_BRIGHTNESS_CUTOFF:
+                    # 暗所ではLux/brightness絶対値が小さいため、固定5.0だと検知しづらい。
+                    required_change_amount = max(
+                        DARK_SCENE_MIN_CHANGE_AMOUNT,
+                        prev_brightness * 0.25,
+                    )
                 if (change_percent >= threshold
-                        and change_amount >= MIN_CHANGE_AMOUNT
+                        and change_amount >= required_change_amount
                         and current_time - last_capture_time >= capture_cooldown):
 
                     if not _rate_limit_ok():
@@ -953,8 +962,8 @@ def main():
                         continue
 
                     logger.info(
-                        "Light detected: lux=%.2f, change=%.1f%%, thr=%d",
-                        brightness, change_percent, threshold,
+                        "Light detected: lux=%.2f, change=%.1f%%, thr=%d, req=%.2f",
+                        brightness, change_percent, threshold, required_change_amount,
                     )
                     detected_at = time.time()
                     sensor_state['last_detected_at'] = datetime.now().isoformat()

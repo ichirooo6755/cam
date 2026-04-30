@@ -17,22 +17,46 @@ final class ConnectionMonitor: ObservableObject {
     private let disconnectedBaseInterval: TimeInterval = 3.0
     private let maxPollingInterval: TimeInterval = 60.0
     private let maxFallbackAttempts: Int = 3
-    private let session: URLSession
+    private let offlineFailureThreshold: Int = 2
+    /// 連続失敗がこの回数を超えたら URLSession を作り直して
+    /// 死んだ TCP コネクションの握り直しを促す
+    private let sessionRecycleFailureThreshold: Int = 3
+    private var session: URLSession
     private var activePathMonitor: NWPathMonitor?
     private let pathMonitorQueue = DispatchQueue(label: "connectionMonitor.nw")
     private var isCheckInFlight = false
     private var lastCheckStarted: Date = .distantPast
+    private var lastSuccessfulCheck: Date?
+    private var lastSessionRebuild: Date = .distantPast
 
     /// フォールバック候補IP（プライマリが失敗した場合に試す）
     private let fallbackIPs = ["192.168.4.1", "10.42.0.1"]
 
     private init() {
-        let config = URLSessionConfiguration.default
+        self.session = Self.makeSession()
+    }
+
+    private static func makeSession() -> URLSession {
+        let config = URLSessionConfiguration.ephemeral
         config.timeoutIntervalForRequest = 3
         config.timeoutIntervalForResource = 5
         config.waitsForConnectivity = false
         config.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
-        self.session = URLSession(configuration: config)
+        config.httpMaximumConnectionsPerHost = 2
+        config.httpShouldUsePipelining = false
+        return URLSession(configuration: config)
+    }
+
+    /// 死に接続を保持し続けないよう URLSession を作り直す。
+    /// AP の瞬断後に iOS が古い TCP を握ったまま固まる現象の回避策。
+    private func rebuildSession() {
+        let now = Date()
+        // 短時間に何度も作り直さない
+        if now.timeIntervalSince(lastSessionRebuild) < 5.0 { return }
+        lastSessionRebuild = now
+        let old = session
+        session = Self.makeSession()
+        old.invalidateAndCancel()
     }
 
     /// 監視開始
@@ -54,6 +78,7 @@ final class ConnectionMonitor: ObservableObject {
     /// フォアグラウンド復帰時に呼ぶ（即時チェック + Timer再開）
     func handleForegroundReturn() {
         consecutiveFailures = 0
+        rebuildSession()
         Task { await checkConnection() }
         scheduleTimer()
         startPathMonitor()
@@ -96,6 +121,7 @@ final class ConnectionMonitor: ObservableObject {
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 if path.status == .satisfied {
+                    self.rebuildSession()
                     await self.checkConnection()
                 } else {
                     self.isConnected = false
@@ -123,9 +149,25 @@ final class ConnectionMonitor: ObservableObject {
         if await tryConnect(ip: serverIP) {
             isConnected = true
             consecutiveFailures = 0
+            lastSuccessfulCheck = Date()
         } else {
             consecutiveFailures += 1
-            isConnected = false
+            if consecutiveFailures >= offlineFailureThreshold || lastSuccessfulCheck == nil {
+                isConnected = false
+            }
+
+            // AP瞬断後の死んだTCP接続を再利用し続けないよう、一定回数失敗したらSessionを作り直して再試行
+            if consecutiveFailures >= sessionRecycleFailureThreshold {
+                rebuildSession()
+                if await tryConnect(ip: serverIP) {
+                    isConnected = true
+                    consecutiveFailures = 0
+                    lastSuccessfulCheck = Date()
+                    lastChecked = Date()
+                    if !wasConnected { scheduleTimer() }
+                    return
+                }
+            }
 
             // 3回連続失敗でフォールバックIPを試す（上限あり）
             if consecutiveFailures >= 3 && consecutiveFailures <= maxFallbackAttempts + 3 {
@@ -134,6 +176,7 @@ final class ConnectionMonitor: ObservableObject {
                         UserDefaults.standard.set(fallback, forKey: "serverIP")
                         isConnected = true
                         consecutiveFailures = 0
+                        lastSuccessfulCheck = Date()
                         break
                     }
                 }
