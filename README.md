@@ -32,6 +32,7 @@ bash PiCameraControl/build_ios_simulator.sh
 |---|---|
 | [`docs/operations/OPERATIONS.md`](docs/operations/OPERATIONS.md) | 接続情報・API・デプロイ手順・白飛び対応 |
 | [`docs/runbook/TROUBLESHOOTING.md`](docs/runbook/TROUBLESHOOTING.md) | 総合トラブルシューティング |
+| [`docs/runbook/USB_OTG.md`](docs/runbook/USB_OTG.md) | Pi Zero 系 USB OTG（gadget）有効化・USB 経由の書き換え |
 | [`docs/architecture/performance.md`](docs/architecture/performance.md) | 省電力・性能最適化方針 |
 | [`docs/changelog/DEV_STATUS_FULL.md`](docs/changelog/DEV_STATUS_FULL.md) | 直近の実施内容・未解決問題 |
 | [`docs/plans/2026-02-18-ui-ux-redesign-design.md`](docs/plans/2026-02-18-ui-ux-redesign-design.md) | UI/UX 詳細設計（参考） |
