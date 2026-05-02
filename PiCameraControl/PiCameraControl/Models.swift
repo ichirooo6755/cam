@@ -269,7 +269,8 @@ func sanitizePhotoFilename(_ filename: String) -> String? {
     guard trimmed.rangeOfCharacter(from: allowed.inverted) == nil else { return nil }
 
     let lower = trimmed.lowercased()
-    guard lower.hasSuffix(".jpg") || lower.hasSuffix(".jpeg") || lower.hasSuffix(".png") else {
+    guard lower.hasSuffix(".jpg") || lower.hasSuffix(".jpeg") || lower.hasSuffix(".png")
+        || lower.hasSuffix(".dng") else {
         return nil
     }
     return trimmed

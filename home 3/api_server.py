@@ -53,7 +53,8 @@ BOOT_NETWORK_APPLIED_MARKERS = (
     '/tmp/picamera_boot_network_applied',
 )
 SAFE_FILENAME_PATTERN = re.compile(r'^[A-Za-z0-9._-]+$')
-ALLOWED_PHOTO_EXTENSIONS = ('.jpg', '.jpeg', '.png')
+# camera_service の光検知撮影は raw_mode 時に .dng を保存するため一覧・配信対象に含める
+ALLOWED_PHOTO_EXTENSIONS = ('.jpg', '.jpeg', '.png', '.dng')
 MAX_JSON_BODY_BYTES = 64 * 1024
 WIFI_SWITCH_COOLDOWN_SEC = 12
 WIFI_RECOVERY_CHECK_INTERVAL_SEC = 10
@@ -964,6 +965,16 @@ def _thumbnail_path(filename, max_dim):
     base, _ext = os.path.splitext(filename)
     return os.path.join(THUMBNAIL_DIR, f"{base}_w{max_dim}.jpg")
 
+
+def _content_type_for_photo(filename: str) -> str:
+    lower = filename.lower()
+    if lower.endswith('.png'):
+        return 'image/png'
+    if lower.endswith('.dng'):
+        return 'image/dng'
+    return 'image/jpeg'
+
+
 def _ensure_thumbnail(filepath, max_dim):
     if Image is None:
         return None
@@ -976,11 +987,34 @@ def _ensure_thumbnail(filepath, max_dim):
                 return thumb_path
 
         resample = Image.Resampling.LANCZOS if hasattr(Image, 'Resampling') else Image.LANCZOS
-        with Image.open(filepath) as img:
+
+        def _write_thumb_from_image(img):
             img.thumbnail((max_dim, max_dim), resample=resample)
             if img.mode in ('RGBA', 'P'):
                 img = img.convert('RGB')
             img.save(thumb_path, format='JPEG', quality=THUMBNAIL_QUALITY, optimize=True)
+
+        basename = os.path.basename(filepath)
+        try:
+            with Image.open(filepath) as img:
+                _write_thumb_from_image(img)
+        except Exception as pil_err:
+            if basename.lower().endswith('.dng'):
+                try:
+                    import rawpy  # type: ignore
+                    with rawpy.imread(filepath) as raw:
+                        rgb = raw.postprocess()
+                    img = Image.fromarray(rgb)
+                    _write_thumb_from_image(img)
+                except Exception as raw_err:
+                    logger.warning(
+                        "Thumbnail generation failed for DNG (PIL: %s, rawpy: %s)",
+                        pil_err, raw_err,
+                    )
+                    return None
+            else:
+                logger.warning(f"Thumbnail generation failed: {pil_err}")
+                return None
         return thumb_path
     except Exception as e:
         logger.warning(f"Thumbnail generation failed: {e}")
@@ -1285,7 +1319,7 @@ class APIHandler(BaseHTTPRequestHandler):
                 self.send_error(404)
                 return
 
-            content_type = 'image/png' if filename.lower().endswith('.png') else 'image/jpeg'
+            content_type = _content_type_for_photo(filename)
             self.send_response(200)
             self.send_header('Content-Type', content_type)
             self.send_header('Content-Length', os.path.getsize(filepath))
@@ -1328,7 +1362,7 @@ class APIHandler(BaseHTTPRequestHandler):
                 return
 
             content_path = filepath
-            content_type = 'image/png' if safe_name.lower().endswith('.png') else 'image/jpeg'
+            content_type = _content_type_for_photo(safe_name)
             if thumbnail:
                 thumb_path = _ensure_thumbnail(filepath, max_dim)
                 if thumb_path:
@@ -1492,7 +1526,11 @@ class APIHandler(BaseHTTPRequestHandler):
         try:
             photo_count = 0
             if os.path.exists(PHOTOS_DIR):
-                photo_count = len([f for f in os.listdir(PHOTOS_DIR) if f.endswith('.jpg')])
+                photo_count = len([
+                    f for f in os.listdir(PHOTOS_DIR)
+                    if f.lower().endswith(ALLOWED_PHOTO_EXTENSIONS)
+                    and SAFE_FILENAME_PATTERN.match(f)
+                ])
             
             settings = DEFAULT_SETTINGS.copy()
             if os.path.exists(SETTINGS_FILE):
