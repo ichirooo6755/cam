@@ -1040,10 +1040,13 @@ def _apply_client_unix_time(ts):
         return False, err[:300] if err else 'sudo date failed (need NOPASSWD for date?)'
     hw = shutil.which('fake-hwclock')
     if hw:
-        subprocess.run(
-            ['sudo', '-n', 'fake-hwclock', 'save'],
-            capture_output=True, text=True, timeout=5,
-        )
+        try:
+            subprocess.run(
+                ['sudo', '-n', 'fake-hwclock', 'save'],
+                capture_output=True, text=True, timeout=25,
+            )
+        except (subprocess.TimeoutExpired, OSError, subprocess.SubprocessError) as e:
+            logger.warning('fake-hwclock save skipped after time set: %s', e)
     return True, None
 
 
