@@ -46,6 +46,8 @@ cd "home 3" && bash ./wifi_cycle_test.sh
 - `POST /api/photo`: 写真取得（サムネ対応）
 - `POST /api/capture`: 手動撮影
 - `GET /api/sensor/status`: センサー状態
+- `GET /api/status`: 状態（`server_time_unix` 含む。AP 単独で NTP が効かないときの時刻合わせ用）
+- `POST /api/system/time`: ボディ `{"unix_time": <1970年からの秒>}` で Pi システム時刻を設定（`sudo date`、iOS は接続時に自動送信）
 
 ## 6. 白飛び・露出トラブル対応
 

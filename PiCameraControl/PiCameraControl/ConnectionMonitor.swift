@@ -18,6 +18,8 @@ final class ConnectionMonitor: ObservableObject {
     private let maxPollingInterval: TimeInterval = 60.0
     private let maxFallbackAttempts: Int = 3
     private let offlineFailureThreshold: Int = 2
+    /// Pi が AP のみで NTP 同期できないとき、iPhone 時刻との差がこれ以上なら /api/system/time で合わせる
+    private let clockSyncSkewSeconds: TimeInterval = 12.0
     /// 連続失敗がこの回数を超えたら URLSession を作り直して
     /// 死んだ TCP コネクションの握り直しを促す
     private let sessionRecycleFailureThreshold: Int = 3
@@ -79,7 +81,14 @@ final class ConnectionMonitor: ObservableObject {
     func handleForegroundReturn() {
         consecutiveFailures = 0
         rebuildSession()
-        Task { await checkConnection() }
+        Task {
+            await checkConnection()
+            if isConnected {
+                let ip = UserDefaults.standard.string(forKey: "serverIP") ?? "192.168.4.1"
+                let p = await probeStatus(ip: ip)
+                await synchronizePiClockIfNeeded(ip: ip, serverTimeUnix: p.serverTimeUnix)
+            }
+        }
         scheduleTimer()
         startPathMonitor()
     }
@@ -146,10 +155,14 @@ final class ConnectionMonitor: ObservableObject {
         let wasConnected = isConnected
 
         // プライマリIPで接続試行
-        if await tryConnect(ip: serverIP) {
+        let primaryProbe = await probeStatus(ip: serverIP)
+        if primaryProbe.ok {
             isConnected = true
             consecutiveFailures = 0
             lastSuccessfulCheck = Date()
+            if !wasConnected {
+                await synchronizePiClockIfNeeded(ip: serverIP, serverTimeUnix: primaryProbe.serverTimeUnix)
+            }
         } else {
             consecutiveFailures += 1
             if consecutiveFailures >= offlineFailureThreshold || lastSuccessfulCheck == nil {
@@ -159,11 +172,15 @@ final class ConnectionMonitor: ObservableObject {
             // AP瞬断後の死んだTCP接続を再利用し続けないよう、一定回数失敗したらSessionを作り直して再試行
             if consecutiveFailures >= sessionRecycleFailureThreshold {
                 rebuildSession()
-                if await tryConnect(ip: serverIP) {
+                let recycled = await probeStatus(ip: serverIP)
+                if recycled.ok {
                     isConnected = true
                     consecutiveFailures = 0
                     lastSuccessfulCheck = Date()
                     lastChecked = Date()
+                    if !wasConnected {
+                        await synchronizePiClockIfNeeded(ip: serverIP, serverTimeUnix: recycled.serverTimeUnix)
+                    }
                     if !wasConnected { scheduleTimer() }
                     return
                 }
@@ -172,11 +189,15 @@ final class ConnectionMonitor: ObservableObject {
             // 3回連続失敗でフォールバックIPを試す（上限あり）
             if consecutiveFailures >= 3 && consecutiveFailures <= maxFallbackAttempts + 3 {
                 for fallback in fallbackIPs where fallback != serverIP {
-                    if await tryConnect(ip: fallback) {
+                    let fb = await probeStatus(ip: fallback)
+                    if fb.ok {
                         UserDefaults.standard.set(fallback, forKey: "serverIP")
                         isConnected = true
                         consecutiveFailures = 0
                         lastSuccessfulCheck = Date()
+                        if !wasConnected {
+                            await synchronizePiClockIfNeeded(ip: fallback, serverTimeUnix: fb.serverTimeUnix)
+                        }
                         break
                     }
                 }
@@ -190,19 +211,42 @@ final class ConnectionMonitor: ObservableObject {
         }
     }
 
-    /// 指定IPの /api/status へ GET して到達性を判定
-    private func tryConnect(ip: String) async -> Bool {
-        guard let url = URL(string: "http://\(ip):8001/api/status") else { return false }
+    /// 指定IPの /api/status へ GET して到達性と Pi 時刻（あれば）を取得
+    private func probeStatus(ip: String) async -> (ok: Bool, serverTimeUnix: Double?) {
+        guard let url = URL(string: "http://\(ip):8001/api/status") else { return (false, nil) }
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
         request.cachePolicy = .reloadIgnoringLocalCacheData
         do {
-            let (_, response) = try await session.data(for: request)
-            if let http = response as? HTTPURLResponse,
-               (200...499).contains(http.statusCode) {
-                return true
+            let (data, response) = try await session.data(for: request)
+            guard let http = response as? HTTPURLResponse,
+                  (200...499).contains(http.statusCode) else {
+                return (false, nil)
             }
+            let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            let u = obj?["server_time_unix"] as? Double
+            return (true, u)
+        } catch {
+            return (false, nil)
+        }
+    }
+
+    private func synchronizePiClockIfNeeded(ip: String, serverTimeUnix: Double?) async {
+        let now = Date().timeIntervalSince1970
+        if let s = serverTimeUnix, abs(now - s) <= clockSyncSkewSeconds {
+            return
+        }
+        await postUnixTimeToPi(ip: ip, unix: now)
+    }
+
+    private func postUnixTimeToPi(ip: String, unix: TimeInterval) async {
+        guard let url = URL(string: "http://\(ip):8001/api/system/time") else { return }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try? JSONSerialization.data(withJSONObject: ["unix_time": unix])
+        do {
+            _ = try await session.data(for: req)
         } catch {}
-        return false
     }
 }

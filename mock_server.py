@@ -112,6 +112,7 @@ class MockCameraHandler(http.server.BaseHTTPRequestHandler):
                 "photo_count": len(MOCK_PHOTOS),
                 "brightness_threshold": _effective_settings().get("brightness_threshold", 30),
                 "service_running": True,
+                "server_time_unix": time.time(),
             })
 
         elif path == '/api/wifi/status':
@@ -180,6 +181,9 @@ class MockCameraHandler(http.server.BaseHTTPRequestHandler):
                 MOCK_SESSION_OVERRIDES.update(data)
             else:
                 MOCK_SETTINGS.update(data)
+            self._send_json({"success": True})
+
+        elif self.path == '/api/system/time':
             self._send_json({"success": True})
 
         elif self.path == '/api/capture':

@@ -1020,6 +1020,33 @@ def _ensure_thumbnail(filepath, max_dim):
         logger.warning(f"Thumbnail generation failed: {e}")
         return None
 
+
+def _apply_client_unix_time(ts):
+    """クライアントから受け取った Unix 時刻でシステム時計を合わせる（AP モードで NTP が同期しない対策）。"""
+    try:
+        ts = float(ts)
+    except (TypeError, ValueError):
+        return False, 'unix_time must be a number'
+    # 2020-01-01 .. 2100-01-01 付近のみ許可
+    if ts < 1577836800.0 or ts > 4102444800.0:
+        return False, 'unix_time out of allowed range'
+    sec = int(ts)
+    result = subprocess.run(
+        ['sudo', '-n', 'date', '-u', '-s', '@%d' % sec],
+        capture_output=True, text=True, timeout=10,
+    )
+    if result.returncode != 0:
+        err = (result.stderr or result.stdout or 'date failed').strip()
+        return False, err[:300] if err else 'sudo date failed (need NOPASSWD for date?)'
+    hw = shutil.which('fake-hwclock')
+    if hw:
+        subprocess.run(
+            ['sudo', '-n', 'fake-hwclock', 'save'],
+            capture_output=True, text=True, timeout=5,
+        )
+    return True, None
+
+
 class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
     allow_reuse_address = True
     daemon_threads = True
@@ -1069,6 +1096,8 @@ class APIHandler(BaseHTTPRequestHandler):
             self.serve_metering_recommendation()
         elif parsed.path == '/api/metering/calibrate':
             self.metering_calibrate()
+        elif parsed.path == '/api/system/time':
+            self.update_system_time()
         else:
             self.send_error(404)
 
@@ -1520,6 +1549,29 @@ class APIHandler(BaseHTTPRequestHandler):
             self.send_header('Content-Type', 'application/json')
             self.end_headers()
             self.wfile.write(json.dumps({'success': False, 'error': str(e)}).encode())
+
+    def update_system_time(self):
+        """POST /api/system/time — ボディ JSON: {\"unix_time\": <seconds since 1970>}"""
+        try:
+            data = _read_json_body(self)
+            if data is None:
+                return
+            ok, err = _apply_client_unix_time(data.get('unix_time'))
+            payload = {'success': ok}
+            if err:
+                payload['error'] = err
+            self.send_response(200 if ok else 400)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps(payload).encode())
+            if ok:
+                logger.info('System time set from client via /api/system/time')
+        except Exception as e:
+            logger.error(f'update_system_time: {e}')
+            self.send_response(500)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({'success': False, 'error': str(e)}).encode())
     
     def serve_status(self):
         """システム状態を返す"""
@@ -1552,7 +1604,9 @@ class APIHandler(BaseHTTPRequestHandler):
             status = {
                 'photo_count': photo_count,
                 'brightness_threshold': settings.get('brightness_threshold', 30),
-                'service_running': True
+                'service_running': True,
+                # iOS が AP 直結時に NTP 不能でも時刻合わせできるよう Unix 時刻を載せる
+                'server_time_unix': time.time(),
             }
             
             self.send_response(200)
