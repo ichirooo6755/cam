@@ -23,12 +23,19 @@ struct PiCameraControlApp: App {
                     }
             }
             .safeAreaInset(edge: .top, spacing: 0) {
-                if !connectionMonitor.isConnected {
-                    OfflineBannerView()
-                        .transition(.move(edge: .top).combined(with: .opacity))
+                VStack(spacing: 0) {
+                    if !connectionMonitor.isConnected {
+                        OfflineBannerView()
+                            .transition(.move(edge: .top).combined(with: .opacity))
+                    }
+                    if connectionMonitor.needsCameraConnectorBanner {
+                        CameraConnectorBannerView(sensorState: connectionMonitor.cameraSensorState ?? "")
+                            .transition(.move(edge: .top).combined(with: .opacity))
+                    }
                 }
             }
             .animation(.easeInOut(duration: 0.3), value: connectionMonitor.isConnected)
+            .animation(.easeInOut(duration: 0.3), value: connectionMonitor.needsCameraConnectorBanner)
             .tint(MinimalTheme.Accent.primary)
             .environment(\.managedObjectContext, persistenceController.container.viewContext)
             .environmentObject(connectionMonitor)
@@ -92,6 +99,54 @@ struct OfflineBannerView: View {
         .background(
             LinearGradient(
                 colors: [Color.red.opacity(0.9), Color.orange.opacity(0.8)],
+                startPoint: .leading,
+                endPoint: .trailing
+            )
+        )
+    }
+}
+
+/// Pi には繋がっているが CSI / カメラモジュールが使えないとき（全タブ共通）
+struct CameraConnectorBannerView: View {
+    let sensorState: String
+
+    private var title: String {
+        switch sensorState {
+        case "camera_recovering":
+            return "カメラを再初期化中"
+        default:
+            return "カメラコネクター未検出"
+        }
+    }
+
+    private var message: String {
+        switch sensorState {
+        case "camera_recovering":
+            return "しばらく待つか、電源を入れ直してください"
+        default:
+            return "CSI リボンケーブル・コネクタの固定を確認してください"
+        }
+    }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 14, weight: .bold))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.system(size: 12, weight: .bold))
+                Text(message)
+                    .font(.system(size: 10, weight: .medium))
+                    .opacity(0.95)
+            }
+            Spacer()
+        }
+        .foregroundColor(.white)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .background(
+            LinearGradient(
+                colors: [Color.orange.opacity(0.92), Color.yellow.opacity(0.75)],
                 startPoint: .leading,
                 endPoint: .trailing
             )

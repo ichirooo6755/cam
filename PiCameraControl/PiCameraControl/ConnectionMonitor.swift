@@ -11,6 +11,8 @@ final class ConnectionMonitor: ObservableObject {
     @Published var isConnected: Bool = false
     @Published var lastChecked: Date?
     @Published var consecutiveFailures: Int = 0
+    /// `camera_service` の `sensor.state`（接続中のみ更新）。CSI 未接続などは `camera_unavailable`
+    @Published private(set) var cameraSensorState: String?
 
     private var timer: Timer?
     private let normalInterval: TimeInterval = 5.0
@@ -33,6 +35,12 @@ final class ConnectionMonitor: ObservableObject {
 
     /// フォールバック候補IP（プライマリが失敗した場合に試す）
     private let fallbackIPs = ["192.168.4.1", "10.42.0.1"]
+
+    /// Pi に繋がっているのにカメラハードが使えないとき、全タブ共通バナーを出す
+    var needsCameraConnectorBanner: Bool {
+        guard isConnected, let s = cameraSensorState else { return false }
+        return s == "camera_unavailable" || s == "camera_recovering"
+    }
 
     private init() {
         self.session = Self.makeSession()
@@ -135,6 +143,7 @@ final class ConnectionMonitor: ObservableObject {
                 } else {
                     self.isConnected = false
                     self.consecutiveFailures += 1
+                    self.cameraSensorState = nil
                 }
             }
         }
@@ -182,6 +191,8 @@ final class ConnectionMonitor: ObservableObject {
                         await synchronizePiClockIfNeeded(ip: serverIP, serverTimeUnix: recycled.serverTimeUnix)
                     }
                     if !wasConnected { scheduleTimer() }
+                    lastChecked = Date()
+                    await refreshCameraSensorState(ip: serverIP)
                     return
                 }
             }
@@ -205,6 +216,13 @@ final class ConnectionMonitor: ObservableObject {
         }
 
         lastChecked = Date()
+
+        if isConnected {
+            let ip = UserDefaults.standard.string(forKey: "serverIP") ?? "192.168.4.1"
+            await refreshCameraSensorState(ip: ip)
+        } else {
+            cameraSensorState = nil
+        }
 
         if wasConnected != isConnected {
             scheduleTimer()
@@ -247,6 +265,22 @@ final class ConnectionMonitor: ObservableObject {
         req.httpBody = try? JSONSerialization.data(withJSONObject: ["unix_time": unix])
         do {
             _ = try await session.data(for: req)
+        } catch {}
+    }
+
+    private func refreshCameraSensorState(ip: String) async {
+        guard let url = URL(string: "http://\(ip):8001/api/sensor/status") else { return }
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        do {
+            let (data, response) = try await session.data(for: request)
+            guard let http = response as? HTTPURLResponse, http.statusCode == 200 else { return }
+            let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            guard let success = obj?["success"] as? Bool, success,
+                  let sensor = obj?["sensor"] as? [String: Any],
+                  let state = sensor["state"] as? String else { return }
+            cameraSensorState = state
         } catch {}
     }
 }

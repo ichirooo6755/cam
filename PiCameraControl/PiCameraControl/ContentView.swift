@@ -297,27 +297,6 @@ struct ContentView: View {
 
                         syncBanner
 
-                        // カメラ未検出バナー
-                        if sensorStatus?.state == "camera_unavailable" {
-                            HStack(spacing: 10) {
-                                Image(systemName: "exclamationmark.triangle.fill")
-                                    .foregroundColor(.yellow)
-                                    .font(.system(size: 16, weight: .semibold))
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text("カメラ未検出")
-                                        .font(.caption.weight(.bold))
-                                    Text("CSIケーブルの接続を確認してください")
-                                        .font(.caption2)
-                                        .foregroundColor(.secondary)
-                                }
-                                Spacer()
-                            }
-                            .padding(12)
-                            .background(Color.yellow.opacity(0.15))
-                            .cornerRadius(10)
-                            .padding(.horizontal, 4)
-                        }
-
                         // 光検知（常時表示）
                         monitoringQuickSection
 
