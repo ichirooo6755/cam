@@ -19,7 +19,7 @@ final class ConnectionMonitor: ObservableObject {
     private let disconnectedBaseInterval: TimeInterval = 3.0
     private let maxPollingInterval: TimeInterval = 60.0
     private let maxFallbackAttempts: Int = 3
-    private let offlineFailureThreshold: Int = 2
+    private let offlineFailureThreshold: Int = 3
     /// Pi が AP のみで NTP 同期できないとき、iPhone 時刻との差がこれ以上なら /api/system/time で合わせる
     private let clockSyncSkewSeconds: TimeInterval = 12.0
     /// 連続失敗がこの回数を超えたら URLSession を作り直して
@@ -48,8 +48,8 @@ final class ConnectionMonitor: ObservableObject {
 
     private static func makeSession() -> URLSession {
         let config = URLSessionConfiguration.ephemeral
-        config.timeoutIntervalForRequest = 3
-        config.timeoutIntervalForResource = 5
+        config.timeoutIntervalForRequest = 6
+        config.timeoutIntervalForResource = 8
         config.waitsForConnectivity = false
         config.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
         config.httpMaximumConnectionsPerHost = 2
@@ -141,9 +141,9 @@ final class ConnectionMonitor: ObservableObject {
                     self.rebuildSession()
                     await self.checkConnection()
                 } else {
-                    self.isConnected = false
-                    self.consecutiveFailures += 1
-                    self.cameraSensorState = nil
+                    // NWPath の瞬断だけで即オフライン確定せず、実疎通チェックで確定させる
+                    self.rebuildSession()
+                    await self.checkConnection()
                 }
             }
         }

@@ -9,6 +9,7 @@ import UIKit
 /// 統合ギャラリービュー（サーバー写真 + 編集版を統合管理）
 struct UnifiedGalleryView: View {
     @Environment(\.managedObjectContext) private var viewContext
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @EnvironmentObject var connectionMonitor: ConnectionMonitor
     @AppStorage("serverIP") private var serverIP: String = "192.168.4.1"
 
@@ -36,7 +37,7 @@ struct UnifiedGalleryView: View {
     }
 
     var body: some View {
-        NavigationView {
+        NavigationStack {
             ZStack {
                 backgroundGradient
                     .ignoresSafeArea()
@@ -212,14 +213,22 @@ struct UnifiedGalleryView: View {
         .padding(.horizontal, 24)
     }
 
+    private var galleryColumnCount: Int {
+        horizontalSizeClass == .regular ? 3 : 2
+    }
+
+    /// LazyVGrid は列幅を子へ提案する。`containerRelativeFrame` を併用すると全幅基準で幅が膨らみ中央で重なるため使わない。
+    private var galleryColumns: [GridItem] {
+        Array(repeating: GridItem(.flexible(), spacing: 12), count: galleryColumnCount)
+    }
+
     private var photoGrid: some View {
         ScrollView {
-            LazyVGrid(columns: [
-                GridItem(.adaptive(minimum: 150), spacing: 12)
-            ], spacing: 12) {
+            LazyVGrid(columns: galleryColumns, spacing: 12) {
                 ForEach(photoGroups) { group in
                     ZStack(alignment: .topLeading) {
                         PhotoCell(group: group, serverIP: serverIP)
+                            .frame(minWidth: 0, maxWidth: .infinity)
                             .onTapGesture {
                                 if isSelectionMode {
                                     if selectedIDs.contains(group.id) {
@@ -236,14 +245,16 @@ struct UnifiedGalleryView: View {
                         if isSelectionMode {
                             Image(systemName: selectedIDs.contains(group.id) ? "checkmark.circle.fill" : "circle")
                                 .font(.system(size: 24))
-                                .foregroundColor(selectedIDs.contains(group.id) ? .blue : .white)
+                                .foregroundStyle(selectedIDs.contains(group.id) ? Color.blue : Color.white)
                                 .shadow(radius: 2)
                                 .padding(8)
                         }
                     }
+                    .frame(maxWidth: .infinity, alignment: .top)
                 }
             }
-            .padding()
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
         }
     }
 
@@ -345,59 +356,60 @@ struct PhotoCell: View {
     @State private var isLoading = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            // サムネイル
-            ZStack(alignment: .bottomTrailing) {
-                if let image = thumbnailImage {
-                    Image(uiImage: image)
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
-                        .frame(height: 150)
+        // グリッドから渡される列幅をそのまま一辺にした正方形（LazyVGrid と整合）
+        Color.clear
+            .aspectRatio(1, contentMode: .fit)
+            .overlay {
+                ZStack(alignment: .bottomTrailing) {
+                    thumbnailLayer
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .clipped()
-                } else if isLoading {
-                    Rectangle()
-                        .fill(MinimalTheme.Background.variant)
-                        .frame(height: 150)
-                        .overlay(
-                            ProgressView()
-                        )
-                } else {
-                    Rectangle()
-                        .fill(MinimalTheme.Background.variant)
-                        .frame(height: 150)
-                        .overlay(
-                            Image(systemName: "photo")
-                                .font(.largeTitle)
-                                .foregroundColor(MinimalTheme.Text.tertiary)
-                        )
-                }
 
-                // バージョンバッジ
-                if let badge = group.latestVersion?.versionBadge {
-                    HStack(spacing: 4) {
-                        Image(systemName: "camera.fill")
-                            .font(.system(size: 10))
-                        Text(badge)
-                            .font(MinimalTypography.labelSmall)
+                    if let badge = group.latestVersion?.versionBadge {
+                        HStack(spacing: 4) {
+                            Image(systemName: "camera.fill")
+                                .font(.system(size: 10))
+                            Text(badge)
+                                .font(MinimalTypography.labelSmall)
+                        }
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(Color.black.opacity(0.6))
+                        .clipShape(Capsule())
+                        .padding(8)
                     }
-                    .foregroundColor(.white)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(Color.black.opacity(0.6))
-                    .clipShape(Capsule())
-                    .padding(8)
                 }
+                .background(MinimalTheme.Background.surface)
             }
-        }
-        .background(MinimalTheme.Background.surface)
-        .cornerRadius(12)
-        .shadow(
-            color: Color.black.opacity(0.08),
-            radius: 4,
-            y: 2
-        )
-        .onAppear {
-            loadThumbnail()
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
+            )
+            .onAppear {
+                loadThumbnail()
+            }
+    }
+
+    @ViewBuilder
+    private var thumbnailLayer: some View {
+        if let image = thumbnailImage {
+            Image(uiImage: image)
+                .resizable()
+                .scaledToFill()
+        } else if isLoading {
+            Rectangle()
+                .fill(MinimalTheme.Background.variant)
+                .overlay { ProgressView() }
+        } else {
+            Rectangle()
+                .fill(MinimalTheme.Background.variant)
+                .overlay {
+                    Image(systemName: "photo")
+                        .font(.largeTitle)
+                        .foregroundStyle(MinimalTheme.Text.tertiary)
+                }
         }
     }
 

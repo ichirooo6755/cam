@@ -47,7 +47,7 @@ SENSOR_STATUS_FILE = '/run/picamera/sensor_status.json'
 CAPTURE_REQUEST_FILE = '/run/picamera/capture_request.json'
 CAPTURE_RESULT_FILE  = '/run/picamera/capture_result.json'
 _CAPTURE_IPC_POLL_INTERVAL = 0.15   # ポーリング間隔（秒）
-_CAPTURE_IPC_TIMEOUT_SEC   = 28.0   # IPCタイムアウト（秒）
+_CAPTURE_IPC_TIMEOUT_SEC   = 12.0   # IPCタイムアウト（秒）: 手動撮影の体感遅延を抑制
 BOOT_NETWORK_APPLIED_MARKERS = (
     '/run/picamera_boot_network_applied',
     '/tmp/picamera_boot_network_applied',
@@ -60,6 +60,8 @@ WIFI_SWITCH_COOLDOWN_SEC = 12
 WIFI_RECOVERY_CHECK_INTERVAL_SEC = 10
 WIFI_RECOVERY_OFFLINE_GRACE_SEC = 45
 WIFI_RECOVERY_ATTEMPT_COOLDOWN_SEC = 120
+# テザリング切替直後は一時的に不安定になりやすいため、AP自動復旧を抑止
+WIFI_RECOVERY_TETHERING_STABILIZE_SEC = 180
 AP_IP_PREFIXES = ('192.168.4.', '10.42.0.')
 
 _WIFI_SWITCH_LOCK = threading.Lock()
@@ -74,9 +76,15 @@ _WIFI_RECOVERY_STATE = {
     'offline_since': None,
     'last_attempt_at': 0.0,
     'last_mode': None,
+    'last_mode_changed_at': 0.0,
     'last_result': None,
     'last_error': None,
 }
+
+# /api/status の photo_count は監視ポーリングで高頻度に呼ばれるため短TTLでキャッシュする。
+_PHOTO_COUNT_CACHE = {'value': 0, 'expires_at': 0.0}
+_PHOTO_COUNT_CACHE_LOCK = threading.Lock()
+_PHOTO_COUNT_CACHE_TTL_SEC = 3.0
 
 ALLOWED_SETTINGS_KEYS = {
     'camera_mode',
@@ -178,32 +186,64 @@ def _ipc_capture(settings: dict, photo_path: str, mode_label: str) -> dict:
     except Exception as e:
         return {'success': False, 'error': f'Failed to write IPC request: {e}'}
 
-    # 結果をポーリング
-    deadline = time.time() + _CAPTURE_IPC_TIMEOUT_SEC
-    while time.time() < deadline:
-        time.sleep(_CAPTURE_IPC_POLL_INTERVAL)
+    def _poll_result(_request_id: str):
+        deadline = time.time() + _CAPTURE_IPC_TIMEOUT_SEC
+        while time.time() < deadline:
+            time.sleep(_CAPTURE_IPC_POLL_INTERVAL)
 
-        if not os.path.exists(CAPTURE_RESULT_FILE):
-            continue
+            if not os.path.exists(CAPTURE_RESULT_FILE):
+                continue
 
-        try:
-            with open(CAPTURE_RESULT_FILE, 'r', encoding='utf-8') as f:
-                result = json.load(f)
-        except Exception:
-            continue
+            try:
+                with open(CAPTURE_RESULT_FILE, 'r', encoding='utf-8') as f:
+                    result = json.load(f)
+            except Exception:
+                continue
 
-        if not isinstance(result, dict):
-            continue
+            if not isinstance(result, dict):
+                continue
 
-        if result.get('request_id') != request_id:
-            # 別のリクエストの結果（自分より前のリクエスト）- 待機継続
-            continue
+            if result.get('request_id') != _request_id:
+                # 別のリクエストの結果（自分より前のリクエスト）- 待機継続
+                continue
 
-        # 自分のリクエストの結果が届いた
-        try:
-            os.remove(CAPTURE_RESULT_FILE)
-        except Exception:
-            pass
+            try:
+                os.remove(CAPTURE_RESULT_FILE)
+            except Exception:
+                pass
+            return result
+        return None
+
+    def _write_request(_request_id: str) -> None:
+        req['request_id'] = _request_id
+        req['created_at'] = time.time()
+        tmp_req = f"{CAPTURE_REQUEST_FILE}.tmp"
+        with open(tmp_req, 'w', encoding='utf-8') as f:
+            json.dump(req, f, indent=2)
+        os.replace(tmp_req, CAPTURE_REQUEST_FILE)
+
+    # 最大1回（タイムアウト時は上位で camera-service 再起動後に再試行）
+    for attempt in range(1):
+        if attempt > 0:
+            request_id = str(uuid.uuid4())[:16]
+            try:
+                if os.path.exists(CAPTURE_REQUEST_FILE):
+                    os.remove(CAPTURE_REQUEST_FILE)
+            except Exception:
+                pass
+            time.sleep(0.25)
+            try:
+                _write_request(request_id)
+            except Exception as e:
+                return {'success': False, 'error': f'Failed to rewrite IPC request: {e}'}
+
+        result = _poll_result(request_id)
+        if result is None:
+            try:
+                os.remove(CAPTURE_REQUEST_FILE)
+            except Exception:
+                pass
+            return {'success': False, 'error': 'IPC capture timed out'}
 
         if result.get('success') and result.get('filepath'):
             # camera_service.py が生成したファイルをphoto_pathにリネーム（名前は保持）
@@ -218,15 +258,9 @@ def _ipc_capture(settings: dict, photo_path: str, mode_label: str) -> dict:
                     photo_path = actual_path
                     result['filepath'] = actual_path
                     result['filename'] = os.path.basename(actual_path)
-
         return result
 
-    # タイムアウト: リクエストファイルを削除
-    try:
-        os.remove(CAPTURE_REQUEST_FILE)
-    except Exception:
-        pass
-    return {'success': False, 'error': 'IPC capture timed out'}
+    return {'success': False, 'error': 'IPC capture failed'}
 
 
 def _sanitize_meta_tag(value):
@@ -490,6 +524,11 @@ def _persist_wifi_mode(mode, ap_ssid=None, ap_password=None):
         with open(SETTINGS_FILE, 'w') as f:
             json.dump(settings, f, indent=2)
         logger.info(f"Wi-Fi mode saved: {mode}")
+        with _WIFI_RECOVERY_LOCK:
+            _WIFI_RECOVERY_STATE['last_mode'] = mode
+            _WIFI_RECOVERY_STATE['last_mode_changed_at'] = time.time()
+            # モード切替直後の古いオフライン状態を引きずらない
+            _WIFI_RECOVERY_STATE['offline_since'] = None
     except Exception as e:
         logger.error(f"Failed to save Wi-Fi mode: {e}")
 
@@ -623,6 +662,13 @@ def _wifi_recovery_watchdog_loop():
                 continue
 
             # --- テザリングモード時: 既存ロジック ---
+            if mode not in ('tethering',):
+                # 想定外モード時は自動切替を走らせない
+                with _WIFI_RECOVERY_LOCK:
+                    _WIFI_RECOVERY_STATE['last_mode'] = mode
+                    _WIFI_RECOVERY_STATE['offline_since'] = None
+                continue
+
             operational = _is_mode_operational(mode)
             now = time.time()
 
@@ -644,6 +690,14 @@ def _wifi_recovery_watchdog_loop():
                     offline_since = now
                     _WIFI_RECOVERY_STATE['offline_since'] = offline_since
                     logger.warning("Wi-Fi recovery watchdog: control path seems offline")
+
+                # テザリングへ切替直後の一時的不安定ではAPへ戻さない（フラップ防止）
+                last_mode_changed_at = float(_WIFI_RECOVERY_STATE.get('last_mode_changed_at') or 0.0)
+                if (
+                    last_mode_changed_at > 0.0
+                    and now - last_mode_changed_at < WIFI_RECOVERY_TETHERING_STABILIZE_SEC
+                ):
+                    continue
 
                 offline_for_sec = now - offline_since
                 last_attempt = float(_WIFI_RECOVERY_STATE.get('last_attempt_at') or 0.0)
@@ -1048,6 +1102,32 @@ def _apply_client_unix_time(ts):
         except (subprocess.TimeoutExpired, OSError, subprocess.SubprocessError) as e:
             logger.warning('fake-hwclock save skipped after time set: %s', e)
     return True, None
+
+
+def _get_cached_photo_count():
+    now = time.time()
+    with _PHOTO_COUNT_CACHE_LOCK:
+        if _PHOTO_COUNT_CACHE['expires_at'] > now:
+            return _PHOTO_COUNT_CACHE['value']
+
+    count = 0
+    if os.path.exists(PHOTOS_DIR):
+        try:
+            with os.scandir(PHOTOS_DIR) as entries:
+                for entry in entries:
+                    if not entry.is_file():
+                        continue
+                    name = entry.name
+                    if (name.lower().endswith(ALLOWED_PHOTO_EXTENSIONS)
+                            and SAFE_FILENAME_PATTERN.match(name)):
+                        count += 1
+        except Exception:
+            count = 0
+
+    with _PHOTO_COUNT_CACHE_LOCK:
+        _PHOTO_COUNT_CACHE['value'] = count
+        _PHOTO_COUNT_CACHE['expires_at'] = now + _PHOTO_COUNT_CACHE_TTL_SEC
+    return count
 
 
 class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
@@ -1579,13 +1659,7 @@ class APIHandler(BaseHTTPRequestHandler):
     def serve_status(self):
         """システム状態を返す"""
         try:
-            photo_count = 0
-            if os.path.exists(PHOTOS_DIR):
-                photo_count = len([
-                    f for f in os.listdir(PHOTOS_DIR)
-                    if f.lower().endswith(ALLOWED_PHOTO_EXTENSIONS)
-                    and SAFE_FILENAME_PATTERN.match(f)
-                ])
+            photo_count = _get_cached_photo_count()
             
             settings = DEFAULT_SETTINGS.copy()
             if os.path.exists(SETTINGS_FILE):
@@ -2148,16 +2222,37 @@ class APIHandler(BaseHTTPRequestHandler):
                     service_stopped = False
 
             if not capture_ok:
-                # IPC失敗（camera-serviceが動作中）→ fallbackせずエラー返却
+                # IPC失敗時、camera-serviceが固着している可能性があるため
+                # timeout系エラーのみ1回だけ再起動→再試行する
                 if ipc_result is not None and _is_camera_service_running():
-                    self.send_response(503)
-                    self.send_header('Content-Type', 'application/json')
-                    self.end_headers()
-                    self.wfile.write(json.dumps({
-                        'success': False,
-                        'error': result_error or 'IPC capture failed, camera service busy'
-                    }).encode())
-                    return
+                    err_text = (result_error or '').lower()
+                    timeout_like = ('timed out' in err_text) or ('timeout' in err_text) or ('expired' in err_text)
+                    if timeout_like:
+                        try:
+                            restart = subprocess.run(
+                                ['sudo', '-n', 'systemctl', 'restart', 'camera-service'],
+                                capture_output=True, text=True, check=False, timeout=20,
+                            )
+                            if restart.returncode == 0:
+                                time.sleep(1.0)
+                                ipc_retry = _ipc_capture(settings, photo_path, manual_mode or 'current')
+                                if ipc_retry.get('success'):
+                                    capture_ok = True
+                                    if ipc_retry.get('filepath'):
+                                        photo_path = ipc_retry['filepath']
+                                        filename = os.path.basename(photo_path)
+                                else:
+                                    result_error = ipc_retry.get('error', result_error)
+                            else:
+                                logger.warning("camera-service restart failed: %s", (restart.stderr or restart.stdout or '').strip())
+                        except Exception as e:
+                            logger.warning("camera-service restart exception: %s", e)
+
+                if not capture_ok and ipc_result is not None and _is_camera_service_running():
+                    logger.warning(
+                        "IPC path unavailable; trying rpicam-still fallback (error=%s)",
+                        result_error or 'unknown'
+                    )
                 # 以下は既存のrpicam-still fallback（camera-service停止中の場合のみ実行）
                 if not service_stopped and service_should_stop and _is_camera_service_running():
                     stop_result = subprocess.run(

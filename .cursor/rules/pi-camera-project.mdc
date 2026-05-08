@@ -1,19 +1,30 @@
-# CLAUDE.md
+---
+description: Pi Camera プロジェクトの方針・アーキテクチャ・制約（CLAUDE.md と同期）
+alwaysApply: true
+---
+
+# Pi Camera プロジェクト（CLAUDE.md 相当）
+
+詳細の単一ソースはリポジトリ直下の `CLAUDE.md`。差分があればそちらを優先し、本ルールを更新すること。
 
 ## 基本方針
+
 日本語応対。調査はサブエージェント活用。
 
 ## ハードウェア
-**Camera**: Raspberry Pi Camera Module HQ (12.3MP)
-**Sensor**: Sony IMX477 (7.9mm diagonal, 1.55μm pixel)
-**Resolution**: 4056x3040 native
-**ISO**: 100-16000 (推奨100-6400)
+
+**Camera**: Raspberry Pi Camera Module HQ (12.3MP)  
+**Sensor**: Sony IMX477 (7.9mm diagonal, 1.55μm pixel)  
+**Resolution**: 4056x3040 native  
+**ISO**: 100-16000（推奨100-6400）  
 **Shutter**: 13μs-670s
 
 ## アーキテクチャ
+
 iOS(SwiftUI)→HTTP:8001→Pi(Python)。Pi側: `api_server.py`(HTTP), `camera_service.py`(PiCamera2), `wifi_manager.py`(AP/tethering)。IPC: JSON files。
 
 ## コマンド
+
 ```bash
 bash PiCameraControl/build_ios_simulator.sh
 python -m py_compile "home 3/api_server.py"
@@ -23,6 +34,7 @@ cd "home 3" && bash ./wifi_cycle_test.sh
 ```
 
 ## 重要制約
+
 - 開発機(mac)は有線接続。Wi-Fi切替OK
 - Wi-Fi切替: `_WIFI_SWITCH_LOCK`排他、409拒否、12秒CD、自動fallback
 - API追加: `api_server.py`→`Models.swift`→`CameraAPI.swift`→deploy
@@ -30,10 +42,6 @@ cd "home 3" && bash ./wifi_cycle_test.sh
 - APやテザリング関係でなければ変更はpiにデプロイし、APテザリングに関係なく、gitにはpush/commitして。
 - 問題があればgithubのissueに登録すること。
 
-## Cursor
+## Claude スキル（Cursor）
 
-常時ルール: `.cursor/rules/pi-camera-project.mdc`
-
-`.claude/skills` 配下の各 `SKILL.md` は、Cursor プロジェクトスキルとして `.cursor/skills/` にシンボリックリンクしている（正本は常に `.claude/skills/...`）。エントリ名: `example-skill`, `plugin-structure`, `playground`, `skill-development`, `command-development`, `claude-md-improver`, `plugin-settings`, `mcp-integration`, `writing-hookify-rules`, `agent-development`, `claude-automation-recommender`, `frontend-design`, `hook-development`。
-
-新しい `SKILL.md` を `.claude/skills` に追加したら、同様のリンクを `.cursor/skills/<一意の名前>/` に張ること。
+`.claude/skills` 内の各 `SKILL.md` は `.cursor/skills/<名前>/` からシンボリックリンクで参照できる（編集は `.claude/skills/...` 側が正本）。

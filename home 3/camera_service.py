@@ -545,6 +545,20 @@ def _handle_manual_capture_request(camera, settings: dict, active_profile: dict)
             logger.warning("IPC: camera reconfig failed: %s", e)
 
     result = capture_photo(camera, req_settings, req_profile)
+    # 手動撮影経路でも frontend timeout 系は一度だけ自己復旧して再試行
+    if (not result.get('success')
+            and _is_camera_frontend_timeout_error(Exception(result.get('error', '')))):
+        logger.warning("IPC: frontend timeout detected, trying camera soft-restart")
+        try:
+            camera.stop()
+        except Exception:
+            pass
+        try:
+            camera.start()
+        except Exception as e:
+            logger.warning("IPC: camera restart failed: %s", e)
+        else:
+            result = capture_photo(camera, req_settings, req_profile)
     result['request_id'] = request_id
     if result.get('filepath'):
         result['filename'] = os.path.basename(result['filepath'])
@@ -631,12 +645,13 @@ def capture_photo(camera, settings: dict, profile: dict, detected_at: float = No
         )
         _record_capture()
 
-        # 適応型露出: バックグラウンドで実行（撮影パスをブロックしない）
-        threading.Thread(
-            target=_adapt_exposure_background,
-            args=(camera, filepath, settings),
-            daemon=True,
-        ).start()
+        # 適応型露出: auto ISO 時のみ実行（撮影直後CPUスパイクを抑える）
+        if str(settings.get('iso', 'auto')).lower() == 'auto':
+            threading.Thread(
+                target=_adapt_exposure_background,
+                args=(camera, filepath, settings),
+                daemon=True,
+            ).start()
 
         return {
             'success': True,
@@ -648,7 +663,7 @@ def capture_photo(camera, settings: dict, profile: dict, detected_at: float = No
 
     except Exception as e:
         logger.error(f"Capture failed: {e}")
-        return {'success': False, 'filepath': filepath, 'delay_ms': None}
+        return {'success': False, 'filepath': filepath, 'delay_ms': None, 'error': str(e)}
 
 
 def main():

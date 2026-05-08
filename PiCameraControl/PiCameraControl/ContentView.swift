@@ -222,14 +222,21 @@ struct ContentView: View {
     @State private var meteringRecommendation: MeteringRecommendation? = nil
     @StateObject private var captureLocationProvider = CaptureLocationProvider()
 
-    // Section expansion state
+    // Section expansion state（タブ分割後はカメラタブ内の開閉のみ）
     @State private var expandedCamera = true
     @State private var expandedFeatures = false
-    @State private var expandedCapture = true
     @State private var expandedSensor = false
     @State private var expandedAppearance = false
     @State private var expandedNetwork = false
     @State private var expandedTroubleshoot = false
+
+    private enum SettingsMainTab: String, CaseIterable {
+        case capture = "撮影"
+        case camera = "カメラ"
+        case system = "接続"
+    }
+
+    @State private var settingsMainTab: SettingsMainTab = .capture
 
     @FocusState private var isManualMetaFocused: Bool
 
@@ -293,13 +300,28 @@ struct ContentView: View {
                 .ignoresSafeArea()
 
                 ScrollView(showsIndicators: false) {
-                    VStack(spacing: 24) {
+                    VStack(spacing: 16) {
 
                         syncBanner
 
-                        // 光検知（常時表示）
-                        monitoringQuickSection
+                        Picker("設定タブ", selection: $settingsMainTab) {
+                            ForEach(SettingsMainTab.allCases, id: \.self) { tab in
+                                Text(tab.rawValue).tag(tab)
+                            }
+                        }
+                        .pickerStyle(.segmented)
 
+                        if settingsMainTab == .capture {
+                            monitoringQuickSectionCompact
+                            VStack(alignment: .leading, spacing: 12) {
+                                sectionHeader(icon: "camera.shutter.button", title: "手動撮影")
+                                captureSection
+                                    .sensoryFeedback(.impact(flexibility: .rigid), trigger: isCapturing)
+                            }
+                            .minimalCard()
+                        }
+
+                        if settingsMainTab == .camera {
                         // 📷 カメラ設定
                         DisclosureGroup(isExpanded: $expandedCamera) {
                             VStack(spacing: 20) {
@@ -544,17 +566,6 @@ struct ContentView: View {
                         .tint(.primary)
                         .minimalCard()
 
-                        // 📸 撮影
-                        DisclosureGroup(isExpanded: $expandedCapture) {
-                            captureSection
-                                .sensoryFeedback(.impact(flexibility: .rigid), trigger: isCapturing)
-                                .padding(.top, 8)
-                        } label: {
-                            sectionHeader(icon: "camera.shutter.button", title: "撮影")
-                        }
-                        .tint(.primary)
-                        .minimalCard()
-
                         // 📊 センサー
                         DisclosureGroup(isExpanded: $expandedSensor) {
                             sensorStatusSection
@@ -564,7 +575,9 @@ struct ContentView: View {
                         }
                         .tint(.primary)
                         .minimalCard()
+                        }
 
+                        if settingsMainTab == .system {
                         // 🎨 表示設定
                         DisclosureGroup(isExpanded: $expandedAppearance) {
                             appearanceSection
@@ -594,6 +607,7 @@ struct ContentView: View {
                         }
                         .tint(.primary)
                         .minimalCard()
+                        }
 
                         Spacer(minLength: 80)
                     }
@@ -890,6 +904,33 @@ struct ContentView: View {
                 .font(.caption)
                 .foregroundColor(.secondary)
         }
+        .minimalCard()
+    }
+
+    /// 撮影タブ用のコンパクトな光検知行（従来の長文説明は省略）
+    private var monitoringQuickSectionCompact: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("光検知")
+                    .font(.subheadline.weight(.semibold))
+                Text(manualModeEnabled ? "一時停止中（デジタルバックの自動撮影オフ）" : "有効")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 8)
+            Button {
+                quickToggleMonitoring()
+            } label: {
+                Text(manualModeEnabled ? "再開" : "停止")
+                    .font(.caption.weight(.bold))
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 9)
+                    .background(manualModeEnabled ? Color.green : Color.orange)
+                    .foregroundStyle(.white)
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+            }
+        }
+        .padding(.vertical, 4)
         .minimalCard()
     }
 
