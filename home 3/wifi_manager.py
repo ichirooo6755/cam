@@ -684,6 +684,30 @@ def get_wifi_status():
     return status
 
 
+def get_ap_connected_station_count():
+    """
+    APモード時に接続中のステーション数を返す。
+    取得失敗時は 0 を返す。
+    """
+    try:
+        iface = _detect_wifi_interface()
+        iw_cmd = _resolve_executable('iw')
+        res = _run([iw_cmd, 'dev', iface, 'station', 'dump'], timeout=12)
+        if res['returncode'] != 0:
+            res = _run(['sudo', '-n', iw_cmd, 'dev', iface, 'station', 'dump'], timeout=12)
+        if res['returncode'] != 0 or not res['stdout']:
+            return 0
+
+        count = 0
+        for line in res['stdout'].splitlines():
+            if line.strip().startswith('Station '):
+                count += 1
+        return count
+    except Exception as e:
+        logger.debug(f"Failed to count AP stations: {e}")
+        return 0
+
+
 def scan_wifi_networks(max_results=25, rescan=True, timeout=25):
     iface = _detect_wifi_interface()
     networks = []

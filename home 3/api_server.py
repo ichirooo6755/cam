@@ -570,6 +570,21 @@ def _is_mode_operational(mode):
     return False
 
 
+def _has_ap_clients_connected():
+    """
+    APにクライアントが接続中かどうかを判定する。
+    判定失敗時は False を返す（過剰ブロックを避ける）。
+    """
+    try:
+        count = int(wifi_manager.get_ap_connected_station_count())
+        if count > 0:
+            logger.info(f"AP has connected stations: {count}")
+        return count > 0
+    except Exception as e:
+        logger.warning(f"Failed to check AP station count: {e}")
+        return False
+
+
 def _run_force_ap_recovery(trigger='watchdog'):
     """通信不能時にAPへ強制復旧する。"""
     saved_ap = wifi_manager.get_saved_ap_settings()
@@ -2473,6 +2488,11 @@ def restore_wifi_mode_on_boot():
                 return
 
         if saved_mode == 'tethering' and current_mode == 'ap':
+            # APへ接続中の端末がある場合、強制的にテザリングへ戻さない（フラップ防止）
+            if _is_ap_operational() and _has_ap_clients_connected():
+                logger.info("Boot restore: AP has connected client(s); keep AP mode and skip tethering restore")
+                _persist_wifi_mode('ap', ap_ssid=settings.get('ap_ssid'), ap_password=settings.get('ap_password'))
+                return
             logger.info("Restoring tethering mode")
             result = wifi_manager.switch_to_tethering_mode()
             logger.info(f"Tethering restore result: {result}")
