@@ -63,12 +63,25 @@ ssh pi@192.168.4.1 "bash /home/pi/enable_usb_otg_gadget.sh --ether"
 ssh pi@192.168.4.1 "sudo reboot"
 ```
 
-## 4. 既存の Wi-Fi AP との関係
+## 4. Pi 側の固定 IP（usb0）
+
+Mac 側を `192.168.7.1/24`、Pi 側を `192.168.7.2/24` にそろえると SSH が安定しやすいです。
+
+- リポジトリの **`home 3/usb0-static-ip.service`** を `update.sh` が Pi に配置し、`systemctl enable --now` します（`ip addr replace` で **冪等**／既存アドレスがあっても失敗しません）。
+- 手動のみの場合:
+
+```bash
+sudo install -m 644 /home/pi/usb0-static-ip.service /etc/systemd/system/usb0-static-ip.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now usb0-static-ip.service
+```
+
+## 5. 既存の Wi-Fi AP との関係
 
 - gadget 用の USB と **Wi-Fi AP は別物**です。USB で PC とつないでも、従来どおり `PiCamera` AP は動く構成にできます。
 - `cmdline.txt` を誤って壊すと起動しないので、変更前にバックアップを取るか、スクリプトを使ってください。
 
-## 5. トラブルシュート
+## 6. トラブルシュート
 
 | 症状 | 確認 |
 |------|------|

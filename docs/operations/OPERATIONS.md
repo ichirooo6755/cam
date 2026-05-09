@@ -60,6 +60,13 @@ cd "home 3" && bash ./update.sh 192.168.4.1
 cd "home 3" && bash ./wifi_cycle_test.sh
 ```
 
+### 4.1 デプロイ後の zram（AP で apt が使えないとき）
+
+- `update.sh` は `home 3/vendor/debian/zram-tools_*_all.deb` を Pi の `/home/pi/` にコピーする（bookworm の公式 `all` パッケージ）。
+- Pi 上で性能調整を一括適用: `bash ~/tune_performance_zero2w.sh`  
+  （ネット無しでも、上記 deb があれば `dpkg -i` で `zram-tools` を入れてから `zramswap` を有効化する）
+- **USB OTG** 経由の例: Mac 側で `cd "home 3" && SSHPASS='...' bash ./update.sh 192.168.7.2`
+
 ## 5. 主要 API
 - `GET/POST /api/settings`: 設定の取得/更新
 - `GET /api/wifi/status`: Wi-Fi 状態
@@ -117,4 +124,5 @@ ssh pi@192.168.4.1 "journalctl -u camera-service -n 50 --no-pager"
 ## 8. USB OTG（Wi-Fi なしで書き換え）
 
 Pi Zero / Zero 2 W のデータ用 USB を gadget 化し、PC から USB Ethernet 経由で SSH する手順は `docs/runbook/USB_OTG.md` を参照。  
-補助スクリプト: `home 3/enable_usb_otg_gadget.sh`（Pi 上で `sudo bash ... --ether` 実行後に再起動）。
+補助スクリプト: `home 3/enable_usb_otg_gadget.sh`（Pi 上で `sudo bash ... --ether` 実行後に再起動）。  
+`home 3/update.sh` 実行時に **`usb0-static-ip.service`**（Pi 側 `192.168.7.2/24`、`ip addr replace` で冪等）も配置・有効化を試みる。

@@ -1,0 +1,14 @@
+[Unit]
+Description=Set static IPv4 on usb0 (OTG / g_ether)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# 冪等: 既に同じアドレスが付いていても replace は成功する（add は File exists で失敗しうる）
+# usb0 が未生成の起動では何もせず成功扱い（後からケーブル接続で次回ブート時に適用）
+ExecStart=/bin/sh -c 'if /sbin/ip link show usb0 >/dev/null 2>&1; then /sbin/ip link set usb0 up; /sbin/ip addr replace 192.168.7.2/24 dev usb0; fi'
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
