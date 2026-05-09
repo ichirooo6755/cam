@@ -3,7 +3,7 @@
  set -e
 
 # Raspberry PiのIPアドレス（引数で指定可能、デフォルトは raspberrypi.local）
-RASPI_HOST="${1:-raspberrypi.local}"
+# 到達不能時は PI_FALLBACK_HOSTS（空白区切り）を順に試す（OTG→AP→mDNS 想定）
 
  SSH_OPTS=(
      -o ConnectTimeout=10
@@ -25,6 +25,31 @@ if [[ -n "${SSHPASS:-}" ]] && command -v sshpass >/dev/null 2>&1; then
 else
   _SSH=(ssh)
   _SCP=(scp)
+fi
+
+_try_ssh_reach() {
+  local h="$1"
+  "${_SSH[@]}" "${SSH_OPTS[@]}" -T "pi@$h" "echo ok" >/dev/null 2>&1
+}
+
+_primary="${1:-raspberrypi.local}"
+RASPI_HOST="$_primary"
+_fb="${PI_FALLBACK_HOSTS:-192.168.7.2 192.168.4.1 raspberrypi.local raspberrypi}"
+
+if ! _try_ssh_reach "$RASPI_HOST"; then
+  echo "Primary host unreachable: $_primary — trying PI_FALLBACK_HOSTS..."
+  RASPI_HOST=""
+  for _h in $_fb; do
+    [[ "$_h" == "$_primary" ]] && continue
+    if _try_ssh_reach "$_h"; then
+      RASPI_HOST="$_h"
+      break
+    fi
+  done
+  if [[ -z "$RASPI_HOST" ]]; then
+    echo "ERROR: SSH failed for $_primary and fallbacks: $_fb"
+    exit 255
+  fi
 fi
 
 echo "Using Raspberry Pi: $RASPI_HOST"
@@ -54,6 +79,8 @@ echo "Transffering Python scripts..."
 "${_SCP[@]}" "${SSH_OPTS[@]}" camera-service.service pi@$RASPI_HOST:/home/pi/
 "${_SCP[@]}" "${SSH_OPTS[@]}" api-server.service pi@$RASPI_HOST:/home/pi/
 "${_SCP[@]}" "${SSH_OPTS[@]}" usb0-static-ip.service pi@$RASPI_HOST:/home/pi/
+"${_SCP[@]}" "${SSH_OPTS[@]}" picamera-wifi-bootstrap.sh pi@$RASPI_HOST:/home/pi/
+"${_SCP[@]}" "${SSH_OPTS[@]}" picamera-wifi-bootstrap.service pi@$RASPI_HOST:/home/pi/
 
 # 性能調整スクリプトと zram-tools オフライン用 deb（AP でも tune が完走しやすい）
 if [[ -f "$CURRENT_DIR/tune_performance_zero2w.sh" ]]; then
@@ -78,7 +105,7 @@ echo "Restarting services..."
 
 # サービスの再起動（最大3回、TTY 無しで banner 待ちを短縮）
 _restart_remote() {
-  "${_SSH[@]}" "${RESTART_SSH_OPTS[@]}" -T pi@$RASPI_HOST "sudo -n sh -c 'echo 1 > /run/picamera_boot_network_applied'; if [ \$? -ne 0 ]; then echo 'Skip restart: sudo -n is not permitted'; exit 0; fi; sudo -n systemctl stop camera-control 2>/dev/null; sudo -n systemctl disable camera-control 2>/dev/null; sudo -n systemctl stop shutter-trigger 2>/dev/null; sudo -n systemctl disable shutter-trigger 2>/dev/null; sudo -n systemctl stop photo-server 2>/dev/null; sudo -n systemctl disable photo-server 2>/dev/null; sudo -n rm -f /etc/systemd/system/camera-control.service /etc/systemd/system/shutter-trigger.service /etc/systemd/system/photo-server.service 2>/dev/null || true; sudo -n rm -f /home/pi/camera_control.py /home/pi/shutter_trigger.py /home/pi/light_detection_algorithm.py /home/pi/server.py /home/pi/index.html /home/pi/gallery.html /home/pi/style.css 2>/dev/null || true; if [ -f /home/pi/camera-service.service ]; then sudo -n install -m 644 /home/pi/camera-service.service /etc/systemd/system/camera-service.service; fi; if [ -f /home/pi/api-server.service ]; then sudo -n install -m 644 /home/pi/api-server.service /etc/systemd/system/api-server.service; fi; sudo -n systemctl daemon-reload; sudo -n systemctl enable camera-service api-server 2>/dev/null || true; sudo -n systemctl restart camera-service api-server"
+  "${_SSH[@]}" "${RESTART_SSH_OPTS[@]}" -T pi@$RASPI_HOST "sudo -n sh -c 'echo 1 > /run/picamera_boot_network_applied'; if [ \$? -ne 0 ]; then echo 'Skip restart: sudo -n is not permitted'; exit 0; fi; sudo -n systemctl stop camera-control 2>/dev/null; sudo -n systemctl disable camera-control 2>/dev/null; sudo -n systemctl stop shutter-trigger 2>/dev/null; sudo -n systemctl disable shutter-trigger 2>/dev/null; sudo -n systemctl stop photo-server 2>/dev/null; sudo -n systemctl disable photo-server 2>/dev/null; sudo -n rm -f /etc/systemd/system/camera-control.service /etc/systemd/system/shutter-trigger.service /etc/systemd/system/photo-server.service 2>/dev/null || true; sudo -n rm -f /home/pi/camera_control.py /home/pi/shutter_trigger.py /home/pi/light_detection_algorithm.py /home/pi/server.py /home/pi/index.html /home/pi/gallery.html /home/pi/style.css 2>/dev/null || true; if [ -f /home/pi/camera-service.service ]; then sudo -n install -m 644 /home/pi/camera-service.service /etc/systemd/system/camera-service.service; fi; if [ -f /home/pi/api-server.service ]; then sudo -n install -m 644 /home/pi/api-server.service /etc/systemd/system/api-server.service; fi; if [ -f /home/pi/picamera-wifi-bootstrap.service ]; then sudo -n install -m 644 /home/pi/picamera-wifi-bootstrap.service /etc/systemd/system/picamera-wifi-bootstrap.service; fi; sudo -n chmod 755 /home/pi/picamera-wifi-bootstrap.sh 2>/dev/null || true; sudo -n systemctl daemon-reload; sudo -n systemctl enable picamera-wifi-bootstrap.service 2>/dev/null || true; sudo -n systemctl start picamera-wifi-bootstrap.service 2>/dev/null || true; sudo -n systemctl enable camera-service api-server 2>/dev/null || true; sudo -n systemctl restart camera-service api-server"
 }
 
 _ok=0

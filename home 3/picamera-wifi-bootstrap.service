@@ -1,0 +1,13 @@
+[Unit]
+Description=Picamera: bring up Wi-Fi AP without Python API (bootstrap)
+After=NetworkManager.service
+Wants=NetworkManager.service
+Before=ssh.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/home/pi/picamera-wifi-bootstrap.sh
+
+[Install]
+WantedBy=multi-user.target

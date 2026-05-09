@@ -548,6 +548,65 @@ def configure_wpa_supplicant(ssid, psk):
         logger.error(f"Failed to configure wpa_supplicant: {e}")
         return {'success': False, 'message': str(e)}
 
+def _snapshot_tethering_link(iface):
+    """テザリング用: wlan 上の関連状態・局所 IPv4・既定ルートをまとめて取得"""
+    ip_candidates = [
+        ip
+        for ip in _get_ipv4_addrs_for_interface(iface)
+        if _is_valid_client_ipv4(ip)
+    ]
+    state = None
+    ssid = None
+    status = _run_wpa_cli_readonly(['status'], iface=iface, timeout=10)
+    if status['returncode'] == 0 and status['stdout']:
+        fields = {}
+        for line in status['stdout'].splitlines():
+            if '=' not in line:
+                continue
+            key, value = line.split('=', 1)
+            fields[key.strip()] = value.strip()
+        state = fields.get('wpa_state')
+        ssid = fields.get('ssid')
+    iw_connected, iw_ssid = _get_iw_link_info(iface)
+    default_route_ok = _has_default_route_on_interface(iface)
+    return {
+        'iface': iface,
+        'wpa_state': state,
+        'ssid': ssid,
+        'iw_connected': iw_connected,
+        'iw_ssid': iw_ssid,
+        'ips': ip_candidates,
+        'default_route': default_route_ok,
+    }
+
+
+def tethering_has_local_link(timeout=12):
+    """
+    テザリングで「AP に戻すほどではない」程度のリンクが生きているか。
+    携帯側オフラインモード・一時的な default route 欠落などで check_tethering_connection が
+    False になりやすいが、Wi-Fi 関連 + DHCP は成立しているケースを True にしてフラップを抑える。
+    """
+    start_time = time.time()
+    iface = _detect_wifi_interface()
+    last_snapshot = None
+    while time.time() - start_time < timeout:
+        try:
+            snap = _snapshot_tethering_link(iface)
+            last_snapshot = snap
+            ips = snap['ips']
+            if ips and (snap['wpa_state'] == 'COMPLETED' or snap['iw_connected']):
+                logger.info(
+                    "Tethering local link OK (no default route required): "
+                    f"IP={ips[0]} wpa={snap['wpa_state']} iw={snap['iw_connected']}"
+                )
+                return True
+        except Exception as e:
+            logger.debug(f"tethering_has_local_link error: {e}")
+        time.sleep(1.5)
+    logger.debug(f"tethering_has_local_link: no link yet: {last_snapshot}")
+    return False
+
+
 def check_tethering_connection(timeout=25):
     """
     テザリングモードで実際に接続できているか確認
@@ -555,49 +614,17 @@ def check_tethering_connection(timeout=25):
     """
     start_time = time.time()
     iface = _detect_wifi_interface()
-    last_snapshot = {
-        'iface': iface,
-        'wpa_state': None,
-        'ssid': None,
-        'iw_connected': None,
-        'iw_ssid': None,
-        'ips': None,
-        'default_route': None,
-    }
+    last_snapshot = None
 
     while time.time() - start_time < timeout:
         try:
-            ip_candidates = [
-                ip
-                for ip in _get_ipv4_addrs_for_interface(iface)
-                if _is_valid_client_ipv4(ip)
-            ]
-
-            state = None
-            ssid = None
-            status = _run_wpa_cli_readonly(['status'], iface=iface, timeout=10)
-            if status['returncode'] == 0 and status['stdout']:
-                fields = {}
-                for line in status['stdout'].splitlines():
-                    if '=' not in line:
-                        continue
-                    key, value = line.split('=', 1)
-                    fields[key.strip()] = value.strip()
-                state = fields.get('wpa_state')
-                ssid = fields.get('ssid')
-
-            iw_connected, iw_ssid = _get_iw_link_info(iface)
-            default_route_ok = _has_default_route_on_interface(iface)
-
-            last_snapshot = {
-                'iface': iface,
-                'wpa_state': state,
-                'ssid': ssid,
-                'iw_connected': iw_connected,
-                'iw_ssid': iw_ssid,
-                'ips': ip_candidates,
-                'default_route': default_route_ok,
-            }
+            last_snapshot = _snapshot_tethering_link(iface)
+            ip_candidates = last_snapshot['ips']
+            state = last_snapshot['wpa_state']
+            ssid = last_snapshot['ssid']
+            iw_connected = last_snapshot['iw_connected']
+            iw_ssid = last_snapshot['iw_ssid']
+            default_route_ok = last_snapshot['default_route']
 
             # 強化: IPアドレス取得 AND デフォルトルート存在を必須条件に
             if ip_candidates and default_route_ok and (state == 'COMPLETED' or iw_connected):

@@ -1,6 +1,6 @@
 [Unit]
 Description=Camera API Server
-After=network.target
+After=network.target picamera-wifi-bootstrap.service
 Wants=network.target
 
 [Service]
@@ -9,7 +9,8 @@ User=pi
 WorkingDirectory=/home/pi
 RuntimeDirectory=picamera
 RuntimeDirectoryMode=0755
-ExecStartPre=/usr/bin/python3 -c "import json,os; p='/home/pi/camera_settings.json'; d=json.load(open(p)) if os.path.exists(p) else {}; d['wifi_mode']='ap'; d.setdefault('ap_ssid','PiCamera'); d.setdefault('ap_password','picamera123'); json.dump(d,open(p,'w'),indent=2)"
+# wifi_mode は上書きしない（setdefault のみ）。毎回 ap 固定するとテザリングと競合してフラップしやすい。
+ExecStartPre=/usr/bin/python3 -c "import json,os; p='/home/pi/camera_settings.json'; d=json.load(open(p)) if os.path.exists(p) else {}; d.setdefault('wifi_mode','ap'); d.setdefault('ap_ssid','PiCamera'); d.setdefault('ap_password','picamera123'); json.dump(d,open(p,'w'),indent=2)"
 ExecStart=/usr/bin/python3 /home/pi/api_server.py
 Restart=always
 RestartSec=10

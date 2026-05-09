@@ -56,11 +56,20 @@ cd "home 3" && bash ./update.sh raspberrypi.local
 # Pi へデプロイ（AP）
 cd "home 3" && bash ./update.sh 192.168.4.1
 
+# デプロイ: 第1引数のホストに SSH できないとき、自動で
+# 192.168.7.2(OTG) → 192.168.4.1(AP) → raspberrypi.local を試す
+# 順序の変更: 環境変数 PI_FALLBACK_HOSTS="192.168.7.2 192.168.4.1"
+
 # Wi-Fi 切替試験
 cd "home 3" && bash ./wifi_cycle_test.sh
 ```
 
-### 4.1 デプロイ後の zram（AP で apt が使えないとき）
+### 4.1 AP の自立起動（API 無し）
+
+- `picamera-wifi-bootstrap.service` が起動時に `camera_settings.json` を読み、**`wifi_mode` が `tethering` 以外**なら NetworkManager の **`Hotspot` を `connection up`** する（Python API 不要）。
+- **Hotspot プロファイルが未作成**の SD では初回だけ従来どおり API / `nmcli` で作成が必要。
+
+### 4.2 デプロイ後の zram（AP で apt が使えないとき）
 
 - `update.sh` は `home 3/vendor/debian/zram-tools_*_all.deb` を Pi の `/home/pi/` にコピーする（bookworm の公式 `all` パッケージ）。
 - Pi 上で性能調整を一括適用: `bash ~/tune_performance_zero2w.sh`  

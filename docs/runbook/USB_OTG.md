@@ -63,7 +63,12 @@ ssh pi@192.168.4.1 "bash /home/pi/enable_usb_otg_gadget.sh --ether"
 ssh pi@192.168.4.1 "sudo reboot"
 ```
 
-## 4. Pi 側の固定 IP（usb0）
+## 4. AP と OTG の両立（デプロイ）
+
+- `home 3/update.sh` は第1候補に SSH できない場合、`192.168.7.2`（OTG）→ `192.168.4.1`（AP）などへ自動フォールバックする（`PI_FALLBACK_HOSTS` で上書き可）。
+- 起動直後から **PiCamera AP を立てる** `picamera-wifi-bootstrap.service` は `update.sh` 経由で Pi に入る（`wifi_mode` が `tethering` のときは Hotspot を上げない）。
+
+## 5. Pi 側の固定 IP（usb0）
 
 Mac 側を `192.168.7.1/24`、Pi 側を `192.168.7.2/24` にそろえると SSH が安定しやすいです。
 
@@ -76,12 +81,12 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now usb0-static-ip.service
 ```
 
-## 5. 既存の Wi-Fi AP との関係
+## 6. 既存の Wi-Fi AP との関係
 
 - gadget 用の USB と **Wi-Fi AP は別物**です。USB で PC とつないでも、従来どおり `PiCamera` AP は動く構成にできます。
 - `cmdline.txt` を誤って壊すと起動しないので、変更前にバックアップを取るか、スクリプトを使ってください。
 
-## 6. トラブルシュート
+## 7. トラブルシュート
 
 | 症状 | 確認 |
 |------|------|

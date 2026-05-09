@@ -58,10 +58,10 @@ ALLOWED_PHOTO_EXTENSIONS = ('.jpg', '.jpeg', '.png', '.dng')
 MAX_JSON_BODY_BYTES = 64 * 1024
 WIFI_SWITCH_COOLDOWN_SEC = 12
 WIFI_RECOVERY_CHECK_INTERVAL_SEC = 10
-WIFI_RECOVERY_OFFLINE_GRACE_SEC = 45
-WIFI_RECOVERY_ATTEMPT_COOLDOWN_SEC = 120
+WIFI_RECOVERY_OFFLINE_GRACE_SEC = 75
+WIFI_RECOVERY_ATTEMPT_COOLDOWN_SEC = 150
 # テザリング切替直後は一時的に不安定になりやすいため、AP自動復旧を抑止
-WIFI_RECOVERY_TETHERING_STABILIZE_SEC = 180
+WIFI_RECOVERY_TETHERING_STABILIZE_SEC = 300
 AP_IP_PREFIXES = ('192.168.4.', '10.42.0.')
 
 _WIFI_SWITCH_LOCK = threading.Lock()
@@ -562,7 +562,10 @@ def _is_mode_operational(mode):
 
     if mode == 'tethering':
         try:
-            return wifi_manager.check_tethering_connection(timeout=25)
+            if wifi_manager.check_tethering_connection(timeout=14):
+                return True
+            # インターネット無し・一時的な default route 欠落でもリンクが生きていれば「まだテザリング」とみなし AP 自動復帰を避ける
+            return wifi_manager.tethering_has_local_link(timeout=10)
         except Exception as e:
             logger.warning(f"Failed to check tethering operational status: {e}")
             return False
