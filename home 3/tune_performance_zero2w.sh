@@ -11,9 +11,53 @@ SWAP_MB="${SWAP_MB:-512}"
 ZRAM_PERCENT="${ZRAM_PERCENT:-35}"
 TARGET_SETTINGS_FILE="/home/pi/camera_settings.json"
 
+# zram-tools: ネット無し（AP のみ）でも進められるよう、ローカル .deb / 既存導入を優先
+install_zram_tools_if_needed() {
+  if dpkg -s zram-tools >/dev/null 2>&1; then
+    echo "zram-tools は既にインストール済み"
+    return 0
+  fi
+
+  local deb_path="${ZRAM_TOOLS_DEB:-}"
+  if [[ -z "${deb_path}" ]]; then
+    # update.sh が vendor の deb を /home/pi に置いた場合
+    local f
+    for f in /home/pi/zram-tools_*_all.deb; do
+      if [[ -f "${f}" ]]; then
+        deb_path="${f}"
+        break
+      fi
+    done
+  fi
+
+  if [[ -n "${deb_path}" && -f "${deb_path}" ]]; then
+    echo "zram-tools をローカル deb から導入: ${deb_path}"
+    if ! sudo dpkg -i "${deb_path}"; then
+      if ping -c 1 -W 2 8.8.8.8 >/dev/null 2>&1; then
+        sudo apt-get -f install -y
+      else
+        echo "ERROR: dpkg が失敗し、オフラインのため apt-get -f も使えません（swap 以降は続行）"
+      fi
+    fi
+    return 0
+  fi
+
+  # インターネット到達の粗い判定（DNS 失敗で apt が長時間ハングしないようにする）
+  if ping -c 1 -W 2 8.8.8.8 >/dev/null 2>&1; then
+    echo "apt で zram-tools を導入（ネット到達あり）..."
+    sudo apt-get update -y
+    sudo apt-get install -y zram-tools
+    return 0
+  fi
+
+  echo "WARN: zram-tools 未導入（ネット無し・deb 無し）。以下のいずれかで対応してください:"
+  echo "  - Mac から: scp home 3/vendor/debian/zram-tools_*_all.deb pi@<host>:/home/pi/"
+  echo "  - 環境変数: ZRAM_TOOLS_DEB=/path/to/zram-tools_*_all.deb bash $0"
+  return 0
+}
+
 echo "[1/5] Install zram-tools (if missing)..."
-sudo apt-get update -y
-sudo apt-get install -y zram-tools
+install_zram_tools_if_needed
 
 echo "[2/5] Configure swapfile size: ${SWAP_MB}MB"
 if [[ -f /etc/dphys-swapfile ]]; then
@@ -75,7 +119,7 @@ print(f"updated: {path}")
 PY
 
 echo "[5/5] Restart services"
-sudo systemctl restart picamera-api camera-service
+sudo systemctl restart api-server.service camera-service.service
 
 echo
 echo "Done."
