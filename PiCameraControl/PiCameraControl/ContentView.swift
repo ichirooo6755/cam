@@ -1990,7 +1990,7 @@ struct ContentView: View {
     private func performMeteringCalibrate() {
         isMetering = true
         meteringResult = nil
-        meteringToast = "測光開始: 5秒待機 → 10秒間撮影..."
+        meteringToast = "測光開始: 3秒待機 → 3秒計測..."
         errorMessage = nil
 
         let apiClient = api
@@ -1999,15 +1999,38 @@ struct ContentView: View {
 
         Task {
             do {
-                let result = try await apiClient.meteringCalibrate(settleSeconds: 5, captureSeconds: 10)
-                await MainActor.run {
-                    isMetering = false
-                    if result.success, let rec = result.recommendation {
-                        meteringResult = rec
-                        let photoCount = result.photos?.count ?? 0
-                        meteringToast = "測光完了 (\(photoCount)枚撮影)"
-                        generator.notificationOccurred(.success)
+                let result = try await apiClient.meteringCalibrate(settleSeconds: 3, captureSeconds: 3)
+                if result.success, let rec = result.recommendation {
+                    let photoCount = result.photos?.count ?? 0
+                    if let iso = rec.recommendedIso, let ss = rec.recommendedShutterUs {
+                        try await apiClient.updateSettings(
+                            [
+                                "iso": iso,
+                                "shutter_speed": ss,
+                            ],
+                            temporary: false
+                        )
+                        let settings = try await apiClient.fetchSettings()
+                        await MainActor.run {
+                            applyRemoteSettings(settings)
+                            meteringResult = rec
+                            isMetering = false
+                            meteringToast =
+                                "測光完了・ISO \(iso) / \(ss)µs を反映（\(photoCount)枚）"
+                            generator.notificationOccurred(.success)
+                        }
                     } else {
+                        await MainActor.run {
+                            meteringResult = rec
+                            isMetering = false
+                            meteringToast =
+                                "測光完了（数値不足のため設定は未変更）\(photoCount)枚"
+                            generator.notificationOccurred(.warning)
+                        }
+                    }
+                } else {
+                    await MainActor.run {
+                        isMetering = false
                         meteringToast = "測光失敗: \(result.error ?? "unknown")"
                         generator.notificationOccurred(.error)
                     }
@@ -2051,7 +2074,18 @@ struct ContentView: View {
                 let (filename1, metadata) = try await apiClient.captureWithMetadata(
                     manualMode: mode, meta: meta, location: locationPayload
                 )
-                var image = try await apiClient.downloadImage(filename: filename1)
+                // 撮影直後の AP 瞬断に備え、接続が切れていれば短く待つ
+                // （接続中なら待機ゼロ）
+                if !ConnectionMonitor.shared.isConnected {
+                    await ConnectionMonitor.shared.checkNow()
+                    try? await Task.sleep(nanoseconds: 400_000_000)
+                }
+                var image: UIImage
+                do {
+                    image = try await apiClient.downloadImage(filename: filename1)
+                } catch {
+                    throw CameraAPIError.downloadFailed
+                }
 
                 // 多重露光: 2枚目を撮影してiPhone側で合成
                 if doMultiExposure || do2in1 {

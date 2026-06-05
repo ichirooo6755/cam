@@ -10,7 +10,7 @@ WorkingDirectory=/home/pi
 RuntimeDirectory=picamera
 RuntimeDirectoryMode=0755
 # wifi_mode は上書きしない（setdefault のみ）。毎回 ap 固定するとテザリングと競合してフラップしやすい。
-ExecStartPre=/usr/bin/python3 -c "import json,os; p='/home/pi/camera_settings.json'; d=json.load(open(p)) if os.path.exists(p) else {}; d.setdefault('wifi_mode','ap'); d.setdefault('ap_ssid','PiCamera'); d.setdefault('ap_password','picamera123'); json.dump(d,open(p,'w'),indent=2)"
+ExecStartPre=/usr/bin/python3 -c "import json,os; p='/home/pi/camera_settings.json'; d={}; exec(\"try:\\n if os.path.exists(p) and os.path.getsize(p)>0:\\n  with open(p) as f: d=json.load(f) or {}\\nexcept Exception: d={}\"); d.setdefault('wifi_mode','ap'); d.setdefault('ap_ssid','PiCamera'); d.setdefault('ap_password','picamera123'); t=p+'.tmp'; json.dump(d,open(t,'w'),indent=2); os.replace(t,p)"
 ExecStart=/usr/bin/python3 /home/pi/api_server.py
 Restart=always
 RestartSec=10

@@ -46,7 +46,7 @@ SESSION_OVERRIDES_FILE = '/home/pi/camera_session_overrides.json'
 SENSOR_STATUS_FILE = '/run/picamera/sensor_status.json'
 CAPTURE_REQUEST_FILE = '/run/picamera/capture_request.json'
 CAPTURE_RESULT_FILE  = '/run/picamera/capture_result.json'
-_CAPTURE_IPC_POLL_INTERVAL = 0.15   # ポーリング間隔（秒）
+_CAPTURE_IPC_POLL_INTERVAL = 0.05   # ポーリング間隔（秒）: 速いほど体感レスポンスが上がる
 _CAPTURE_IPC_TIMEOUT_SEC   = 12.0   # IPCタイムアウト（秒）: 手動撮影の体感遅延を抑制
 BOOT_NETWORK_APPLIED_MARKERS = (
     '/run/picamera_boot_network_applied',
@@ -133,6 +133,33 @@ DEFAULT_SETTINGS = {
     'monitoring_enabled': True,
     'quality': 90,
 }
+
+
+def _load_settings_dict() -> dict:
+    """camera_settings.json を読み込む。空ファイル・破損時は {} を返す。"""
+    if not os.path.exists(SETTINGS_FILE):
+        return {}
+    try:
+        if os.path.getsize(SETTINGS_FILE) == 0:
+            logger.warning("Settings file is empty, using defaults")
+            return {}
+        with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (json.JSONDecodeError, OSError, ValueError) as e:
+        logger.warning("Failed to load settings file, using defaults: %s", e)
+        return {}
+
+
+def _save_settings_dict(settings: dict) -> None:
+    """設定をアトミックに保存（書き込み中の電源断で0バイト化しない）。"""
+    tmp_path = f"{SETTINGS_FILE}.tmp"
+    with open(tmp_path, 'w', encoding='utf-8') as f:
+        json.dump(settings, f, indent=2)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp_path, SETTINGS_FILE)
+
 
 def _is_camera_service_running() -> bool:
     """camera-service が active かどうかを確認"""
@@ -510,10 +537,7 @@ def _is_wifi_switching():
 def _persist_wifi_mode(mode, ap_ssid=None, ap_password=None):
     """Wi-Fiモードをcamera_settings.jsonに保存"""
     try:
-        settings = {}
-        if os.path.exists(SETTINGS_FILE):
-            with open(SETTINGS_FILE, 'r') as f:
-                settings = json.load(f)
+        settings = _load_settings_dict()
 
         settings['wifi_mode'] = mode
         if ap_ssid:
@@ -521,8 +545,7 @@ def _persist_wifi_mode(mode, ap_ssid=None, ap_password=None):
         if ap_password:
             settings['ap_password'] = ap_password
 
-        with open(SETTINGS_FILE, 'w') as f:
-            json.dump(settings, f, indent=2)
+        _save_settings_dict(settings)
         logger.info(f"Wi-Fi mode saved: {mode}")
         with _WIFI_RECOVERY_LOCK:
             _WIFI_RECOVERY_STATE['last_mode'] = mode
@@ -892,12 +915,7 @@ def _load_effective_settings_cached():
 
 def _load_effective_settings():
     settings = DEFAULT_SETTINGS.copy()
-    if os.path.exists(SETTINGS_FILE):
-        try:
-            with open(SETTINGS_FILE, 'r') as f:
-                settings.update(json.load(f))
-        except (json.JSONDecodeError, OSError) as e:
-            logger.warning(f"Failed to load settings file: {e}")
+    settings.update(_load_settings_dict())
 
     if os.path.exists(SESSION_OVERRIDES_FILE):
         try:
@@ -1279,10 +1297,10 @@ class APIHandler(BaseHTTPRequestHandler):
             if data is None:
                 return
 
-            settle = int(data.get('settle_seconds', 5))
-            capture = int(data.get('capture_seconds', 10))
-            settle = max(2, min(settle, 15))
-            capture = max(5, min(capture, 30))
+            settle = int(data.get('settle_seconds', 3))
+            capture = int(data.get('capture_seconds', 3))
+            settle = max(1, min(settle, 15))
+            capture = max(2, min(capture, 30))
 
             stop_result = subprocess.run(
                 ['sudo', '-n', 'systemctl', 'stop', 'camera-service'],
@@ -1311,7 +1329,8 @@ class APIHandler(BaseHTTPRequestHandler):
             if not os.path.exists(script_path):
                 script_path = '/home/pi/metering_calibrate.py'
 
-            timeout_sec = settle + capture + 10
+            # スクリプト内の撮影間隔・I/O を含め余裕を持たせる（短時間キャリブでもタイムアウトしにくく）
+            timeout_sec = settle + capture + 25
             result = subprocess.run(
                 ['python3', script_path,
                  f'--settle={settle}', f'--capture={capture}'],
@@ -1680,9 +1699,7 @@ class APIHandler(BaseHTTPRequestHandler):
             photo_count = _get_cached_photo_count()
             
             settings = DEFAULT_SETTINGS.copy()
-            if os.path.exists(SETTINGS_FILE):
-                with open(SETTINGS_FILE, 'r') as f:
-                    settings.update(json.load(f))
+            settings.update(_load_settings_dict())
 
             if os.path.exists(SESSION_OVERRIDES_FILE):
                 try:
@@ -1721,9 +1738,7 @@ class APIHandler(BaseHTTPRequestHandler):
         """設定情報を返す"""
         try:
             settings = DEFAULT_SETTINGS.copy()
-            if os.path.exists(SETTINGS_FILE):
-                with open(SETTINGS_FILE, 'r') as f:
-                    settings.update(json.load(f))
+            settings.update(_load_settings_dict())
 
             if os.path.exists(SESSION_OVERRIDES_FILE):
                 try:
@@ -1783,9 +1798,7 @@ class APIHandler(BaseHTTPRequestHandler):
                     logger.warning(f"Failed to reset session overrides: {e}")
             
             settings = DEFAULT_SETTINGS.copy()
-            if os.path.exists(SETTINGS_FILE):
-                with open(SETTINGS_FILE, 'r') as f:
-                    settings.update(json.load(f))
+            settings.update(_load_settings_dict())
 
             if 'detection_threshold' in new_settings and 'brightness_threshold' not in new_settings:
                 new_settings['brightness_threshold'] = new_settings['detection_threshold']
@@ -1855,8 +1868,7 @@ class APIHandler(BaseHTTPRequestHandler):
 
             settings.update(new_settings)
             
-            with open(SETTINGS_FILE, 'w') as f:
-                json.dump(settings, f, indent=2)
+            _save_settings_dict(settings)
             
             self.send_response(200)
             self.send_header('Content-Type', 'application/json')
@@ -2152,12 +2164,7 @@ class APIHandler(BaseHTTPRequestHandler):
                     location_label = None
 
             settings = DEFAULT_SETTINGS.copy()
-            if os.path.exists(SETTINGS_FILE):
-                try:
-                    with open(SETTINGS_FILE, 'r') as f:
-                        settings.update(json.load(f))
-                except (json.JSONDecodeError, OSError) as e:
-                    logger.warning(f"Failed to load settings file (capture): {e}")
+            settings.update(_load_settings_dict())
 
             if os.path.exists(SESSION_OVERRIDES_FILE):
                 try:
@@ -2207,7 +2214,8 @@ class APIHandler(BaseHTTPRequestHandler):
             filename = f"manual_{timestamp}"
             if tag_suffix:
                 filename = f"{filename}_{tag_suffix}"
-            filename = f"{filename}.jpg"
+            photo_ext = '.dng' if settings.get('raw_mode') else '.jpg'
+            filename = f"{filename}{photo_ext}"
             photo_path = os.path.join(PHOTOS_DIR, filename)
 
             # --- 撮影: IPC優先、フォールバックでrpicam-still ---
@@ -2436,13 +2444,8 @@ def restore_wifi_mode_on_boot():
     SSH/API接続を途切れさせない。
     """
     try:
-        if not os.path.exists(SETTINGS_FILE):
-            return
-        try:
-            with open(SETTINGS_FILE, 'r') as f:
-                settings = json.load(f)
-        except (json.JSONDecodeError, OSError) as e:
-            logger.warning(f"Boot: failed to load settings: {e}")
+        settings = _load_settings_dict()
+        if not settings:
             return
         saved_mode = settings.get('wifi_mode')
         if not saved_mode:

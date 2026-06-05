@@ -63,8 +63,10 @@ BRIGHTNESS_THRESHOLD = 30
 MIN_CHANGE_AMOUNT = 5
 DARK_SCENE_BRIGHTNESS_CUTOFF = 20.0
 DARK_SCENE_MIN_CHANGE_AMOUNT = 0.8
-SETTINGS_RELOAD_INTERVAL = 2.0
+SETTINGS_RELOAD_INTERVAL = 1.0       # 設定変更を最大1秒以内に反映
 SENSOR_STATUS_WRITE_INTERVAL = 2.0
+# 設定ファイルのmtimeキャッシュ（即時反映用）
+_settings_file_mtime_cache: float = 0.0
 
 # --- モード別パフォーマンスプロファイル ---
 # check_interval    : 光検知ポーリング間隔（秒）
@@ -227,9 +229,13 @@ def get_sensor_sample_from_request(request):
 def load_settings() -> dict:
     settings = DEFAULT_SETTINGS.copy()
     try:
-        if os.path.exists(SETTINGS_FILE):
+        if os.path.exists(SETTINGS_FILE) and os.path.getsize(SETTINGS_FILE) > 0:
             with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
-                settings.update(json.load(f))
+                loaded = json.load(f)
+            if isinstance(loaded, dict):
+                settings.update(loaded)
+        elif os.path.exists(SETTINGS_FILE):
+            logger.warning("Settings file is empty, using defaults")
     except Exception as e:
         logger.warning(f"Failed to load settings: {e}")
 
@@ -625,16 +631,12 @@ def capture_photo(camera, settings: dict, profile: dict, detected_at: float = No
         camera_done = time.time()
         camera_ms = round((camera_done - capture_start) * 1000.0, 1)
 
-        # WiFi AP安定化（モード別: reactionは0ms、batteryは150ms）
-        wifi_sleep_s = profile.get('wifi_sleep', 0.15)
-        if wifi_sleep_s > 0:
-            time.sleep(wifi_sleep_s)
-
-        capture_end = time.time()
+        capture_end = camera_done
         delay_ms = None
         if detected_at is not None:
             delay_ms = round((capture_end - detected_at) * 1000.0, 1)
 
+        wifi_sleep_s = profile.get('wifi_sleep', 0.15)
         logger.info(
             "Captured: %s (cam=%.0fms wifi=%.0fms total=%sms q=%d)",
             os.path.basename(filepath),
@@ -645,13 +647,15 @@ def capture_photo(camera, settings: dict, profile: dict, detected_at: float = No
         )
         _record_capture()
 
-        # 適応型露出: auto ISO 時のみ実行（撮影直後CPUスパイクを抑える）
-        if str(settings.get('iso', 'auto')).lower() == 'auto':
-            threading.Thread(
-                target=_adapt_exposure_background,
-                args=(camera, filepath, settings),
-                daemon=True,
-            ).start()
+        # WiFi AP安定化スリープと適応型露出をまとめてバックグラウンドで実行。
+        # 呼び出し元はすぐに結果を受け取れるので連続撮影の遅延を最小化できる。
+        def _post_capture_bg(fp=filepath, ws=wifi_sleep_s, s=settings, c=camera):
+            if ws > 0:
+                time.sleep(ws)
+            if str(s.get('iso', 'auto')).lower() == 'auto':
+                _adapt_exposure_background(c, fp, s)
+
+        threading.Thread(target=_post_capture_bg, daemon=True).start()
 
         return {
             'success': True,
@@ -727,12 +731,21 @@ def main():
             if camera is not None and os.path.exists(CAPTURE_REQUEST_FILE):
                 _handle_manual_capture_request(camera, settings, active_profile)
 
-            # クールダウン中はスキップ
+            # クールダウン中はスキップ（ただし設定ファイルが変わっていたら即リロード）
             if current_time - last_capture_time < capture_cooldown:
+                # 設定ファイルが変更されていたらクールダウン中でも即リロード
+                try:
+                    global _settings_file_mtime_cache
+                    mtime = os.path.getmtime(SETTINGS_FILE) if os.path.exists(SETTINGS_FILE) else 0.0
+                    if mtime != _settings_file_mtime_cache:
+                        _settings_file_mtime_cache = mtime
+                        last_settings_load = 0.0  # 次ループで即リロード
+                except OSError:
+                    pass
                 time.sleep(check_interval)
                 continue
 
-            # --- 設定リロード ---
+            # --- 設定リロード（通常: 1秒インターバル、設定変更時: 即時） ---
             if current_time - last_settings_load > SETTINGS_RELOAD_INTERVAL:
                 settings = load_settings()
                 camera_mode = str(settings.get('camera_mode', 'standard') or 'standard').strip().lower()
@@ -902,6 +915,11 @@ def main():
                         camera.options["quality"] = active_profile.get(
                             'quality', settings.get('quality', 90))
 
+                # 設定ファイルの最終更新時刻もキャッシュ更新
+                try:
+                    _settings_file_mtime_cache = os.path.getmtime(SETTINGS_FILE) if os.path.exists(SETTINGS_FILE) else 0.0
+                except OSError:
+                    pass
                 last_settings_load = current_time
 
             # --- モニタリング無効 ---

@@ -4,6 +4,10 @@ import SwiftUI
     import UIKit
 #endif
 
+#if canImport(CoreImage)
+    import CoreImage
+#endif
+
 // MARK: - SSRF対策: URL検証ヘルパー
 
 /// サーバーURLの妥当性を検証（SSRF対策）
@@ -60,20 +64,43 @@ actor CameraAPI {
         return SafeFilename(value: safe)
     }
 
+    /// 軽量API用セッション（設定取得・ステータス等）
+    private let lightSession: URLSession
+    /// 撮影専用セッション（長露光対応: タイムアウト長め）
+    private let captureSession: URLSession
+    /// ダウンロード専用セッション（大きなファイルに対応、リクエスト自体は短め）
+    private let downloadSession: URLSession
+
     init(baseURL: String = "http://192.168.4.1:8001") {
         // SSRF対策: URL検証
         if validateServerURL(baseURL) {
             self.baseURL = baseURL
         } else {
-            // 検証失敗時はデフォルト値を使用
             self.baseURL = "http://192.168.4.1:8001"
             print("Warning: Invalid server URL provided, using default: \(self.baseURL)")
         }
 
-        let config = URLSessionConfiguration.default
-        config.timeoutIntervalForRequest = 60
-        config.timeoutIntervalForResource = 120
-        self.session = URLSession(configuration: config)
+        // 軽量API: 8秒でタイムアウト
+        let lightConfig = URLSessionConfiguration.default
+        lightConfig.timeoutIntervalForRequest = 8
+        lightConfig.timeoutIntervalForResource = 12
+        lightConfig.requestCachePolicy = .reloadIgnoringLocalCacheData
+        self.lightSession = URLSession(configuration: lightConfig)
+
+        // 撮影: 長露光・カメラ初期化待ちに十分な時間
+        let captureConfig = URLSessionConfiguration.default
+        captureConfig.timeoutIntervalForRequest = 60
+        captureConfig.timeoutIntervalForResource = 120
+        self.captureSession = URLSession(configuration: captureConfig)
+
+        // ダウンロード: 接続自体は素早く確立されるはず、転送に余裕を持たせる
+        let dlConfig = URLSessionConfiguration.default
+        dlConfig.timeoutIntervalForRequest = 15
+        dlConfig.timeoutIntervalForResource = 60
+        self.downloadSession = URLSession(configuration: dlConfig)
+
+        // 後方互換のためプロパティを残す
+        self.session = self.captureSession
     }
 
     // MARK: - リトライヘルパー
@@ -103,7 +130,7 @@ actor CameraAPI {
                 throw CameraAPIError.invalidURL
             }
 
-            let (data, response) = try await self.session.data(from: url)
+            let (data, response) = try await self.lightSession.data(from: url)
 
             guard let httpResponse = response as? HTTPURLResponse,
                 httpResponse.statusCode == 200
@@ -160,7 +187,7 @@ actor CameraAPI {
 
         request.httpBody = try JSONSerialization.data(withJSONObject: jsonDict)
 
-        let (data, response) = try await session.data(for: request)
+        let (data, response) = try await lightSession.data(for: request)
 
         guard let httpResponse = response as? HTTPURLResponse,
             httpResponse.statusCode == 200
@@ -293,7 +320,7 @@ actor CameraAPI {
         }
     }
 
-    func meteringCalibrate(settleSeconds: Int = 5, captureSeconds: Int = 10) async throws -> MeteringResult {
+    func meteringCalibrate(settleSeconds: Int = 3, captureSeconds: Int = 3) async throws -> MeteringResult {
         guard let url = URL(string: "\(baseURL)/api/metering/calibrate") else {
             throw CameraAPIError.invalidURL
         }
@@ -301,7 +328,7 @@ actor CameraAPI {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.timeoutInterval = TimeInterval(settleSeconds + captureSeconds + 15)
+        request.timeoutInterval = TimeInterval(settleSeconds + captureSeconds + 30)
 
         let body: [String: Any] = [
             "settle_seconds": settleSeconds,
@@ -309,7 +336,7 @@ actor CameraAPI {
         ]
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
-        let (data, response) = try await session.data(for: request)
+        let (data, response) = try await captureSession.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
             throw CameraAPIError.serverError
         }
@@ -344,7 +371,7 @@ actor CameraAPI {
         }
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
-        let (data, response) = try await session.data(for: request)
+        let (data, response) = try await captureSession.data(for: request)
 
         guard let httpResponse = response as? HTTPURLResponse else {
             throw CameraAPIError.serverError
@@ -391,36 +418,59 @@ actor CameraAPI {
 
     // MARK: - 画像ダウンロード
 
-    /// 撮影した画像をダウンロード
-    func downloadImage(filename: SafeFilename) async throws -> UIImage {
+    /// 撮影した画像をダウンロード（撮影直後の AP 瞬断に備えてリトライ）
+    func downloadImage(filename: SafeFilename, preferThumbnail: Bool = false) async throws -> UIImage {
         let safeFilename = filename.value
         guard !safeFilename.isEmpty else {
             throw CameraAPIError.invalidFilename
         }
 
-        guard let url = URL(string: "\(baseURL)/api/photo") else {
-            throw CameraAPIError.invalidURL
-        }
+        let useThumbnail = preferThumbnail || safeFilename.lowercased().hasSuffix(".dng")
 
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        let body = ["filename": safeFilename]
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        return try await withRetry(maxRetries: 4, delay: 2.0) {
+            guard let url = URL(string: "\(self.baseURL)/api/photo") else {
+                throw CameraAPIError.invalidURL
+            }
 
-        let (data, response) = try await session.data(for: request)
+            var request = URLRequest(url: url)
+            request.httpMethod = "POST"
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            var body: [String: Any] = ["filename": safeFilename]
+            if useThumbnail {
+                body["thumbnail"] = true
+                body["max_dim"] = 1200
+            }
+            request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
-        guard let httpResponse = response as? HTTPURLResponse,
-            httpResponse.statusCode == 200
-        else {
-            throw CameraAPIError.downloadFailed
-        }
+            let (data, response) = try await self.downloadSession.data(for: request)
 
-        guard let image = UIImage(data: data) else {
+            guard let httpResponse = response as? HTTPURLResponse else {
+                throw CameraAPIError.downloadFailed
+            }
+
+            if httpResponse.statusCode == 404 {
+                throw CameraAPIError.downloadFailed
+            }
+
+            guard httpResponse.statusCode == 200 else {
+                throw CameraAPIError.downloadFailed
+            }
+
+            if let image = UIImage(data: data) {
+                return image
+            }
+
+            #if canImport(CoreImage)
+                if let ciImage = CIImage(data: data) {
+                    let context = CIContext(options: nil)
+                    if let cgImage = context.createCGImage(ciImage, from: ciImage.extent) {
+                        return UIImage(cgImage: cgImage)
+                    }
+                }
+            #endif
+
             throw CameraAPIError.invalidImageData
         }
-
-        return image
     }
 
     // MARK: - 監視制御
@@ -434,7 +484,7 @@ actor CameraAPI {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
 
-        let (_, response) = try await session.data(for: request)
+        let (_, response) = try await lightSession.data(for: request)
 
         guard let httpResponse = response as? HTTPURLResponse,
             httpResponse.statusCode == 200
@@ -452,7 +502,7 @@ actor CameraAPI {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
 
-        let (_, response) = try await session.data(for: request)
+        let (_, response) = try await lightSession.data(for: request)
 
         guard let httpResponse = response as? HTTPURLResponse,
             httpResponse.statusCode == 200
@@ -469,7 +519,7 @@ actor CameraAPI {
             throw CameraAPIError.invalidURL
         }
 
-        let (data, response) = try await session.data(from: url)
+        let (data, response) = try await lightSession.data(from: url)
 
         guard let httpResponse = response as? HTTPURLResponse,
             httpResponse.statusCode == 200
@@ -498,7 +548,7 @@ actor CameraAPI {
 
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
-        let (data, response) = try await session.data(for: request)
+        let (data, response) = try await lightSession.data(for: request)
 
         guard let httpResponse = response as? HTTPURLResponse else {
             throw CameraAPIError.serverError
@@ -534,7 +584,7 @@ actor CameraAPI {
         let body = ["ssid": ssid, "psk": psk]
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
-        let (data, response) = try await session.data(for: request)
+        let (data, response) = try await lightSession.data(for: request)
 
         guard let httpResponse = response as? HTTPURLResponse else {
             throw CameraAPIError.serverError
@@ -573,7 +623,7 @@ actor CameraAPI {
         ]
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
-        let (data, response) = try await session.data(for: request)
+        let (data, response) = try await lightSession.data(for: request)
 
         guard let httpResponse = response as? HTTPURLResponse,
               httpResponse.statusCode == 200
@@ -592,7 +642,7 @@ actor CameraAPI {
             throw CameraAPIError.invalidURL
         }
 
-        let (data, response) = try await session.data(from: url)
+        let (data, response) = try await lightSession.data(from: url)
 
         guard let httpResponse = response as? HTTPURLResponse,
             httpResponse.statusCode == 200
@@ -628,7 +678,7 @@ actor CameraAPI {
         }
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
-        let (data, response) = try await session.data(for: request)
+        let (data, response) = try await lightSession.data(for: request)
 
         guard let httpResponse = response as? HTTPURLResponse,
             httpResponse.statusCode == 200
@@ -678,7 +728,7 @@ enum CameraAPIError: LocalizedError {
         case .captureFailed(let msg):
             return "撮影失敗: \(msg)"
         case .downloadFailed:
-            return "画像ダウンロード失敗"
+            return "サーバーから写真の取得に失敗しました（PiのSDカードには保存されている可能性があります。ギャラリーから再読み込みしてください）"
         case .invalidImageData:
             return "無効な画像データ"
         }

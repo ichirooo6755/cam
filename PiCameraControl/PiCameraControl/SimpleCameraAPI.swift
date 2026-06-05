@@ -64,41 +64,45 @@ actor SimpleCameraAPI {
             throw APIError.invalidFilename
         }
 
-        guard let url = URL(string: "\(baseURL)/api/photo") else {
-            throw APIError.invalidURL
-        }
+        let useThumbnail = thumbnail || safeFilename.lowercased().hasSuffix(".dng")
 
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        var body: [String: Any] = ["filename": safeFilename]
-        if thumbnail {
-            body["thumbnail"] = true
-            body["max_dim"] = maxDimension
-        }
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
-
-        let (data, response) = try await session.data(for: request)
-        
-        guard let httpResponse = response as? HTTPURLResponse,
-              httpResponse.statusCode == 200 else {
-            throw APIError.downloadFailed
-        }
-
-        // RAW（DNG）ファイル対応: まずUIImageで読み込みを試行
-        if let image = UIImage(data: data) {
-            return image
-        }
-
-        // UIImageで読めない場合はCoreImageでRAW読み込み（DNG対応）
-        if let ciImage = CIImage(data: data) {
-            let context = CIContext(options: nil)
-            if let cgImage = context.createCGImage(ciImage, from: ciImage.extent) {
-                return UIImage(cgImage: cgImage)
+        return try await withRetry(maxRetries: 3, delay: 1.5) {
+            guard let url = URL(string: "\(self.baseURL)/api/photo") else {
+                throw APIError.invalidURL
             }
-        }
 
-        throw APIError.invalidImageData
+            var request = URLRequest(url: url)
+            request.httpMethod = "POST"
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            var body: [String: Any] = ["filename": safeFilename]
+            if useThumbnail {
+                body["thumbnail"] = true
+                body["max_dim"] = maxDimension
+            }
+            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+            let (data, response) = try await self.session.data(for: request)
+
+            guard let httpResponse = response as? HTTPURLResponse,
+                  httpResponse.statusCode == 200 else {
+                throw APIError.downloadFailed
+            }
+
+            // RAW（DNG）ファイル対応: まずUIImageで読み込みを試行
+            if let image = UIImage(data: data) {
+                return image
+            }
+
+            // UIImageで読めない場合はCoreImageでRAW読み込み（DNG対応）
+            if let ciImage = CIImage(data: data) {
+                let context = CIContext(options: nil)
+                if let cgImage = context.createCGImage(ciImage, from: ciImage.extent) {
+                    return UIImage(cgImage: cgImage)
+                }
+            }
+
+            throw APIError.invalidImageData
+        }
     }
 
     func fetchPhotoMetadata(filename: String) async throws -> PhotoMetadata? {
