@@ -51,6 +51,15 @@ logger = logging.getLogger(__name__)
 
 CAPTURE_REQUEST_FILE = '/run/picamera/capture_request.json'
 CAPTURE_RESULT_FILE  = '/run/picamera/capture_result.json'
+LAST_CAPTURE_FILE = '/run/picamera/last_capture_unix'
+_IPC_LISTENER_POLL_SEC = 0.008  # 8ms: メインループの check_interval に依存しない
+_camera_lock = threading.Lock()
+_ipc_shared = {
+    'camera': None,
+    'settings': None,
+    'active_profile': None,
+    'running': True,
+}
 _CAPTURE_IPC_TIMEOUT_SEC = 30.0
 
 PHOTOS_DIR = '/home/pi/photos'
@@ -95,13 +104,13 @@ MODE_PROFILES = {
         'wifi_sleep': 0.15,
     },
     'manual': {
-        'check_interval': 0.2,
-        'min_cooldown': 1.5,
-        'max_per_minute': 15,
+        'check_interval': 0.0,
+        'min_cooldown': 0.5,
+        'max_per_minute': 30,
         'lores_size': (160, 120),
         'quality': 90,
         'denoise_override': None,
-        'wifi_sleep': 0.15,
+        'wifi_sleep': 0.08,
     },
     'quality': {
         'check_interval': 0.5,
@@ -261,6 +270,50 @@ def write_sensor_status(state: dict) -> None:
         os.replace(tmp_path, SENSOR_STATUS_FILE)
     except Exception as e:
         logger.debug(f"Failed to write sensor status: {e}")
+
+
+def _fsync_photo_file(filepath: str) -> None:
+    """SDへの書き込みを確実にフラッシュ（電源断・転送失敗前の保存保証）"""
+    try:
+        if not filepath or not os.path.exists(filepath):
+            return
+        with open(filepath, 'rb') as f:
+            f.flush()
+            os.fsync(f.fileno())
+    except Exception as e:
+        logger.debug("fsync photo skipped: %s", e)
+
+
+def _mark_last_capture_unix() -> None:
+    try:
+        tmp_path = f"{LAST_CAPTURE_FILE}.tmp"
+        with open(tmp_path, 'w', encoding='utf-8') as f:
+            f.write(f"{time.time():.3f}")
+        os.replace(tmp_path, LAST_CAPTURE_FILE)
+    except Exception as e:
+        logger.debug("Failed to mark last capture time: %s", e)
+
+
+def _ipc_listener_loop() -> None:
+    """手動撮影IPCをメインループのポーリング間隔に依存せず即処理する"""
+    logger.info("IPC capture listener started (poll=%.0fms)", _IPC_LISTENER_POLL_SEC * 1000)
+    while _ipc_shared.get('running'):
+        try:
+            if not os.path.exists(CAPTURE_REQUEST_FILE):
+                time.sleep(_IPC_LISTENER_POLL_SEC)
+                continue
+
+            with _camera_lock:
+                camera = _ipc_shared.get('camera')
+                settings = _ipc_shared.get('settings')
+                profile = _ipc_shared.get('active_profile')
+                if camera is None or settings is None or profile is None:
+                    time.sleep(_IPC_LISTENER_POLL_SEC)
+                    continue
+                _handle_manual_capture_request(camera, settings, profile)
+        except Exception as e:
+            logger.error("IPC listener error: %s", e)
+            time.sleep(0.05)
 
 
 def _write_capture_result(result: dict) -> None:
@@ -628,6 +681,10 @@ def capture_photo(camera, settings: dict, profile: dict, detected_at: float = No
                     camera.switch_mode_and_capture_file(
                         camera.still_configuration, filepath)
 
+        _fsync_photo_file(filepath)
+        if not os.path.exists(filepath) or os.path.getsize(filepath) == 0:
+            raise OSError(f"capture produced empty or missing file: {filepath}")
+
         camera_done = time.time()
         camera_ms = round((camera_done - capture_start) * 1000.0, 1)
 
@@ -646,6 +703,7 @@ def capture_photo(camera, settings: dict, profile: dict, detected_at: float = No
             quality,
         )
         _record_capture()
+        _mark_last_capture_unix()
 
         # WiFi AP安定化スリープと適応型露出をまとめてバックグラウンドで実行。
         # 呼び出し元はすぐに結果を受け取れるので連続撮影の遅延を最小化できる。
@@ -689,6 +747,9 @@ def main():
 
     global _active_max_per_minute
 
+    _ipc_shared['running'] = True
+    threading.Thread(target=_ipc_listener_loop, name='ipc-capture-listener', daemon=True).start()
+
     camera = None
     current_main_size = None
     current_lores_size = None
@@ -727,11 +788,8 @@ def main():
         while True:
             current_time = time.time()
 
-            # --- IPC手動撮影リクエスト（クールダウン中も優先処理） ---
-            if camera is not None and os.path.exists(CAPTURE_REQUEST_FILE):
-                _handle_manual_capture_request(camera, settings, active_profile)
-
             # クールダウン中はスキップ（ただし設定ファイルが変わっていたら即リロード）
+            # 手動撮影IPCは専用スレッドが処理
             if current_time - last_capture_time < capture_cooldown:
                 # 設定ファイルが変更されていたらクールダウン中でも即リロード
                 try:
@@ -814,28 +872,14 @@ def main():
                     'height': height,
                 })
 
-                if not monitoring_enabled:
-                    if camera is not None:
-                        try:
-                            camera.stop()
-                        except Exception:
-                            pass
-                        try:
-                            camera.close()
-                        except Exception:
-                            pass
-                        camera = None
-                        current_main_size = None
-                        current_lores_size = None
-                        last_brightness = None
-                        controls_applied = False
-                else:
-                    need_reconfig = (
-                        camera is None
-                        or current_main_size != desired_size
-                        or current_lores_size != desired_lores
-                    )
-                    if need_reconfig:
+                # 光検知OFFでも手動撮影IPCのためカメラは維持する
+                need_reconfig = (
+                    camera is None
+                    or current_main_size != desired_size
+                    or current_lores_size != desired_lores
+                )
+                if need_reconfig:
+                    with _camera_lock:
                         if camera is not None:
                             try:
                                 camera.stop()
@@ -855,11 +899,9 @@ def main():
                                 lores={"size": desired_lores},
                             )
                             cam.configure(config)
-                            # フレームレート制御: detection_fps指定時はFrameDurationを設定
                             if fps_preset:
                                 try:
                                     fd = fps_preset['frame_duration']
-                                    # ExposureTime が FrameDuration を超える場合は合わせて拡張
                                     ss = settings.get('shutter_speed', 'auto')
                                     if ss and ss != 'auto':
                                         try:
@@ -882,13 +924,12 @@ def main():
                             current_lores_size = desired_lores
                             last_brightness = None
                             controls_applied = False
-                            _camera_retry_delay = 10.0  # リセット
+                            _camera_retry_delay = 10.0
                             logger.info(
                                 "Camera started: mode=%s, main=%s, lores=%s, cooldown=%.1fs",
                                 camera_mode, desired_size, desired_lores, capture_cooldown,
                             )
                         except Exception as cam_err:
-                            # カメラ未検出・初期化失敗: クラッシュせず指数バックオフでリトライ
                             if cam is not None:
                                 try:
                                     cam.close()
@@ -904,14 +945,13 @@ def main():
                             last_sensor_status_write = current_time
                             time.sleep(_camera_retry_delay)
                             _camera_retry_delay = min(_camera_retry_delay * 2, 120.0)
-                            last_settings_load = 0  # 次ループで即リトライ
+                            last_settings_load = 0
                             continue
 
-                    # カメラ制御は設定リロードごとに再適用（設定変更を確実に反映）
-                    if camera is not None:
+                if camera is not None:
+                    with _camera_lock:
                         _apply_camera_controls(camera, settings, active_profile)
                         controls_applied = True
-                        # JPEG品質もここで設定（毎撮影時に再設定しなくて済む）
                         camera.options["quality"] = active_profile.get(
                             'quality', settings.get('quality', 90))
 
@@ -921,14 +961,20 @@ def main():
                 except OSError:
                     pass
                 last_settings_load = current_time
+                _ipc_shared['camera'] = camera
+                _ipc_shared['settings'] = settings
+                _ipc_shared['active_profile'] = active_profile
 
-            # --- モニタリング無効 ---
+            # --- モニタリング無効（手動撮影専用: IPCスレッド待ちで軽くスリープ） ---
             if not settings.get('monitoring_enabled', True):
                 sensor_state['state'] = 'monitoring_disabled'
                 if current_time - last_sensor_status_write >= SENSOR_STATUS_WRITE_INTERVAL:
                     write_sensor_status(sensor_state)
                     last_sensor_status_write = current_time
-                time.sleep(check_interval)
+                _ipc_shared['camera'] = camera
+                _ipc_shared['settings'] = settings
+                _ipc_shared['active_profile'] = active_profile
+                time.sleep(_IPC_LISTENER_POLL_SEC)
                 continue
 
             # --- カメラ未初期化 ---
@@ -940,9 +986,9 @@ def main():
                 time.sleep(check_interval)
                 continue
 
-            # --- IPC手動撮影リクエストの処理 ---
-            if camera is not None:
-                _handle_manual_capture_request(camera, settings, active_profile)
+            _ipc_shared['camera'] = camera
+            _ipc_shared['settings'] = settings
+            _ipc_shared['active_profile'] = active_profile
 
             # --- 光検知ループ（同一フレーム撮影方式） ---
             # capture_request() で取得したフレームで明るさを判定し、
@@ -950,8 +996,9 @@ def main():
             # 「検知→新フレーム待ち」の遅延を完全に除去する。
             request = None
             try:
-                request = camera.capture_request()
-                brightness, lux, ae_gain, ae_exposure_us = get_sensor_sample_from_request(request)
+                with _camera_lock:
+                    request = camera.capture_request()
+                    brightness, lux, ae_gain, ae_exposure_us = get_sensor_sample_from_request(request)
 
                 _brightness_history.append(brightness)
                 smoothed_brightness = float(np.median(list(_brightness_history)))

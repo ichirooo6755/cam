@@ -222,10 +222,22 @@ struct PhotoEditorView: View {
     }
 
     private func saveToCameraRoll(image: UIImage) {
-        UIImageWriteToSavedPhotosAlbum(image, nil, nil, nil)
-        isSaving = false
-        saveMessage = "カメラロールに保存しました"
-        showSaveAlert = true
+        Task {
+            do {
+                try await PhotoLibrarySaver.save(image)
+                await MainActor.run {
+                    isSaving = false
+                    saveMessage = "カメラロールに保存しました"
+                    showSaveAlert = true
+                }
+            } catch {
+                await MainActor.run {
+                    isSaving = false
+                    saveMessage = error.localizedDescription
+                    showSaveAlert = true
+                }
+            }
+        }
     }
 }
 

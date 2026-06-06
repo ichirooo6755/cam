@@ -12,9 +12,8 @@ PHOTOS_DIR = '/home/pi/photos'
 def main():
     from picamera2 import Picamera2
 
-    settle_sec = 5
-    capture_sec = 10
-    capture_interval = 2.5
+    settle_sec = 3
+    capture_sec = 3
     width = 1920
     height = 1080
 
@@ -45,6 +44,8 @@ def main():
     pre_meta = cam.capture_metadata()
 
     results = []
+    # capture_sec 内に複数サンプル（短い計測でも最低2枚程度を狙う）
+    capture_interval = min(2.5, max(0.7, capture_sec / 3.0))
     num_captures = max(1, int(capture_sec / capture_interval))
     for i in range(num_captures):
         meta = cam.capture_metadata()

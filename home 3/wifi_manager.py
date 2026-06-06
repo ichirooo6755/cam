@@ -1398,38 +1398,50 @@ def switch_to_tethering_mode(allow_ap_fallback=True):
     except Exception as e:
         return _fail_with_ap_fallback(str(e))
 
+def _load_settings_dict_safe():
+    if not os.path.exists(SETTINGS_FILE):
+        return {}
+    try:
+        if os.path.getsize(SETTINGS_FILE) == 0:
+            return {}
+        with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception as e:
+        logger.warning("Failed to load settings file: %s", e)
+        return {}
+
+
+def _save_settings_dict_atomic(settings: dict) -> None:
+    tmp_path = f"{SETTINGS_FILE}.tmp"
+    with open(tmp_path, 'w', encoding='utf-8') as f:
+        json.dump(settings, f, indent=2)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp_path, SETTINGS_FILE)
+
+
 def _save_wifi_settings(mode, ssid, password):
     """Wi-Fi設定を保存"""
     try:
-        settings = {}
-        if os.path.exists(SETTINGS_FILE):
-            with open(SETTINGS_FILE, 'r') as f:
-                settings = json.load(f)
-        
+        settings = _load_settings_dict_safe()
         settings['wifi_mode'] = mode
         if ssid:
             settings['ap_ssid'] = ssid
         if password:
             settings['ap_password'] = password
-        
-        with open(SETTINGS_FILE, 'w') as f:
-            json.dump(settings, f, indent=2)
-            
+        _save_settings_dict_atomic(settings)
     except Exception as e:
         logger.error(f"Failed to save Wi-Fi settings: {e}")
 
 def get_saved_ap_settings():
     """保存されているAP設定を取得"""
-    try:
-        if os.path.exists(SETTINGS_FILE):
-            with open(SETTINGS_FILE, 'r') as f:
-                settings = json.load(f)
-            return {
-                'ssid': settings.get('ap_ssid', _get_default_ap_ssid()),
-                'password': settings.get('ap_password', _get_default_ap_password())
-            }
-    except Exception:
-        pass
+    settings = _load_settings_dict_safe()
+    if settings:
+        return {
+            'ssid': settings.get('ap_ssid', _get_default_ap_ssid()),
+            'password': settings.get('ap_password', _get_default_ap_password()),
+        }
     return {'ssid': _get_default_ap_ssid(), 'password': _get_default_ap_password()}
 
 if __name__ == '__main__':

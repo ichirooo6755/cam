@@ -78,7 +78,7 @@ struct OfflineBannerView: View {
                 .font(.system(size: 13, weight: .bold))
             Text("OFFLINE")
                 .font(.system(size: 12, weight: .bold, design: .monospaced))
-            Text("Pi に接続できません")
+            Text("Pi への接続を確認中")
                 .font(.system(size: 11, weight: .medium))
             Spacer()
             if connectionMonitor.consecutiveFailures > 0 {

@@ -253,6 +253,19 @@ struct CaptureResponse: Codable {
     let filename: String?
     let metadata: PhotoMetadata?
     let error: String?
+    let previewBase64: String?
+    let previewMime: String?
+    let savedOnDevice: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case success
+        case filename
+        case metadata
+        case error
+        case previewBase64 = "preview_base64"
+        case previewMime = "preview_mime"
+        case savedOnDevice = "saved_on_device"
+    }
 }
 
 /// サニタイズ済みファイル名

@@ -41,6 +41,7 @@
 		E00000010000000000000076 /* PhotoPickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E00000010000000000000077 /* PhotoPickerView.swift */; };
 		A1B2C3D4E5F6A7B8C9D0E1F2 /* SmartAutoEditEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6A7B8C9D0E1F3 /* SmartAutoEditEngine.swift */; };
 		B2C3D4E5F6A7B8C9D0E1F2A3 /* SmartEditFeedbackView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2C3D4E5F6A7B8C9D0E1F2A4 /* SmartEditFeedbackView.swift */; };
+		C3D4E5F6A7B8C9D0E1F5A1 /* PhotoLibrarySaver.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3D4E5F6A7B8C9D0E1F5A2 /* PhotoLibrarySaver.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -79,6 +80,7 @@
 		E00000010000000000000077 /* PhotoPickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoPickerView.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6A7B8C9D0E1F3 /* SmartAutoEditEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SmartAutoEditEngine.swift; sourceTree = "<group>"; };
 		B2C3D4E5F6A7B8C9D0E1F2A4 /* SmartEditFeedbackView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SmartEditFeedbackView.swift; sourceTree = "<group>"; };
+		C3D4E5F6A7B8C9D0E1F5A2 /* PhotoLibrarySaver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoLibrarySaver.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -118,6 +120,7 @@
 				E00000010000000000000065 /* HDRComposerView.swift */,
 				E00000010000000000000067 /* HDRProcessor.swift */,
 				E00000010000000000000069 /* ConnectionMonitor.swift */,
+				C3D4E5F6A7B8C9D0E1F5A2 /* PhotoLibrarySaver.swift */,
 				E00000010000000000000071 /* ImageCompositor.swift */,
 				E00000010000000000000073 /* Nikon35TiComponents.swift */,
 				E00000010000000000000075 /* JonyIveDesignSystem.swift */,
@@ -240,6 +243,7 @@
 				E00000010000000000000064 /* HDRComposerView.swift in Sources */,
 				E00000010000000000000066 /* HDRProcessor.swift in Sources */,
 				E00000010000000000000068 /* ConnectionMonitor.swift in Sources */,
+				C3D4E5F6A7B8C9D0E1F5A1 /* PhotoLibrarySaver.swift in Sources */,
 				E00000010000000000000070 /* ImageCompositor.swift in Sources */,
 				E00000010000000000000072 /* Nikon35TiComponents.swift in Sources */,
 				E00000010000000000000074 /* JonyIveDesignSystem.swift in Sources */,

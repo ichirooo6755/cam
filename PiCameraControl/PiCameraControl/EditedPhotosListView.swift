@@ -133,7 +133,9 @@ struct EditedPhotosListView: View {
 
             Button {
                 if let image = photo.image {
-                    saveToPhotoLibrary(image)
+                    Task {
+                        try? await PhotoLibrarySaver.save(image)
+                    }
                 }
             } label: {
                 Label("写真に保存", systemImage: "square.and.arrow.down")
@@ -152,9 +154,6 @@ struct EditedPhotosListView: View {
         }
     }
 
-    private func saveToPhotoLibrary(_ image: UIImage) {
-        UIImageWriteToSavedPhotosAlbum(image, nil, nil, nil)
-    }
 }
 
 // MARK: - EditedPhotoDetailView

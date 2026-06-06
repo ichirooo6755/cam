@@ -19,7 +19,9 @@ final class ConnectionMonitor: ObservableObject {
     private let disconnectedBaseInterval: TimeInterval = 3.0
     private let maxPollingInterval: TimeInterval = 60.0
     private let maxFallbackAttempts: Int = 3
-    private let offlineFailureThreshold: Int = 3
+    private let offlineFailureThreshold: Int = 8
+    /// 直近で疎通できていたら、撮影中の一時失敗ではオフライン表示しない
+    private let connectedGraceSeconds: TimeInterval = 60.0
     /// Pi が AP のみで NTP 同期できないとき、iPhone 時刻との差がこれ以上なら /api/system/time で合わせる
     private let clockSyncSkewSeconds: TimeInterval = 12.0
     /// 連続失敗がこの回数を超えたら URLSession を作り直して
@@ -48,8 +50,8 @@ final class ConnectionMonitor: ObservableObject {
 
     private static func makeSession() -> URLSession {
         let config = URLSessionConfiguration.ephemeral
-        config.timeoutIntervalForRequest = 6
-        config.timeoutIntervalForResource = 8
+        config.timeoutIntervalForRequest = 12
+        config.timeoutIntervalForResource = 20
         config.waitsForConnectivity = false
         config.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
         config.httpMaximumConnectionsPerHost = 2
@@ -170,11 +172,12 @@ final class ConnectionMonitor: ObservableObject {
             consecutiveFailures = 0
             lastSuccessfulCheck = Date()
             if !wasConnected {
-                await synchronizePiClockIfNeeded(ip: serverIP, serverTimeUnix: primaryProbe.serverTimeUnix)
+                Task { await self.synchronizePiClockIfNeeded(ip: serverIP, serverTimeUnix: primaryProbe.serverTimeUnix) }
             }
         } else {
             consecutiveFailures += 1
-            if consecutiveFailures >= offlineFailureThreshold || lastSuccessfulCheck == nil {
+            let withinGrace = lastSuccessfulCheck.map { now.timeIntervalSince($0) < connectedGraceSeconds } ?? false
+            if !withinGrace && (consecutiveFailures >= offlineFailureThreshold || lastSuccessfulCheck == nil) {
                 isConnected = false
             }
 
@@ -188,7 +191,7 @@ final class ConnectionMonitor: ObservableObject {
                     lastSuccessfulCheck = Date()
                     lastChecked = Date()
                     if !wasConnected {
-                        await synchronizePiClockIfNeeded(ip: serverIP, serverTimeUnix: recycled.serverTimeUnix)
+                        Task { await self.synchronizePiClockIfNeeded(ip: serverIP, serverTimeUnix: recycled.serverTimeUnix) }
                     }
                     if !wasConnected { scheduleTimer() }
                     lastChecked = Date()
@@ -207,7 +210,7 @@ final class ConnectionMonitor: ObservableObject {
                         consecutiveFailures = 0
                         lastSuccessfulCheck = Date()
                         if !wasConnected {
-                            await synchronizePiClockIfNeeded(ip: fallback, serverTimeUnix: fb.serverTimeUnix)
+                            Task { await self.synchronizePiClockIfNeeded(ip: fallback, serverTimeUnix: fb.serverTimeUnix) }
                         }
                         break
                     }

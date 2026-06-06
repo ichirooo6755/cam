@@ -14,6 +14,7 @@ import time
 import threading
 import re
 import datetime
+import base64
 
 import wifi_manager
 try:
@@ -46,8 +47,11 @@ SESSION_OVERRIDES_FILE = '/home/pi/camera_session_overrides.json'
 SENSOR_STATUS_FILE = '/run/picamera/sensor_status.json'
 CAPTURE_REQUEST_FILE = '/run/picamera/capture_request.json'
 CAPTURE_RESULT_FILE  = '/run/picamera/capture_result.json'
-_CAPTURE_IPC_POLL_INTERVAL = 0.05   # ポーリング間隔（秒）: 速いほど体感レスポンスが上がる
+LAST_CAPTURE_FILE = '/run/picamera/last_capture_unix'
+_CAPTURE_IPC_POLL_INTERVAL = 0.02   # 結果待ち（秒）: 専用IPCスレッドと併用
 _CAPTURE_IPC_TIMEOUT_SEC   = 12.0   # IPCタイムアウト（秒）: 手動撮影の体感遅延を抑制
+_CAPTURE_PREVIEW_MAX_DIM = 640      # 大きすぎるとAP転送中に切断されやすい
+AP_CAPTURE_GRACE_SEC = 45.0         # 撮影直後はAPウォッチドッグの再構築を抑止
 BOOT_NETWORK_APPLIED_MARKERS = (
     '/run/picamera_boot_network_applied',
     '/tmp/picamera_boot_network_applied',
@@ -161,6 +165,62 @@ def _save_settings_dict(settings: dict) -> None:
     os.replace(tmp_path, SETTINGS_FILE)
 
 
+def _recent_capture_within(grace_sec: float) -> bool:
+    """直近の撮影直後か（APウォッチドッグ抑止用）"""
+    try:
+        if os.path.exists(LAST_CAPTURE_FILE):
+            with open(LAST_CAPTURE_FILE, 'r', encoding='utf-8') as f:
+                last_unix = float((f.read() or '').strip())
+            if time.time() - last_unix < grace_sec:
+                return True
+    except Exception:
+        pass
+
+    try:
+        if os.path.exists(SENSOR_STATUS_FILE):
+            with open(SENSOR_STATUS_FILE, 'r', encoding='utf-8') as f:
+                sensor = json.load(f)
+            last_at = sensor.get('last_capture_at')
+            if isinstance(last_at, str):
+                dt = datetime.datetime.fromisoformat(last_at.replace('Z', '+00:00'))
+                if dt.tzinfo is None:
+                    age = time.time() - dt.timestamp()
+                else:
+                    age = time.time() - dt.timestamp()
+                if age < grace_sec:
+                    return True
+    except Exception:
+        pass
+    return False
+
+
+def _encode_capture_preview_base64(photo_path: str, max_dim: int = _CAPTURE_PREVIEW_MAX_DIM):
+    """撮影レスポンス同梱用のJPEGプレビューを base64 で返す"""
+    if not photo_path or not os.path.exists(photo_path):
+        return None
+
+    content_path = photo_path
+    if photo_path.lower().endswith('.dng'):
+        thumb_path = _ensure_thumbnail(photo_path, max_dim)
+        if not thumb_path:
+            return None
+        content_path = thumb_path
+    elif Image is not None and max_dim > 0:
+        try:
+            thumb_path = _ensure_thumbnail(photo_path, max_dim)
+            if thumb_path:
+                content_path = thumb_path
+        except Exception:
+            pass
+
+    try:
+        with open(content_path, 'rb') as f:
+            return base64.b64encode(f.read()).decode('ascii')
+    except Exception as e:
+        logger.warning("Failed to encode capture preview: %s", e)
+        return None
+
+
 def _is_camera_service_running() -> bool:
     """camera-service が active かどうかを確認"""
     try:
@@ -216,29 +276,21 @@ def _ipc_capture(settings: dict, photo_path: str, mode_label: str) -> dict:
     def _poll_result(_request_id: str):
         deadline = time.time() + _CAPTURE_IPC_TIMEOUT_SEC
         while time.time() < deadline:
+            if os.path.exists(CAPTURE_RESULT_FILE):
+                try:
+                    with open(CAPTURE_RESULT_FILE, 'r', encoding='utf-8') as f:
+                        result = json.load(f)
+                except Exception:
+                    result = None
+
+                if isinstance(result, dict) and result.get('request_id') == _request_id:
+                    try:
+                        os.remove(CAPTURE_RESULT_FILE)
+                    except Exception:
+                        pass
+                    return result
+
             time.sleep(_CAPTURE_IPC_POLL_INTERVAL)
-
-            if not os.path.exists(CAPTURE_RESULT_FILE):
-                continue
-
-            try:
-                with open(CAPTURE_RESULT_FILE, 'r', encoding='utf-8') as f:
-                    result = json.load(f)
-            except Exception:
-                continue
-
-            if not isinstance(result, dict):
-                continue
-
-            if result.get('request_id') != _request_id:
-                # 別のリクエストの結果（自分より前のリクエスト）- 待機継続
-                continue
-
-            try:
-                os.remove(CAPTURE_RESULT_FILE)
-            except Exception:
-                pass
-            return result
         return None
 
     def _write_request(_request_id: str) -> None:
@@ -668,6 +720,11 @@ def _wifi_recovery_watchdog_loop():
 
             # --- APモード時: AP健全性を監視し、壊れたら復旧 ---
             if mode == 'ap':
+                # 撮影直後の一時的ビーコン欠落でAP再構築しない（iPhone切断の主因）
+                if _recent_capture_within(AP_CAPTURE_GRACE_SEC):
+                    ap_unhealthy_since = None
+                    continue
+
                 if wifi_manager._is_ap_healthy():
                     ap_unhealthy_since = None
                     continue
@@ -1130,14 +1187,34 @@ def _apply_client_unix_time(ts):
         return False, err[:300] if err else 'sudo date failed (need NOPASSWD for date?)'
     hw = shutil.which('fake-hwclock')
     if hw:
-        try:
-            subprocess.run(
-                ['sudo', '-n', 'fake-hwclock', 'save'],
-                capture_output=True, text=True, timeout=25,
-            )
-        except (subprocess.TimeoutExpired, OSError, subprocess.SubprocessError) as e:
-            logger.warning('fake-hwclock save skipped after time set: %s', e)
+        def _save_hwclock():
+            try:
+                subprocess.run(
+                    ['sudo', '-n', 'fake-hwclock', 'save'],
+                    capture_output=True, text=True, timeout=25,
+                )
+            except (subprocess.TimeoutExpired, OSError, subprocess.SubprocessError) as e:
+                logger.warning('fake-hwclock save skipped after time set: %s', e)
+
+        threading.Thread(target=_save_hwclock, daemon=True).start()
     return True, None
+
+
+def _verify_photo_on_disk(photo_path: str) -> bool:
+    try:
+        return os.path.isfile(photo_path) and os.path.getsize(photo_path) > 0
+    except OSError:
+        return False
+
+
+def _mark_last_capture_unix_file() -> None:
+    try:
+        tmp_path = f"{LAST_CAPTURE_FILE}.tmp"
+        with open(tmp_path, 'w', encoding='utf-8') as f:
+            f.write(f"{time.time():.3f}")
+        os.replace(tmp_path, LAST_CAPTURE_FILE)
+    except Exception as e:
+        logger.debug("Failed to mark last capture: %s", e)
 
 
 def _get_cached_photo_count():
@@ -2409,7 +2486,24 @@ class APIHandler(BaseHTTPRequestHandler):
                 except Exception as e:
                     logger.warning(f"Failed to write capture metadata: {e}")
 
-                response = {'success': True, 'filename': filename, 'metadata': metadata}
+                saved_on_device = _verify_photo_on_disk(photo_path)
+                if saved_on_device:
+                    _mark_last_capture_unix_file()
+
+                response = {
+                    'success': True,
+                    'filename': filename,
+                    'metadata': metadata,
+                    'saved_on_device': saved_on_device,
+                }
+                include_preview = _parse_bool_value(
+                    request_data.get('include_preview', False), default=False
+                )
+                if include_preview and saved_on_device:
+                    preview_b64 = _encode_capture_preview_base64(photo_path)
+                    if preview_b64:
+                        response['preview_base64'] = preview_b64
+                        response['preview_mime'] = 'image/jpeg'
                 self.send_response(200)
             else:
                 error_msg = result_error if result_error else (result.stderr if 'result' in dir() and hasattr(result, 'stderr') else 'Capture failed')

@@ -88,13 +88,11 @@ actor SimpleCameraAPI {
                 throw APIError.downloadFailed
             }
 
-            // RAW（DNG）ファイル対応: まずUIImageで読み込みを試行
-            if let image = UIImage(data: data) {
-                return image
-            }
+        if let image = UIImageDecode.fromJPEGData(data) {
+            return image
+        }
 
-            // UIImageで読めない場合はCoreImageでRAW読み込み（DNG対応）
-            if let ciImage = CIImage(data: data) {
+        if let ciImage = CIImage(data: data) {
                 let context = CIContext(options: nil)
                 if let cgImage = context.createCGImage(ciImage, from: ciImage.extent) {
                     return UIImage(cgImage: cgImage)

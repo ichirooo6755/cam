@@ -1247,6 +1247,39 @@ struct ContentView: View {
             .disabled(isCapturing || isMetering)
             .padding(.vertical, 6)
 
+            if let preview = capturedImage {
+                Image(uiImage: preview)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(maxHeight: 220)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12)
+                            .strokeBorder(Color.primary.opacity(0.1), lineWidth: 1)
+                    )
+
+                Button {
+                    Task {
+                        do {
+                            try await PhotoLibrarySaver.save(preview)
+                            await MainActor.run {
+                                captureToast = "✅ 写真アプリに保存しました"
+                            }
+                            try? await Task.sleep(nanoseconds: 3_000_000_000)
+                            await MainActor.run { captureToast = nil }
+                        } catch {
+                            await MainActor.run {
+                                errorMessage = error.localizedDescription
+                            }
+                        }
+                    }
+                } label: {
+                    Label("写真アプリに保存", systemImage: "square.and.arrow.down")
+                        .font(.system(size: 14, weight: .semibold))
+                }
+                .buttonStyle(.borderedProminent)
+            }
+
             // 測光ボタン
             Button {
                 performMeteringCalibrate()
@@ -1316,7 +1349,7 @@ struct ContentView: View {
                     .padding(.vertical, 10)
                     .background(
                         Capsule()
-                            .fill(toast.contains("成功") ? Color.green : Color.red)
+                            .fill(toast.contains("✅") || toast.contains("成功") || toast.contains("保存") ? Color.green : Color.red)
                     )
                     .transition(.scale.combined(with: .opacity))
                     .animation(.spring(response: 0.3), value: captureToast)
@@ -2069,30 +2102,54 @@ struct ContentView: View {
         let doTimestamp = enableTimestamp
 
         Task {
+            let knownPhotos = Set((try? await apiClient.fetchPhotos()) ?? [])
             do {
-                // 1枚目を撮影
-                let (filename1, metadata) = try await apiClient.captureWithMetadata(
-                    manualMode: mode, meta: meta, location: locationPayload
+                // 1枚目: PiのSD保存を優先（軽量JSON応答 + サムネDL）
+                let (filename1, metadata, preview1) = try await apiClient.captureWithMetadata(
+                    manualMode: mode, meta: meta, location: locationPayload, includePreview: false
                 )
-                // 撮影直後の AP 瞬断に備え、接続が切れていれば短く待つ
-                // （接続中なら待機ゼロ）
-                if !ConnectionMonitor.shared.isConnected {
-                    await ConnectionMonitor.shared.checkNow()
-                    try? await Task.sleep(nanoseconds: 400_000_000)
+                var image: UIImage?
+                if let preview1 {
+                    image = preview1
+                } else {
+                    image = try? await apiClient.downloadImage(filename: filename1, preferThumbnail: false)
                 }
-                var image: UIImage
-                do {
-                    image = try await apiClient.downloadImage(filename: filename1)
-                } catch {
-                    throw CameraAPIError.downloadFailed
+                guard var image else {
+                    await MainActor.run {
+                        lastCaptureMetadata = metadata
+                        isCapturing = false
+                        captureToast = "✅ PiのSDに保存済み"
+                        errorMessage = nil
+                        generator.notificationOccurred(.success)
+                    }
+                    try? await Task.sleep(nanoseconds: 3_000_000_000)
+                    await MainActor.run { captureToast = nil }
+                    return
                 }
 
                 // 多重露光: 2枚目を撮影してiPhone側で合成
                 if doMultiExposure || do2in1 {
-                    let (filename2, _) = try await apiClient.captureWithMetadata(
-                        manualMode: mode, meta: meta, location: locationPayload
+                    let (filename2, _, preview2) = try await apiClient.captureWithMetadata(
+                        manualMode: mode, meta: meta, location: locationPayload, includePreview: false
                     )
-                    let image2 = try await apiClient.downloadImage(filename: filename2)
+                    let image2: UIImage?
+                    if let preview2 {
+                        image2 = preview2
+                    } else {
+                        image2 = try? await apiClient.downloadImage(filename: filename2, preferThumbnail: false)
+                    }
+                    guard let image2 else {
+                        await MainActor.run {
+                            capturedImage = image
+                            lastCaptureMetadata = metadata
+                            isCapturing = false
+                            captureToast = "✅ 1枚目はSD保存済み（2枚目の表示失敗）"
+                            generator.notificationOccurred(.warning)
+                        }
+                        try? await Task.sleep(nanoseconds: 3_000_000_000)
+                        await MainActor.run { captureToast = nil }
+                        return
+                    }
 
                     if do2in1 {
                         image = ImageCompositor.sideBySideComposite(image, image2) ?? image
@@ -2122,11 +2179,25 @@ struct ContentView: View {
                 try? await Task.sleep(nanoseconds: 3_000_000_000)
                 await MainActor.run { captureToast = nil }
             } catch {
-                await MainActor.run {
-                    errorMessage = error.localizedDescription
-                    isCapturing = false
-                    captureToast = "❌ 撮影失敗"
-                    generator.notificationOccurred(.error)
+                // 応答は途切れても SD に保存されていることがある
+                if let recovered = await apiClient.findNewPhoto(excluding: knownPhotos),
+                   let recoveredImage = try? await apiClient.downloadImage(
+                       filename: recovered, preferThumbnail: false
+                   ) {
+                    await MainActor.run {
+                        capturedImage = recoveredImage
+                        isCapturing = false
+                        errorMessage = nil
+                        captureToast = "✅ PiのSDに保存済み（応答は途切れました）"
+                        generator.notificationOccurred(.success)
+                    }
+                } else {
+                    await MainActor.run {
+                        errorMessage = error.localizedDescription
+                        isCapturing = false
+                        captureToast = "❌ 撮影失敗"
+                        generator.notificationOccurred(.error)
+                    }
                 }
                 try? await Task.sleep(nanoseconds: 4_000_000_000)
                 await MainActor.run { captureToast = nil }

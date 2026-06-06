@@ -424,28 +424,24 @@ struct HDRComposerView: View {
 
     private func exportToPhotoLibrary() {
         guard let result = resultImage else { return }
-
         if isExporting { return }
         isExporting = true
 
-        let coordinator = ImageWriteCoordinator { error in
-            DispatchQueue.main.async {
-                isExporting = false
-                if let error {
-                    resultMessage = error.localizedDescription
-                } else {
+        Task {
+            do {
+                try await PhotoLibrarySaver.save(result)
+                await MainActor.run {
+                    isExporting = false
                     resultMessage = "写真に保存しました"
+                    showResultAlert = true
                 }
-                showResultAlert = true
-                imageWriteCoordinator = nil
+            } catch {
+                await MainActor.run {
+                    isExporting = false
+                    resultMessage = error.localizedDescription
+                    showResultAlert = true
+                }
             }
         }
-        imageWriteCoordinator = coordinator
-        UIImageWriteToSavedPhotosAlbum(
-            result,
-            coordinator,
-            #selector(ImageWriteCoordinator.image(_:didFinishSavingWithError:contextInfo:)),
-            nil
-        )
     }
 }

@@ -185,13 +185,13 @@ struct UnifiedGalleryView: View {
     private var emptyState: some View {
         VStack(spacing: 20) {
             if !connectionMonitor.isConnected {
-                Image(systemName: "wifi.slash")
+                Image(systemName: "wifi.exclamationmark")
                     .font(.system(size: 60))
-                    .foregroundColor(.red.opacity(0.5))
-                Text("Pi に接続できません")
+                    .foregroundColor(.orange.opacity(0.5))
+                Text("Pi への接続を確認中")
                     .font(MinimalTypography.headlineMedium)
                     .foregroundColor(MinimalTheme.Text.secondary)
-                Text("Pi の電源・Wi-Fi を確認してください")
+                Text("PiCamera の Wi-Fi に接続している場合は、上部の更新ボタンを押してください")
                     .font(MinimalTypography.caption)
                     .foregroundColor(MinimalTheme.Text.tertiary)
                     .multilineTextAlignment(.center)
@@ -413,17 +413,20 @@ struct PhotoCell: View {
         }
     }
 
+    private func isRenderable(_ image: UIImage) -> Bool {
+        image.size.width > 8 && image.size.height > 8
+    }
+
     private func loadThumbnail() {
-        // latestVersionのサムネイルを読み込み
-        if let thumbnail = group.latestVersion?.thumbnail {
+        if let thumbnail = group.latestVersion?.thumbnail, isRenderable(thumbnail) {
             thumbnailImage = thumbnail
-        } else if let thumbnail = group.latestVersion?.image {
-            // サムネイルがない場合は画像をリサイズ
-            thumbnailImage = thumbnail.preparingThumbnail(of: CGSize(width: 300, height: 300))
-        } else {
-            // サーバーから読み込み
-            loadFromServer()
+            return
         }
+        if let image = group.latestVersion?.image, isRenderable(image) {
+            thumbnailImage = image.preparingThumbnail(of: CGSize(width: 300, height: 300))
+            return
+        }
+        loadFromServer()
     }
 
     private func loadFromServer() {
@@ -431,7 +434,8 @@ struct PhotoCell: View {
         isLoading = true
         Task {
             let api = SimpleCameraAPI(baseURL: "http://\(serverIP):8001")
-            if let image = try? await api.downloadPhoto(filename: filename, thumbnail: true, maxDimension: 300) {
+            if let image = try? await api.downloadPhoto(filename: filename, thumbnail: true, maxDimension: 300),
+               isRenderable(image) {
                 await MainActor.run {
                     thumbnailImage = image
                     isLoading = false

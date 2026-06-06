@@ -284,8 +284,8 @@ struct PhotoGalleryView: View {
                 for filename in targets {
                     do {
                         let image = try await api.downloadPhoto(filename: filename)
+                        try await PhotoLibrarySaver.save(image)
                         await MainActor.run {
-                            UIImageWriteToSavedPhotosAlbum(image, nil, nil, nil)
                             saved += 1
                         }
                     } catch {
@@ -541,7 +541,9 @@ struct GalleryPhotoDetailView: View {
                     if let image = image {
                         HStack(spacing: 14) {
                             Button {
-                                UIImageWriteToSavedPhotosAlbum(image, nil, nil, nil)
+                                Task {
+                                    try? await PhotoLibrarySaver.save(image)
+                                }
                             } label: {
                                 Image(systemName: "square.and.arrow.down")
                             }

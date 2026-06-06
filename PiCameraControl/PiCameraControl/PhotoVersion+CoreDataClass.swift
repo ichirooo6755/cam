@@ -11,13 +11,13 @@ public class PhotoVersion: NSManagedObject {
     /// 画像を取得（imageDataから復元）
     var image: UIImage? {
         guard let data = imageData else { return nil }
-        return UIImage(data: data)
+        return UIImageDecode.fromJPEGData(data)
     }
 
     /// サムネイルを取得（thumbnailDataから復元）
     var thumbnail: UIImage? {
         guard let data = thumbnailData else { return nil }
-        return UIImage(data: data)
+        return UIImageDecode.fromJPEGData(data)
     }
 
     /// 編集設定を取得（settingsJSONから復元）

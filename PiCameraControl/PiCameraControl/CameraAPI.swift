@@ -348,9 +348,10 @@ actor CameraAPI {
     func captureWithMetadata(
         manualMode: ManualCaptureMode = .current,
         meta: String? = nil,
-        location: CaptureLocationPayload? = nil
+        location: CaptureLocationPayload? = nil,
+        includePreview: Bool = false
     ) async throws
-        -> (SafeFilename, PhotoMetadata?)
+        -> (SafeFilename, PhotoMetadata?, UIImage?)
     {
         guard let url = URL(string: "\(baseURL)/api/capture") else {
             throw CameraAPIError.invalidURL
@@ -359,7 +360,7 @@ actor CameraAPI {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        var body: [String: Any] = [:]
+        var body: [String: Any] = ["include_preview": includePreview]
         if manualMode != .current {
             body["manual_mode"] = manualMode.rawValue
         }
@@ -399,7 +400,29 @@ actor CameraAPI {
             throw CameraAPIError.invalidFilename
         }
 
-        return (safeFilename, result.metadata)
+        let previewImage = Self.decodePreviewImage(
+            base64: result.previewBase64,
+            mime: result.previewMime
+        )
+        return (safeFilename, result.metadata, previewImage)
+    }
+
+    private static func decodePreviewImage(base64: String?, mime: String?) -> UIImage? {
+        guard let base64, !base64.isEmpty,
+              let data = Data(base64Encoded: base64) else {
+            return nil
+        }
+        if let image = UIImage(data: data) {
+            return image
+        }
+        #if canImport(CoreImage)
+            if (mime ?? "").contains("jpeg") || (mime ?? "").contains("jpg"),
+               let ciImage = CIImage(data: data),
+               let cgImage = CIContext(options: nil).createCGImage(ciImage, from: ciImage.extent) {
+                return UIImage(cgImage: cgImage)
+            }
+        #endif
+        return nil
     }
 
     /// 撮影を実行し、ファイル名を返す
@@ -408,12 +431,40 @@ actor CameraAPI {
         meta: String? = nil,
         location: CaptureLocationPayload? = nil
     ) async throws -> SafeFilename {
-        let (filename, _) = try await captureWithMetadata(
+        let (filename, _, _) = try await captureWithMetadata(
             manualMode: manualMode,
             meta: meta,
             location: location
         )
         return filename
+    }
+
+    // MARK: - 写真一覧
+
+    func fetchPhotos() async throws -> [String] {
+        try await withRetry {
+            guard let url = URL(string: "\(self.baseURL)/api/photos") else {
+                throw CameraAPIError.invalidURL
+            }
+            let (data, response) = try await self.lightSession.data(from: url)
+            guard let httpResponse = response as? HTTPURLResponse,
+                  httpResponse.statusCode == 200 else {
+                throw CameraAPIError.serverError
+            }
+            let files = try JSONDecoder().decode([String].self, from: data)
+            return files.compactMap { self.sanitizeFilename($0)?.value }
+        }
+    }
+
+    /// 通信エラー後に SD へ保存された新規写真を探す
+    func findNewPhoto(excluding known: Set<String>) async -> SafeFilename? {
+        guard let photos = try? await fetchPhotos() else { return nil }
+        for name in photos where !known.contains(name) {
+            if let safe = sanitizeFilename(name) {
+                return safe
+            }
+        }
+        return nil
     }
 
     // MARK: - 画像ダウンロード
@@ -456,15 +507,17 @@ actor CameraAPI {
                 throw CameraAPIError.downloadFailed
             }
 
-            if let image = UIImage(data: data) {
-                return image
-            }
-
-            #if canImport(CoreImage)
+            #if canImport(UIKit)
+                if let image = UIImageDecode.fromJPEGData(data) {
+                    return image
+                }
                 if let ciImage = CIImage(data: data) {
                     let context = CIContext(options: nil)
                     if let cgImage = context.createCGImage(ciImage, from: ciImage.extent) {
-                        return UIImage(cgImage: cgImage)
+                        let image = UIImage(cgImage: cgImage)
+                        if image.size.width > 1, image.size.height > 1 {
+                            return image
+                        }
                     }
                 }
             #endif
