@@ -49,7 +49,8 @@ CAPTURE_REQUEST_FILE = '/run/picamera/capture_request.json'
 CAPTURE_RESULT_FILE  = '/run/picamera/capture_result.json'
 LAST_CAPTURE_FILE = '/run/picamera/last_capture_unix'
 _CAPTURE_IPC_POLL_INTERVAL = 0.02   # 結果待ち（秒）: 専用IPCスレッドと併用
-_CAPTURE_IPC_TIMEOUT_SEC   = 12.0   # IPCタイムアウト（秒）: 手動撮影の体感遅延を抑制
+_CAPTURE_IPC_TIMEOUT_BASE_SEC = 30.0  # camera_service.py と揃える（reconfig+露光の余裕）
+_CAPTURE_IPC_LATE_GRACE_SEC = 10.0   # タイムアウト後も result 到着を待つ猶予
 _CAPTURE_PREVIEW_MAX_DIM = 640      # 大きすぎるとAP転送中に切断されやすい
 AP_CAPTURE_GRACE_SEC = 45.0         # 撮影直後はAPウォッチドッグの再構築を抑止
 BOOT_NETWORK_APPLIED_MARKERS = (
@@ -165,6 +166,41 @@ def _save_settings_dict(settings: dict) -> None:
     os.replace(tmp_path, SETTINGS_FILE)
 
 
+def _save_session_overrides_dict(overrides: dict) -> None:
+    """session_overrides.json をアトミックに保存。"""
+    if not overrides:
+        try:
+            if os.path.exists(SESSION_OVERRIDES_FILE):
+                os.remove(SESSION_OVERRIDES_FILE)
+        except Exception as e:
+            logger.warning("Failed to remove empty session overrides: %s", e)
+        return
+    tmp_path = f"{SESSION_OVERRIDES_FILE}.tmp"
+    with open(tmp_path, 'w', encoding='utf-8') as f:
+        json.dump(overrides, f, indent=2)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp_path, SESSION_OVERRIDES_FILE)
+
+
+def _invalidate_photo_count_cache() -> None:
+    with _PHOTO_COUNT_CACHE_LOCK:
+        _PHOTO_COUNT_CACHE['expires_at'] = 0.0
+
+
+def _ipc_capture_timeout_sec(settings: dict) -> float:
+    """露光時間・reconfig を考慮した IPC 待ち時間（camera_service と整合）。"""
+    shutter_us = 0
+    shutter_speed = settings.get('shutter_speed', 'auto')
+    if shutter_speed not in (None, 'auto', ''):
+        try:
+            shutter_us = max(0, int(shutter_speed))
+        except (ValueError, TypeError):
+            shutter_us = 0
+    exposure_sec = shutter_us / 1_000_000.0
+    return max(_CAPTURE_IPC_TIMEOUT_BASE_SEC, 30.0 + exposure_sec + 8.0)
+
+
 def _recent_capture_within(grace_sec: float) -> bool:
     """直近の撮影直後か（APウォッチドッグ抑止用）"""
     try:
@@ -233,6 +269,114 @@ def _is_camera_service_running() -> bool:
         return False
 
 
+def _poll_ipc_result_for_request(request_id: str, timeout_sec: float) -> dict | None:
+    """capture_result.json を request_id 一致までポーリング。"""
+    deadline = time.time() + timeout_sec
+    while time.time() < deadline:
+        if os.path.exists(CAPTURE_RESULT_FILE):
+            try:
+                with open(CAPTURE_RESULT_FILE, 'r', encoding='utf-8') as f:
+                    result = json.load(f)
+            except Exception:
+                result = None
+            if isinstance(result, dict) and result.get('request_id') == request_id:
+                try:
+                    os.remove(CAPTURE_RESULT_FILE)
+                except Exception:
+                    pass
+                return result
+        time.sleep(_CAPTURE_IPC_POLL_INTERVAL)
+    return None
+
+
+def _finalize_ipc_capture_paths(result: dict, photo_path: str) -> dict:
+    """IPC 成功結果の filepath を期待パスへ揃える。"""
+    if not result.get('success') or not result.get('filepath'):
+        return result
+    actual_path = result['filepath']
+    if os.path.exists(actual_path) and actual_path != photo_path:
+        try:
+            os.rename(actual_path, photo_path)
+            result['filepath'] = photo_path
+            result['filename'] = os.path.basename(photo_path)
+        except Exception:
+            result['filepath'] = actual_path
+            result['filename'] = os.path.basename(actual_path)
+    return result
+
+
+def _run_rpicam_still_capture(
+    settings: dict,
+    photo_path: str,
+    width: int,
+    height: int,
+    shutter_us: int,
+) -> tuple[bool, str]:
+    """camera-service 停止中のみ使用する rpicam-still フォールバック。"""
+    still_bin = _resolve_still_binary()
+    if not still_bin:
+        return False, 'rpicam-still / libcamera-still が見つかりません。rpicam-apps をインストールしてください。'
+
+    if shutter_us > 3_000_000:
+        rpicam_timeout_ms = shutter_us // 1000 + 3000
+    else:
+        rpicam_timeout_ms = 5000
+
+    proc_timeout_sec = max(60, (rpicam_timeout_ms + shutter_us) // 1_000_000 + 15)
+
+    cmd = [
+        still_bin,
+        '-o', photo_path,
+        '--width', str(width),
+        '--height', str(height),
+        '--quality', str(settings.get('quality', 90)),
+        '--timeout', str(rpicam_timeout_ms),
+        '--nopreview',
+    ]
+
+    if shutter_us > 0:
+        cmd.extend(['--shutter', str(shutter_us)])
+
+    wb_value = settings.get('white_balance', 'auto')
+    awb_supported = ('auto', 'daylight', 'cloudy', 'tungsten', 'fluorescent')
+    awb_val = wb_value if wb_value in awb_supported else 'auto'
+    cmd.extend(['--awb', awb_val])
+
+    iso_value = settings.get('iso', 'auto')
+    if iso_value != 'auto':
+        try:
+            cmd.extend(['--gain', str(int(iso_value) / 100)])
+        except ValueError:
+            logger.warning("Invalid ISO value: %s", iso_value)
+
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=proc_timeout_sec)
+    except subprocess.TimeoutExpired:
+        try:
+            os.remove(photo_path)
+        except OSError:
+            pass
+        return False, f'capture timed out ({os.path.basename(still_bin)} {proc_timeout_sec}s exceeded)'
+    except FileNotFoundError as e:
+        return False, f'capture binary not found: {e}'
+
+    if result.returncode != 0:
+        return False, (result.stderr or 'rpicam-still failed').strip()
+
+    try:
+        file_size = os.path.getsize(photo_path)
+    except OSError:
+        file_size = 0
+    if file_size == 0:
+        try:
+            os.remove(photo_path)
+        except OSError:
+            pass
+        return False, 'capture produced empty file (camera may not be available)'
+
+    return True, ''
+
+
 def _ipc_capture(settings: dict, photo_path: str, mode_label: str) -> dict:
     """
     camera_service.py 経由のIPC撮影。
@@ -242,6 +386,7 @@ def _ipc_capture(settings: dict, photo_path: str, mode_label: str) -> dict:
     """
     import uuid
     request_id = str(uuid.uuid4())[:16]
+    timeout_sec = _ipc_capture_timeout_sec(settings)
 
     # camera_service.py がリクエスト内の設定を使って撮影するので、解決済みの設定を渡す
     req = {
@@ -271,27 +416,7 @@ def _ipc_capture(settings: dict, photo_path: str, mode_label: str) -> dict:
             json.dump(req, f, indent=2)
         os.replace(tmp_req, CAPTURE_REQUEST_FILE)
     except Exception as e:
-        return {'success': False, 'error': f'Failed to write IPC request: {e}'}
-
-    def _poll_result(_request_id: str):
-        deadline = time.time() + _CAPTURE_IPC_TIMEOUT_SEC
-        while time.time() < deadline:
-            if os.path.exists(CAPTURE_RESULT_FILE):
-                try:
-                    with open(CAPTURE_RESULT_FILE, 'r', encoding='utf-8') as f:
-                        result = json.load(f)
-                except Exception:
-                    result = None
-
-                if isinstance(result, dict) and result.get('request_id') == _request_id:
-                    try:
-                        os.remove(CAPTURE_RESULT_FILE)
-                    except Exception:
-                        pass
-                    return result
-
-            time.sleep(_CAPTURE_IPC_POLL_INTERVAL)
-        return None
+        return {'success': False, 'error': f'Failed to write IPC request: {e}', 'request_id': request_id}
 
     def _write_request(_request_id: str) -> None:
         req['request_id'] = _request_id
@@ -301,45 +426,19 @@ def _ipc_capture(settings: dict, photo_path: str, mode_label: str) -> dict:
             json.dump(req, f, indent=2)
         os.replace(tmp_req, CAPTURE_REQUEST_FILE)
 
-    # 最大1回（タイムアウト時は上位で camera-service 再起動後に再試行）
-    for attempt in range(1):
-        if attempt > 0:
-            request_id = str(uuid.uuid4())[:16]
-            try:
-                if os.path.exists(CAPTURE_REQUEST_FILE):
-                    os.remove(CAPTURE_REQUEST_FILE)
-            except Exception:
-                pass
-            time.sleep(0.25)
-            try:
-                _write_request(request_id)
-            except Exception as e:
-                return {'success': False, 'error': f'Failed to rewrite IPC request: {e}'}
+    result = _poll_ipc_result_for_request(request_id, timeout_sec)
+    if result is None:
+        result = _poll_ipc_result_for_request(request_id, _CAPTURE_IPC_LATE_GRACE_SEC)
+    if result is None:
+        try:
+            os.remove(CAPTURE_REQUEST_FILE)
+        except Exception:
+            pass
+        return {'success': False, 'error': 'IPC capture timed out', 'request_id': request_id}
 
-        result = _poll_result(request_id)
-        if result is None:
-            try:
-                os.remove(CAPTURE_REQUEST_FILE)
-            except Exception:
-                pass
-            return {'success': False, 'error': 'IPC capture timed out'}
-
-        if result.get('success') and result.get('filepath'):
-            # camera_service.py が生成したファイルをphoto_pathにリネーム（名前は保持）
-            actual_path = result['filepath']
-            if os.path.exists(actual_path) and actual_path != photo_path:
-                try:
-                    os.rename(actual_path, photo_path)
-                    result['filepath'] = photo_path
-                    result['filename'] = os.path.basename(photo_path)
-                except Exception:
-                    # リネームできなければ元のファイルをそのまま使う
-                    photo_path = actual_path
-                    result['filepath'] = actual_path
-                    result['filename'] = os.path.basename(actual_path)
-        return result
-
-    return {'success': False, 'error': 'IPC capture failed'}
+    result = _finalize_ipc_capture_paths(result, photo_path)
+    result.setdefault('request_id', request_id)
+    return result
 
 
 def _sanitize_meta_tag(value):
@@ -1729,6 +1828,9 @@ class APIHandler(BaseHTTPRequestHandler):
 
             success = len(invalid) == 0 and len(errors) == 0
 
+            if deleted:
+                _invalidate_photo_count_cache()
+
             self.send_response(200 if success else 400)
             self.send_header('Content-Type', 'application/json')
             self.end_headers()
@@ -1898,8 +2000,7 @@ class APIHandler(BaseHTTPRequestHandler):
 
                 overrides.update(new_settings)
 
-                with open(SESSION_OVERRIDES_FILE, 'w') as f:
-                    json.dump(overrides, f, indent=2)
+                _save_session_overrides_dict(overrides)
 
                 self.send_response(200)
                 self.send_header('Content-Type', 'application/json')
@@ -1936,8 +2037,7 @@ class APIHandler(BaseHTTPRequestHandler):
                                 changed = True
                         if changed:
                             if overrides:
-                                with open(SESSION_OVERRIDES_FILE, 'w') as f:
-                                    json.dump(overrides, f, indent=2)
+                                _save_session_overrides_dict(overrides)
                             else:
                                 os.remove(SESSION_OVERRIDES_FILE)
                 except Exception as e:
@@ -2252,8 +2352,6 @@ class APIHandler(BaseHTTPRequestHandler):
                 except Exception as e:
                     logger.warning(f"Failed to load session overrides (capture): {e}")
 
-            service_should_stop = bool(settings.get('monitoring_enabled', True))
-
             manual_mode = request_data.get('manual_mode') or request_data.get('mode')
             if manual_mode:
                 manual_mode = str(manual_mode).lower()
@@ -2295,7 +2393,7 @@ class APIHandler(BaseHTTPRequestHandler):
             filename = f"{filename}{photo_ext}"
             photo_path = os.path.join(PHOTOS_DIR, filename)
 
-            # --- 撮影: IPC優先、フォールバックでrpicam-still ---
+            # --- 撮影: IPC優先（camera-service 稼働中）。rpicam-still は service 停止時のみ ---
             shutter_speed = settings.get('shutter_speed', 'auto')
             shutter_us = 0
             if shutter_speed != 'auto':
@@ -2309,155 +2407,61 @@ class APIHandler(BaseHTTPRequestHandler):
             ipc_result = None
 
             if _is_camera_service_running():
-                # IPC経由: camera_serviceに撮影を依頼（サービス停止不要）
-                service_stopped = False  # サービスは停止しない
                 ipc_result = _ipc_capture(settings, photo_path, manual_mode or 'current')
                 if ipc_result.get('success'):
                     capture_ok = True
-                    # photo_pathが更新されている可能性がある（IPCリネーム処理）
                     if ipc_result.get('filepath'):
                         photo_path = ipc_result['filepath']
                         filename = os.path.basename(photo_path)
                 else:
                     result_error = ipc_result.get('error', 'IPC capture failed')
-                    logger.warning("IPC capture failed (%s), falling back to rpicam-still", result_error)
-                    # IPC失敗時はrpicam-still fallbackへ落ちる
-                    service_stopped = False
+                    logger.warning("IPC capture failed (%s)", result_error)
 
-            if not capture_ok:
-                # IPC失敗時、camera-serviceが固着している可能性があるため
-                # timeout系エラーのみ1回だけ再起動→再試行する
-                if ipc_result is not None and _is_camera_service_running():
-                    err_text = (result_error or '').lower()
-                    timeout_like = ('timed out' in err_text) or ('timeout' in err_text) or ('expired' in err_text)
-                    if timeout_like:
-                        try:
-                            restart = subprocess.run(
-                                ['sudo', '-n', 'systemctl', 'restart', 'camera-service'],
-                                capture_output=True, text=True, check=False, timeout=20,
-                            )
-                            if restart.returncode == 0:
-                                time.sleep(1.0)
-                                ipc_retry = _ipc_capture(settings, photo_path, manual_mode or 'current')
-                                if ipc_retry.get('success'):
-                                    capture_ok = True
-                                    if ipc_retry.get('filepath'):
-                                        photo_path = ipc_retry['filepath']
-                                        filename = os.path.basename(photo_path)
-                                else:
-                                    result_error = ipc_retry.get('error', result_error)
+            if not capture_ok and ipc_result is not None and _is_camera_service_running():
+                err_text = (result_error or '').lower()
+                timeout_like = ('timed out' in err_text) or ('timeout' in err_text) or ('expired' in err_text)
+                if timeout_like:
+                    try:
+                        restart = subprocess.run(
+                            ['sudo', '-n', 'systemctl', 'restart', 'camera-service'],
+                            capture_output=True, text=True, check=False, timeout=20,
+                        )
+                        if restart.returncode == 0:
+                            time.sleep(1.0)
+                            ipc_retry = _ipc_capture(settings, photo_path, manual_mode or 'current')
+                            if ipc_retry.get('success'):
+                                capture_ok = True
+                                ipc_result = ipc_retry
+                                if ipc_retry.get('filepath'):
+                                    photo_path = ipc_retry['filepath']
+                                    filename = os.path.basename(photo_path)
                             else:
-                                logger.warning("camera-service restart failed: %s", (restart.stderr or restart.stdout or '').strip())
-                        except Exception as e:
-                            logger.warning("camera-service restart exception: %s", e)
-
-                if not capture_ok and ipc_result is not None and _is_camera_service_running():
-                    logger.warning(
-                        "IPC path unavailable; trying rpicam-still fallback (error=%s)",
-                        result_error or 'unknown'
-                    )
-                # 以下は既存のrpicam-still fallback（camera-service停止中の場合のみ実行）
-                if not service_stopped and service_should_stop and _is_camera_service_running():
-                    stop_result = subprocess.run(
-                        ['sudo', '-n', 'systemctl', 'stop', 'camera-service'],
-                        capture_output=True, text=True, check=False,
-                    )
-                    if stop_result.returncode == 0:
-                        service_stopped = True
-                        for _ in range(10):
-                            st = subprocess.run(
-                                ['systemctl', 'is-active', 'camera-service'],
-                                capture_output=True, text=True, check=False,
+                                result_error = ipc_retry.get('error', result_error)
+                        else:
+                            logger.warning(
+                                "camera-service restart failed: %s",
+                                (restart.stderr or restart.stdout or '').strip(),
                             )
-                            if st.stdout.strip() in ('inactive', 'failed', 'deactivating'):
-                                break
-                            time.sleep(0.3)
+                    except Exception as e:
+                        logger.warning("camera-service restart exception: %s", e)
 
-                still_bin = _resolve_still_binary()
-                if not still_bin:
-                    response = {
-                        'success': False,
-                        'error': 'rpicam-still / libcamera-still が見つかりません。rpicam-apps をインストールしてください。'
-                    }
-                    self.send_response(500)
-                    self.send_header('Content-Type', 'application/json')
-                    self.end_headers()
-                    self.wfile.write(json.dumps(response).encode())
-                    return
-
-                # --timeout: シャッター速度が長い場合は延長（rpicam-still は timeout 内に全フレームを取得する）
-                if shutter_us > 3_000_000:
-                    rpicam_timeout_ms = shutter_us // 1000 + 3000
+            if not capture_ok and ipc_result is not None and _is_camera_service_running():
+                if _verify_photo_on_disk(photo_path):
+                    capture_ok = True
+                    logger.info("IPC reported failure but photo exists on disk: %s", photo_path)
                 else:
-                    rpicam_timeout_ms = 5000  # 5秒: AEC収束に十分な余裕
+                    logger.warning(
+                        "IPC failed while camera-service active; refusing rpicam-still fallback (%s)",
+                        result_error or 'unknown',
+                    )
 
-                # subprocess タイムアウト: timeout + 露光 + バッファ
-                proc_timeout_sec = max(60, (rpicam_timeout_ms + shutter_us) // 1_000_000 + 15)
-
-                cmd = [
-                    still_bin,
-                    '-o', photo_path,
-                    '--width', str(width),
-                    '--height', str(height),
-                    '--quality', str(settings.get('quality', 90)),
-                    '--timeout', str(rpicam_timeout_ms),
-                    '--nopreview',
-                ]
-
-                if shutter_us > 0:
-                    cmd.extend(['--shutter', str(shutter_us)])
-
-                wb_value = settings.get('white_balance', 'auto')
-                awb_supported = ('auto', 'daylight', 'cloudy', 'tungsten', 'fluorescent')
-                awb_val = wb_value if wb_value in awb_supported else 'auto'
-                cmd.extend(['--awb', awb_val])
-
-                iso_value = settings.get('iso', 'auto')
-                if iso_value != 'auto':
-                    try:
-                        cmd.extend(['--gain', str(int(iso_value) / 100)])
-                    except ValueError:
-                        logger.warning(f"Invalid ISO value: {iso_value}")
-
-                try:
-                    result = subprocess.run(cmd, capture_output=True, text=True, timeout=proc_timeout_sec)
-                except subprocess.TimeoutExpired:
-                    try:
-                        os.remove(photo_path)
-                    except OSError:
-                        pass
-                    response = {'success': False, 'error': f'capture timed out ({os.path.basename(still_bin)} {proc_timeout_sec}s exceeded)'}
-                    self.send_response(500)
-                    self.send_header('Content-Type', 'application/json')
-                    self.end_headers()
-                    self.wfile.write(json.dumps(response).encode())
-                    return
-                except FileNotFoundError as e:
-                    response = {'success': False, 'error': f'capture binary not found: {e}'}
-                    self.send_response(500)
-                    self.send_header('Content-Type', 'application/json')
-                    self.end_headers()
-                    self.wfile.write(json.dumps(response).encode())
-                    return
-
-                capture_ok = result.returncode == 0
-                if capture_ok:
-                    try:
-                        file_size = os.path.getsize(photo_path)
-                    except OSError:
-                        file_size = 0
-                    if file_size == 0:
-                        try:
-                            os.remove(photo_path)
-                        except OSError:
-                            pass
-                        capture_ok = False
-                        result_error = 'capture produced empty file (camera may not be available)'
-                        logger.warning(f"Capture produced 0-byte file: {photo_path}")
-                    else:
-                        result_error = ''
-                else:
-                    result_error = result.stderr
+            if not capture_ok and not _is_camera_service_running():
+                logger.info("camera-service inactive; using rpicam-still fallback")
+                capture_ok, still_err = _run_rpicam_still_capture(
+                    settings, photo_path, width, height, shutter_us,
+                )
+                if still_err:
+                    result_error = still_err
 
             if capture_ok:
                 applied_mode = manual_mode if manual_mode and manual_mode != 'current' else settings.get('camera_mode', 'standard')
@@ -2489,6 +2493,7 @@ class APIHandler(BaseHTTPRequestHandler):
                 saved_on_device = _verify_photo_on_disk(photo_path)
                 if saved_on_device:
                     _mark_last_capture_unix_file()
+                    _invalidate_photo_count_cache()
 
                 response = {
                     'success': True,
@@ -2506,8 +2511,17 @@ class APIHandler(BaseHTTPRequestHandler):
                         response['preview_mime'] = 'image/jpeg'
                 self.send_response(200)
             else:
-                error_msg = result_error if result_error else (result.stderr if 'result' in dir() and hasattr(result, 'stderr') else 'Capture failed')
-                response = {'success': False, 'error': error_msg}
+                error_msg = result_error or 'Capture failed'
+                saved_on_device = _verify_photo_on_disk(photo_path)
+                if saved_on_device:
+                    error_msg = (
+                        f'{error_msg} (photo saved on Pi SD as {os.path.basename(photo_path)})'
+                    )
+                response = {
+                    'success': False,
+                    'error': error_msg,
+                    'saved_on_device': saved_on_device,
+                }
                 self.send_response(500)
 
             self.send_header('Content-Type', 'application/json')

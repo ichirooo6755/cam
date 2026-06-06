@@ -60,7 +60,7 @@ _ipc_shared = {
     'active_profile': None,
     'running': True,
 }
-_CAPTURE_IPC_TIMEOUT_SEC = 30.0
+_CAPTURE_IPC_TIMEOUT_SEC = 45.0  # api_server の待ち時間+猶予と整合（キュー滞留の expire）
 
 PHOTOS_DIR = '/home/pi/photos'
 SETTINGS_FILE = '/home/pi/camera_settings.json'
