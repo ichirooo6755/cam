@@ -305,6 +305,8 @@ struct UnifiedGalleryView: View {
 
     /// サーバーの写真一覧とローカルのPhotoGroupを同期
     private func syncPhotoGroups(serverPhotos: [String]) {
+        guard !serverPhotos.isEmpty else { return }
+
         for filename in serverPhotos {
             // 既存のPhotoGroupを探す
             let fetchRequest: NSFetchRequest<PhotoGroup> = PhotoGroup.fetchRequest()
@@ -337,10 +339,12 @@ struct UnifiedGalleryView: View {
         // 削除されたサーバー写真に対応するPhotoGroupを削除
         let allGroups = try? viewContext.fetch(PhotoGroup.fetchRequest())
         for group in allGroups ?? [] {
-            if !serverPhotos.contains(group.id) {
-                // サーバーから削除されている場合、ローカルも削除
-                viewContext.delete(group)
-            }
+            if serverPhotos.contains(group.id) { continue }
+            // 編集版があるグループはサーバー未登録でも保持
+            let versions = group.versions as? Set<PhotoVersion> ?? []
+            let hasEdits = versions.contains { !$0.isOriginal }
+            if hasEdits { continue }
+            viewContext.delete(group)
         }
 
         try? viewContext.save()

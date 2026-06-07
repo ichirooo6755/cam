@@ -130,6 +130,8 @@ ssh pi@192.168.4.1 "journalctl -u camera-service -n 50 --no-pager"
 
 詳細ランブック: `docs/runbook/TROUBLESHOOTING.md`
 
+開発・変更履歴（直近）: [docs/changelog/2026-06-07-production-hardening.md](../changelog/2026-06-07-production-hardening.md)
+
 ## 8. USB OTG（Wi-Fi なしで書き換え）
 
 Pi Zero / Zero 2 W のデータ用 USB を gadget 化し、PC から USB Ethernet 経由で SSH する手順は `docs/runbook/USB_OTG.md` を参照。  

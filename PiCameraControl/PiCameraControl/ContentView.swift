@@ -2088,6 +2088,7 @@ struct ContentView: View {
         syncState = .idle
         isCapturing = true
         lastCaptureMetadata = nil
+        capturedImage = nil
         
         let generator = UINotificationFeedbackGenerator()
         generator.prepare()
@@ -2105,8 +2106,8 @@ struct ContentView: View {
             let knownPhotos = Set((try? await apiClient.fetchPhotos()) ?? [])
             do {
                 // 1枚目: PiのSD保存を優先（軽量JSON応答 + サムネDL）
-                let (filename1, metadata, preview1) = try await apiClient.captureWithMetadata(
-                    manualMode: mode, meta: meta, location: locationPayload, includePreview: false
+                let (filename1, metadata, preview1, savedOnDevice1) = try await apiClient.captureWithMetadata(
+                    manualMode: mode, meta: meta, location: locationPayload, includePreview: true
                 )
                 var image: UIImage?
                 if let preview1 {
@@ -2118,9 +2119,14 @@ struct ContentView: View {
                     await MainActor.run {
                         lastCaptureMetadata = metadata
                         isCapturing = false
-                        captureToast = "✅ PiのSDに保存済み"
-                        errorMessage = nil
-                        generator.notificationOccurred(.success)
+                        if savedOnDevice1 {
+                            captureToast = "✅ PiのSDに保存済み（表示用画像の取得に失敗）"
+                            generator.notificationOccurred(.success)
+                        } else {
+                            captureToast = "❌ 撮影失敗"
+                            errorMessage = "PiのSDに保存を確認できませんでした"
+                            generator.notificationOccurred(.error)
+                        }
                     }
                     try? await Task.sleep(nanoseconds: 3_000_000_000)
                     await MainActor.run { captureToast = nil }
@@ -2129,8 +2135,8 @@ struct ContentView: View {
 
                 // 多重露光: 2枚目を撮影してiPhone側で合成
                 if doMultiExposure || do2in1 {
-                    let (filename2, _, preview2) = try await apiClient.captureWithMetadata(
-                        manualMode: mode, meta: meta, location: locationPayload, includePreview: false
+                    let (filename2, _, preview2, savedOnDevice2) = try await apiClient.captureWithMetadata(
+                        manualMode: mode, meta: meta, location: locationPayload, includePreview: true
                     )
                     let image2: UIImage?
                     if let preview2 {
@@ -2143,7 +2149,11 @@ struct ContentView: View {
                             capturedImage = image
                             lastCaptureMetadata = metadata
                             isCapturing = false
-                            captureToast = "✅ 1枚目はSD保存済み（2枚目の表示失敗）"
+                            if savedOnDevice2 {
+                                captureToast = "✅ 1枚目はSD保存済み（2枚目の表示失敗）"
+                            } else {
+                                captureToast = "⚠️ 1枚目のみ表示（2枚目失敗）"
+                            }
                             generator.notificationOccurred(.warning)
                         }
                         try? await Task.sleep(nanoseconds: 3_000_000_000)

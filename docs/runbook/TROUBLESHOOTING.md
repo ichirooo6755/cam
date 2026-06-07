@@ -549,6 +549,48 @@ ISO/SSを手動指定しても自動露出(AE)が有効のままで、
 ISO/SSが手動指定のときは `AeEnable = False` にして自動露出を無効化し、
 autoに戻した場合のみAEを再有効化するよう修正しました。
 
+### 症状: スマホで何回押したか vs Pi で何回受けたか突き合わせできない
+**原因**
+- 以前は `journalctl` のみで、`Storage=volatile` の環境では再起動後に消えていた
+- `api_server` に HTTP アクセス専用ログがなく、撮影試行の到達確認ができなかった
+
+**恒久対策（2026-06）**
+| ログ | パス | 内容 |
+|------|------|------|
+| HTTP アクセス | `/home/pi/logs/api_access.log` | 全リクエスト（IP・path・status・ms・client_id） |
+| API 詳細 | `/home/pi/logs/api_server.log` | IPC 失敗・Wi-Fi 等 |
+| 光検知/撮影 | `/home/pi/logs/camera_service.log` | `Light detected` / `Captured:` / `IPC manual capture` |
+| systemd | `journalctl -u api-server` | journald **persistent**（SD、最大64MB） |
+
+**突き合わせ手順**
+```bash
+# Pi が受け取った手動撮影リクエスト数（今日）
+grep -a "$(date +%Y-%m-%d)" /home/pi/logs/api_access.log | grep -a $'\tPOST\t/api/capture\t' | wc -l
+
+# 成功/失敗の内訳
+grep -a "$(date +%Y-%m-%d)" /home/pi/logs/api_access.log | grep -a $'\tPOST\t/api/capture\t' | awk -F'\t' '{print $5}' | sort | uniq -c
+
+# 特定の試行を追跡（iOS が X-Client-Request-Id を送る）
+grep -a 'a1b2c3d4' /home/pi/logs/api_access.log
+grep -a 'a1b2c3d4' /home/pi/logs/api_server.log
+grep -a 'a1b2c3d4' /home/pi/logs/camera_service.log
+
+# 光検知の自動撮影枚数（手動撮影とは別）
+grep -a "$(date +%Y-%m-%d)" /home/pi/logs/camera_service.log | grep -a 'Captured:' | wc -l
+```
+
+**よくある差分パターン**
+| スマホ > Pi | 原因 |
+|-------------|------|
+| 差が大きい | Wi-Fi 切断・AP 到達前にタイムアウト（リクエスト未到達） |
+| Pi 受信はあるが 500 | IPC タイムアウト・camera frontend timeout |
+| Pi 500 だが SD に保存あり | `saved_on_device=1` / `client_disconnect=1`（応答途中切断） |
+| Pi 受信なし・光検知のみ | 手動ボタンではなく自動検知のみ動作 |
+
+iOS アプリは撮影ごとに `X-Client-Request-Id`（8文字 UUID）を付与します。実機再インストール後に有効です。
+
+詳細な変更履歴・フィールドテスト結果: [docs/changelog/2026-06-07-production-hardening.md](../changelog/2026-06-07-production-hardening.md)
+
 ### 症状: クラッシュログが確認できない
 **原因**
 camera-service の異常終了が起きていない場合、エラーログは出力されません。

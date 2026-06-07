@@ -1,6 +1,7 @@
 [Unit]
 Description=Light Detection Camera Service
-After=network.target
+After=network.target picamera-system-tune.service picamera-time-sync.service
+Wants=picamera-system-tune.service picamera-time-sync.service
 
 [Service]
 Type=simple
@@ -8,6 +9,11 @@ User=pi
 WorkingDirectory=/home/pi
 RuntimeDirectory=picamera
 RuntimeDirectoryMode=0755
+# Zero 2W: Picamera2 + numpy — OOM で Wi-Fi が落ちないよう上限
+MemoryMax=300M
+MemoryHigh=260M
+CPUWeight=200
+Nice=-2
 ExecStartPre=+/bin/sh -c 'echo performance > /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null || true'
 ExecStartPre=+/bin/sh -c 'echo deadline > /sys/block/mmcblk0/queue/scheduler 2>/dev/null || true'
 ExecStartPre=+/bin/sh -c 'echo 0 > /proc/sys/vm/swappiness 2>/dev/null || true'

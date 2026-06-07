@@ -1,0 +1,14 @@
+[Unit]
+Description=Pi Camera: Zero 2W memory tuning (zram, swap, sysctl)
+After=local-fs.target network-pre.target
+Before=camera-service.service api-server.service
+Wants=network-pre.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=root
+ExecStart=/home/pi/setup_zero2w_system.sh --boot-only
+
+[Install]
+WantedBy=multi-user.target

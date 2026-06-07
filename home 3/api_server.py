@@ -7,6 +7,7 @@
 import os
 import json
 import logging
+import logging.handlers
 import subprocess
 import shutil
 import glob
@@ -25,8 +26,80 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 from socketserver import ThreadingMixIn
 from urllib.parse import urlparse
 
-logging.basicConfig(level=logging.INFO)
+LOG_DIR = '/home/pi/logs'
+os.makedirs(LOG_DIR, exist_ok=True)
+
+def _make_rotating_file_handler(filename: str) -> logging.Handler:
+    return logging.handlers.RotatingFileHandler(
+        os.path.join(LOG_DIR, filename),
+        maxBytes=10 * 1024 * 1024,
+        backupCount=5,
+        encoding='utf-8',
+    )
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        _make_rotating_file_handler('api_server.log'),
+        logging.StreamHandler(),
+    ],
+)
 logger = logging.getLogger(__name__)
+
+# HTTP アクセスログ（スマホ試行回数 vs Pi 受信回数の突き合わせ用）
+# 形式: ts TAB ip TAB method TAB path TAB status TAB ms TAB client_id TAB detail
+access_logger = logging.getLogger('picamera.access')
+access_logger.propagate = False
+if not access_logger.handlers:
+    _access_handler = _make_rotating_file_handler('api_access.log')
+    _access_handler.setFormatter(logging.Formatter('%(message)s'))
+    access_logger.addHandler(_access_handler)
+    access_logger.setLevel(logging.INFO)
+
+
+def _sanitize_log_token(value, max_len: int = 64) -> str:
+    if value is None:
+        return '-'
+    text = re.sub(r'[\s\t\r\n]+', '_', str(value).strip())
+    text = re.sub(r'[^A-Za-z0-9._:-]+', '', text)
+    return (text or '-')[:max_len]
+
+
+def _sanitize_log_path(value, max_len: int = 120) -> str:
+    text = str(value or '/').strip()
+    text = re.sub(r'[\s\t\r\n]+', '', text)
+    text = re.sub(r'[^A-Za-z0-9/._:-]+', '', text)
+    return (text or '/')[:max_len]
+
+
+def _sanitize_log_detail(value, max_len: int = 240) -> str:
+    text = re.sub(r'[\t\r\n]+', ' ', str(value).strip())
+    text = re.sub(r'[^A-Za-z0-9/._: =-]+', '', text)
+    return (text or '-')[:max_len]
+
+
+def _log_http_access(
+    client_ip: str,
+    method: str,
+    path: str,
+    status: int,
+    duration_ms: float,
+    client_request_id: str = '-',
+    detail: str = '',
+) -> None:
+    ts = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
+    line = '\t'.join([
+        ts,
+        _sanitize_log_token(client_ip, 45),
+        _sanitize_log_token(method, 8),
+        _sanitize_log_path(path, 120),
+        str(int(status)),
+        f'{duration_ms:.1f}',
+        _sanitize_log_token(client_request_id, 36),
+        _sanitize_log_detail(detail, 240),
+    ])
+    access_logger.info(line)
 
 
 def _resolve_still_binary():
@@ -46,7 +119,9 @@ SETTINGS_FILE = '/home/pi/camera_settings.json'
 SESSION_OVERRIDES_FILE = '/home/pi/camera_session_overrides.json'
 SENSOR_STATUS_FILE = '/run/picamera/sensor_status.json'
 CAPTURE_REQUEST_FILE = '/run/picamera/capture_request.json'
-CAPTURE_RESULT_FILE  = '/run/picamera/capture_result.json'
+CAPTURE_RESULT_FILE  = '/run/picamera/capture_result.json'  # 旧形式（後方互換ポーリング用）
+CAPTURE_RESULTS_DIR = '/run/picamera/capture_results'
+_CAPTURE_IPC_LOCK = threading.Lock()
 LAST_CAPTURE_FILE = '/run/picamera/last_capture_unix'
 _CAPTURE_IPC_POLL_INTERVAL = 0.02   # 結果待ち（秒）: 専用IPCスレッドと併用
 _CAPTURE_IPC_TIMEOUT_BASE_SEC = 30.0  # camera_service.py と揃える（reconfig+露光の余裕）
@@ -140,6 +215,19 @@ DEFAULT_SETTINGS = {
 }
 
 
+def _normalize_threshold_keys(settings: dict) -> dict:
+    """detection_threshold / brightness_threshold を相互補完（camera_service 互換）。"""
+    if not isinstance(settings, dict):
+        return settings
+    dt = settings.get('detection_threshold')
+    bt = settings.get('brightness_threshold')
+    if dt is not None and bt is None:
+        settings['brightness_threshold'] = dt
+    elif bt is not None and dt is None:
+        settings['detection_threshold'] = bt
+    return settings
+
+
 def _load_settings_dict() -> dict:
     """camera_settings.json を読み込む。空ファイル・破損時は {} を返す。"""
     if not os.path.exists(SETTINGS_FILE):
@@ -150,7 +238,8 @@ def _load_settings_dict() -> dict:
             return {}
         with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
             data = json.load(f)
-        return data if isinstance(data, dict) else {}
+        data = data if isinstance(data, dict) else {}
+        return _normalize_threshold_keys(data)
     except (json.JSONDecodeError, OSError, ValueError) as e:
         logger.warning("Failed to load settings file, using defaults: %s", e)
         return {}
@@ -158,6 +247,7 @@ def _load_settings_dict() -> dict:
 
 def _save_settings_dict(settings: dict) -> None:
     """設定をアトミックに保存（書き込み中の電源断で0バイト化しない）。"""
+    settings = _normalize_threshold_keys(dict(settings))
     tmp_path = f"{SETTINGS_FILE}.tmp"
     with open(tmp_path, 'w', encoding='utf-8') as f:
         json.dump(settings, f, indent=2)
@@ -269,22 +359,41 @@ def _is_camera_service_running() -> bool:
         return False
 
 
+def _ipc_result_path(request_id: str) -> str:
+    safe_id = re.sub(r'[^a-zA-Z0-9_-]', '', str(request_id))[:32]
+    return os.path.join(CAPTURE_RESULTS_DIR, f'{safe_id}.json')
+
+
 def _poll_ipc_result_for_request(request_id: str, timeout_sec: float) -> dict | None:
-    """capture_result.json を request_id 一致までポーリング。"""
+    """request_id 専用の result ファイルをポーリング（並行 capture の取り違え防止）。"""
+    result_path = _ipc_result_path(request_id)
     deadline = time.time() + timeout_sec
     while time.time() < deadline:
-        if os.path.exists(CAPTURE_RESULT_FILE):
+        if os.path.exists(result_path):
             try:
-                with open(CAPTURE_RESULT_FILE, 'r', encoding='utf-8') as f:
+                with open(result_path, 'r', encoding='utf-8') as f:
                     result = json.load(f)
             except Exception:
                 result = None
             if isinstance(result, dict) and result.get('request_id') == request_id:
                 try:
-                    os.remove(CAPTURE_RESULT_FILE)
+                    os.remove(result_path)
                 except Exception:
                     pass
                 return result
+        # 旧 camera_service が単一ファイルに書く場合の後方互換
+        if os.path.exists(CAPTURE_RESULT_FILE):
+            try:
+                with open(CAPTURE_RESULT_FILE, 'r', encoding='utf-8') as f:
+                    legacy = json.load(f)
+            except Exception:
+                legacy = None
+            if isinstance(legacy, dict) and legacy.get('request_id') == request_id:
+                try:
+                    os.remove(CAPTURE_RESULT_FILE)
+                except Exception:
+                    pass
+                return legacy
         time.sleep(_CAPTURE_IPC_POLL_INTERVAL)
     return None
 
@@ -377,7 +486,12 @@ def _run_rpicam_still_capture(
     return True, ''
 
 
-def _ipc_capture(settings: dict, photo_path: str, mode_label: str) -> dict:
+def _ipc_capture(
+    settings: dict,
+    photo_path: str,
+    mode_label: str,
+    client_request_id: str | None = None,
+) -> dict:
     """
     camera_service.py 経由のIPC撮影。
     camera-service が active な場合に呼び出す。
@@ -387,58 +501,68 @@ def _ipc_capture(settings: dict, photo_path: str, mode_label: str) -> dict:
     import uuid
     request_id = str(uuid.uuid4())[:16]
     timeout_sec = _ipc_capture_timeout_sec(settings)
+    os.makedirs(CAPTURE_RESULTS_DIR, exist_ok=True)
 
-    # camera_service.py がリクエスト内の設定を使って撮影するので、解決済みの設定を渡す
-    req = {
-        'request_id': request_id,
-        'created_at': time.time(),
-        'width': int(settings.get('width', 1920)),
-        'height': int(settings.get('height', 1080)),
-        'quality': int(settings.get('quality', 90)),
-        'shutter_speed': settings.get('shutter_speed', 'auto'),
-        'iso': settings.get('iso', 'auto'),
-        'raw_mode': bool(settings.get('raw_mode', False)),
-        'denoise_mode': settings.get('denoise_mode', 'auto'),
-        'white_balance': settings.get('white_balance', 'auto'),
-    }
+    with _CAPTURE_IPC_LOCK:
+        # camera_service.py がリクエスト内の設定を使って撮影するので、解決済みの設定を渡す
+        req = {
+            'request_id': request_id,
+            'created_at': time.time(),
+            'width': int(settings.get('width', 1920)),
+            'height': int(settings.get('height', 1080)),
+            'quality': int(settings.get('quality', 90)),
+            'shutter_speed': settings.get('shutter_speed', 'auto'),
+            'iso': settings.get('iso', 'auto'),
+            'raw_mode': bool(settings.get('raw_mode', False)),
+            'denoise_mode': settings.get('denoise_mode', 'auto'),
+            'white_balance': settings.get('white_balance', 'auto'),
+        }
+        if client_request_id:
+            req['client_request_id'] = client_request_id
 
-    # 既存の結果ファイルを削除（古い結果が残っている場合）
-    try:
-        if os.path.exists(CAPTURE_RESULT_FILE):
-            os.remove(CAPTURE_RESULT_FILE)
-    except Exception:
-        pass
-
-    # リクエストファイルを書き込む
-    try:
-        tmp_req = f"{CAPTURE_REQUEST_FILE}.tmp"
-        with open(tmp_req, 'w', encoding='utf-8') as f:
-            json.dump(req, f, indent=2)
-        os.replace(tmp_req, CAPTURE_REQUEST_FILE)
-    except Exception as e:
-        return {'success': False, 'error': f'Failed to write IPC request: {e}', 'request_id': request_id}
-
-    def _write_request(_request_id: str) -> None:
-        req['request_id'] = _request_id
-        req['created_at'] = time.time()
-        tmp_req = f"{CAPTURE_REQUEST_FILE}.tmp"
-        with open(tmp_req, 'w', encoding='utf-8') as f:
-            json.dump(req, f, indent=2)
-        os.replace(tmp_req, CAPTURE_REQUEST_FILE)
-
-    result = _poll_ipc_result_for_request(request_id, timeout_sec)
-    if result is None:
-        result = _poll_ipc_result_for_request(request_id, _CAPTURE_IPC_LATE_GRACE_SEC)
-    if result is None:
+        # 古い結果ファイルを削除（同一 request_id の残骸）
         try:
-            os.remove(CAPTURE_REQUEST_FILE)
+            stale = _ipc_result_path(request_id)
+            if os.path.exists(stale):
+                os.remove(stale)
         except Exception:
             pass
-        return {'success': False, 'error': 'IPC capture timed out', 'request_id': request_id}
+        try:
+            if os.path.exists(CAPTURE_RESULT_FILE):
+                os.remove(CAPTURE_RESULT_FILE)
+        except Exception:
+            pass
 
-    result = _finalize_ipc_capture_paths(result, photo_path)
-    result.setdefault('request_id', request_id)
-    return result
+        # リクエストファイルを書き込む
+        try:
+            tmp_req = f"{CAPTURE_REQUEST_FILE}.tmp"
+            with open(tmp_req, 'w', encoding='utf-8') as f:
+                json.dump(req, f, indent=2)
+            os.replace(tmp_req, CAPTURE_REQUEST_FILE)
+        except Exception as e:
+            return {
+                'success': False,
+                'error': f'Failed to write IPC request: {e}',
+                'request_id': request_id,
+            }
+
+        result = _poll_ipc_result_for_request(request_id, timeout_sec)
+        if result is None:
+            result = _poll_ipc_result_for_request(request_id, _CAPTURE_IPC_LATE_GRACE_SEC)
+        if result is None:
+            try:
+                os.remove(CAPTURE_REQUEST_FILE)
+            except Exception:
+                pass
+            return {
+                'success': False,
+                'error': 'IPC capture timed out',
+                'request_id': request_id,
+            }
+
+        result = _finalize_ipc_capture_paths(result, photo_path)
+        result.setdefault('request_id', request_id)
+        return result
 
 
 def _sanitize_meta_tag(value):
@@ -1092,7 +1216,7 @@ def _load_effective_settings():
         settings['brightness_threshold'] = settings['detection_threshold']
     if 'brightness_threshold' in settings and 'detection_threshold' not in settings:
         settings['detection_threshold'] = settings['brightness_threshold']
-    return settings
+    return _normalize_threshold_keys(settings)
 
 def _nearest_stop(stops, value):
     return min(stops, key=lambda x: abs(x - value))
@@ -1353,6 +1477,59 @@ class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
     daemon_threads = True
 
 class APIHandler(BaseHTTPRequestHandler):
+    _access_started = 0.0
+    _access_status = 0
+    _access_extra = {}
+
+    def _client_request_id(self) -> str:
+        return (
+            self.headers.get('X-Client-Request-Id')
+            or self.headers.get('X-Request-Id')
+            or '-'
+        )
+
+    def send_response(self, code, message=None):
+        self._access_status = int(code)
+        super().send_response(code, message)
+
+    def send_error(self, code, message=None, explain=None):
+        self._access_status = int(code)
+        super().send_error(code, message, explain)
+
+    def handle(self):
+        self._access_started = time.time()
+        self._access_status = 0
+        self._access_extra = {}
+        try:
+            super().handle()
+        except Exception:
+            if not self._access_status:
+                self._access_status = 500
+            raise
+        finally:
+            self._emit_access_log()
+
+    def _emit_access_log(self):
+        if not self._access_started:
+            return
+        status = self._access_status or 500
+        duration_ms = (time.time() - self._access_started) * 1000.0
+        parsed = urlparse(self.path or '/')
+        path = parsed.path or '/'
+        detail_parts = []
+        for key in ('event', 'ipc_request_id', 'saved_on_device', 'success', 'error', 'client_disconnect'):
+            if key in self._access_extra and self._access_extra[key] not in (None, '', '-'):
+                detail_parts.append(f'{key}={self._access_extra[key]}')
+        detail = ' '.join(detail_parts)
+        _log_http_access(
+            client_ip=self.client_address[0] if self.client_address else '-',
+            method=getattr(self, 'command', '-'),
+            path=path,
+            status=status,
+            duration_ms=duration_ms,
+            client_request_id=self._client_request_id(),
+            detail=detail,
+        )
     
     def do_GET(self):
         parsed = urlparse(self.path)
@@ -2317,6 +2494,11 @@ class APIHandler(BaseHTTPRequestHandler):
     def capture_photo(self):
         """手動撮影"""
         service_stopped = False
+        client_request_id = self._client_request_id()
+        ipc_result = None
+        capture_ok = False
+        result_error = ''
+        saved_on_device = False
         try:
             request_data = _read_json_body(self)
             if request_data is None:
@@ -2413,7 +2595,12 @@ class APIHandler(BaseHTTPRequestHandler):
             ipc_result = None
 
             if _is_camera_service_running():
-                ipc_result = _ipc_capture(settings, photo_path, manual_mode or 'current')
+                ipc_result = _ipc_capture(
+                    settings,
+                    photo_path,
+                    manual_mode or 'current',
+                    client_request_id=None if client_request_id == '-' else client_request_id,
+                )
                 if ipc_result.get('success'):
                     capture_ok = True
                     if ipc_result.get('filepath'):
@@ -2434,7 +2621,12 @@ class APIHandler(BaseHTTPRequestHandler):
                         )
                         if restart.returncode == 0:
                             time.sleep(1.0)
-                            ipc_retry = _ipc_capture(settings, photo_path, manual_mode or 'current')
+                            ipc_retry = _ipc_capture(
+                                settings,
+                                photo_path,
+                                manual_mode or 'current',
+                                client_request_id=None if client_request_id == '-' else client_request_id,
+                            )
                             if ipc_retry.get('success'):
                                 capture_ok = True
                                 ipc_result = ipc_retry
@@ -2528,17 +2720,51 @@ class APIHandler(BaseHTTPRequestHandler):
                     'error': error_msg,
                     'saved_on_device': saved_on_device,
                 }
+                if saved_on_device and os.path.exists(photo_path):
+                    response['filename'] = os.path.basename(photo_path)
                 self.send_response(500)
+
+            self._access_extra = {
+                'event': 'capture',
+                'ipc_request_id': (ipc_result or {}).get('request_id', '-'),
+                'saved_on_device': int(bool(saved_on_device)),
+                'success': int(bool(capture_ok)),
+                'error': (result_error or '')[:120],
+            }
+            logger.info(
+                "HTTP capture: client=%s ipc=%s ok=%s saved=%s err=%s",
+                client_request_id,
+                self._access_extra['ipc_request_id'],
+                capture_ok,
+                saved_on_device,
+                result_error or '-',
+            )
 
             self.send_header('Content-Type', 'application/json')
             self.end_headers()
-            self.wfile.write(json.dumps(response).encode())
+            try:
+                self.wfile.write(json.dumps(response).encode())
+            except (BrokenPipeError, ConnectionResetError) as e:
+                self._access_extra['client_disconnect'] = 1
+                logger.warning(
+                    "Client disconnected during capture response (%s); saved_on_device=%s",
+                    e,
+                    saved_on_device,
+                )
         except Exception as e:
             logger.error(f"Capture error: {e}")
+            self._access_extra = {
+                'event': 'capture',
+                'success': 0,
+                'error': str(e)[:120],
+            }
             self.send_response(500)
             self.send_header('Content-Type', 'application/json')
             self.end_headers()
-            self.wfile.write(json.dumps({'success': False, 'error': str(e)}).encode())
+            try:
+                self.wfile.write(json.dumps({'success': False, 'error': str(e)}).encode())
+            except (BrokenPipeError, ConnectionResetError):
+                self._access_extra['client_disconnect'] = 1
         finally:
             if service_stopped:
                 subprocess.run(['sudo', '-n', 'systemctl', 'start', 'camera-service'], check=False, timeout=15)
@@ -2548,8 +2774,8 @@ class APIHandler(BaseHTTPRequestHandler):
         _persist_wifi_mode(mode, ap_ssid=ap_ssid, ap_password=ap_password)
 
     def log_message(self, format, *args):
-        """アクセスログ"""
-        logger.info("%s - %s", self.client_address[0], format % args)
+        """BaseHTTPRequestHandler の stderr 出力は api_access.log に集約する。"""
+        return
 
 def restore_wifi_mode_on_boot():
     """起動時に前回のWi-Fiモードを復元
@@ -2661,6 +2887,7 @@ def _consume_boot_network_applied_marker():
 
 def main():
     os.makedirs(PHOTOS_DIR, exist_ok=True)
+    os.makedirs(CAPTURE_RESULTS_DIR, exist_ok=True)
 
     try:
         if os.path.exists(SESSION_OVERRIDES_FILE):

@@ -33,6 +33,7 @@ struct CameraSettings: Codable {
         case contrast, saturation, quality, width, height
         case monitoringEnabled = "monitoring_enabled"
         case detectionThreshold = "detection_threshold"
+        case brightnessThreshold = "brightness_threshold"
         case detectionInterval = "detection_interval"
         case checkInterval = "check_interval"
         case captureCooldown = "capture_cooldown"
@@ -60,7 +61,9 @@ struct CameraSettings: Codable {
         monitoringEnabled =
             try container.decodeIfPresent(Bool.self, forKey: .monitoringEnabled) ?? true
         detectionThreshold =
-            try container.decodeIfPresent(Int.self, forKey: .detectionThreshold) ?? 30
+            try container.decodeIfPresent(Int.self, forKey: .detectionThreshold)
+            ?? container.decodeIfPresent(Int.self, forKey: .brightnessThreshold)
+            ?? 30
         detectionInterval =
             try container.decodeIfPresent(Double.self, forKey: .detectionInterval) ?? 1.0
         checkInterval =
@@ -83,6 +86,32 @@ struct CameraSettings: Codable {
             try container.decodeIfPresent(Bool.self, forKey: .rawMode) ?? false
         detectionFps =
             try container.decodeIfPresent(Int.self, forKey: .detectionFps)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(cameraMode, forKey: .cameraMode)
+        try container.encode(iso, forKey: .iso)
+        try container.encode(shutterSpeed, forKey: .shutterSpeed)
+        try container.encode(whiteBalance, forKey: .whiteBalance)
+        try container.encode(contrast, forKey: .contrast)
+        try container.encode(saturation, forKey: .saturation)
+        try container.encode(quality, forKey: .quality)
+        try container.encode(width, forKey: .width)
+        try container.encode(height, forKey: .height)
+        try container.encode(monitoringEnabled, forKey: .monitoringEnabled)
+        try container.encode(detectionThreshold, forKey: .detectionThreshold)
+        try container.encode(detectionInterval, forKey: .detectionInterval)
+        try container.encode(checkInterval, forKey: .checkInterval)
+        try container.encode(captureCooldown, forKey: .captureCooldown)
+        try container.encode(enableMultipleExposure, forKey: .enableMultipleExposure)
+        try container.encode(multipleExposureMode, forKey: .multipleExposureMode)
+        try container.encode(multipleExposureCount, forKey: .multipleExposureCount)
+        try container.encode(enable2in1Composition, forKey: .enable2in1Composition)
+        try container.encode(enableTimestamp, forKey: .enableTimestamp)
+        try container.encode(stabilization, forKey: .stabilization)
+        try container.encode(rawMode, forKey: .rawMode)
+        try container.encodeIfPresent(detectionFps, forKey: .detectionFps)
     }
 }
 

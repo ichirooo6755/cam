@@ -20,6 +20,8 @@ import os
 import time
 import json
 import logging
+import logging.handlers
+import re
 import threading
 from collections import deque
 from datetime import datetime
@@ -43,14 +45,20 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler(os.path.join(LOG_DIR, 'camera_service.log')),
+        logging.handlers.RotatingFileHandler(
+            os.path.join(LOG_DIR, 'camera_service.log'),
+            maxBytes=10 * 1024 * 1024,
+            backupCount=5,
+            encoding='utf-8',
+        ),
         logging.StreamHandler(),
     ],
 )
 logger = logging.getLogger(__name__)
 
 CAPTURE_REQUEST_FILE = '/run/picamera/capture_request.json'
-CAPTURE_RESULT_FILE  = '/run/picamera/capture_result.json'
+CAPTURE_RESULT_FILE  = '/run/picamera/capture_result.json'  # 後方互換
+CAPTURE_RESULTS_DIR = '/run/picamera/capture_results'
 LAST_CAPTURE_FILE = '/run/picamera/last_capture_unix'
 _IPC_LISTENER_POLL_SEC = 0.008  # 8ms: メインループの check_interval に依存しない
 _camera_lock = threading.Lock()
@@ -72,6 +80,8 @@ BRIGHTNESS_THRESHOLD = 30
 MIN_CHANGE_AMOUNT = 5
 DARK_SCENE_BRIGHTNESS_CUTOFF = 20.0
 DARK_SCENE_MIN_CHANGE_AMOUNT = 0.8
+# 1シャッター1枚: 撮影後は暗さに戻るまで再武装しない（幕閉じ相当）
+REARM_BRIGHTNESS_MAX = 8.0
 SETTINGS_RELOAD_INTERVAL = 1.0       # 設定変更を最大1秒以内に反映
 SENSOR_STATUS_WRITE_INTERVAL = 2.0
 # 設定ファイルのmtimeキャッシュ（即時反映用）
@@ -163,6 +173,7 @@ FPS_PRESETS = {
 DEFAULT_SETTINGS = {
     'camera_mode': 'standard',
     'brightness_threshold': 30,
+    'detection_threshold': 30,
     'detection_interval': 0.5,
     'check_interval': 0.5,
     'capture_cooldown': 3.0,
@@ -235,6 +246,16 @@ def get_sensor_sample_from_request(request):
     return brightness, lux, ae_gain, ae_exposure_us
 
 
+def _normalize_threshold_keys(settings: dict) -> dict:
+    dt = settings.get('detection_threshold')
+    bt = settings.get('brightness_threshold')
+    if dt is not None and bt is None:
+        settings['brightness_threshold'] = dt
+    elif bt is not None and dt is None:
+        settings['detection_threshold'] = bt
+    return settings
+
+
 def load_settings() -> dict:
     settings = DEFAULT_SETTINGS.copy()
     try:
@@ -257,7 +278,7 @@ def load_settings() -> dict:
     except Exception as e:
         logger.warning(f"Failed to load session overrides: {e}")
 
-    return settings
+    return _normalize_threshold_keys(settings)
 
 
 def write_sensor_status(state: dict) -> None:
@@ -316,15 +337,23 @@ def _ipc_listener_loop() -> None:
             time.sleep(0.05)
 
 
+def _ipc_result_path(request_id: str) -> str:
+    safe_id = re.sub(r'[^a-zA-Z0-9_-]', '', str(request_id))[:32]
+    return os.path.join(CAPTURE_RESULTS_DIR, f'{safe_id}.json')
+
+
 def _write_capture_result(result: dict) -> None:
-    """IPC撮影結果を原子的に書き込む"""
+    """IPC撮影結果を request_id 専用ファイルへ原子的に書き込む"""
     try:
-        tmp_path = f"{CAPTURE_RESULT_FILE}.tmp"
+        request_id = result.get('request_id', 'unknown')
+        os.makedirs(CAPTURE_RESULTS_DIR, exist_ok=True)
+        result_path = _ipc_result_path(request_id)
+        tmp_path = f"{result_path}.tmp"
         payload = dict(result)
         payload['written_at'] = time.time()
         with open(tmp_path, 'w', encoding='utf-8') as f:
             json.dump(payload, f, indent=2)
-        os.replace(tmp_path, CAPTURE_RESULT_FILE)
+        os.replace(tmp_path, result_path)
     except Exception as e:
         logger.warning("Failed to write capture result: %s", e)
 
@@ -569,7 +598,12 @@ def _handle_manual_capture_request(camera, settings: dict, active_profile: dict)
         return False
 
     request_id = req['request_id']
-    logger.info("IPC manual capture request: id=%s", request_id)
+    client_request_id = req.get('client_request_id')
+    logger.info(
+        "IPC manual capture request: ipc=%s client=%s",
+        request_id,
+        client_request_id or '-',
+    )
 
     # リクエストの設定でオーバーライド（解像度・品質・露出）
     req_settings = dict(settings)
@@ -623,7 +657,12 @@ def _handle_manual_capture_request(camera, settings: dict, active_profile: dict)
         result['filename'] = os.path.basename(result['filepath'])
 
     _write_capture_result(result)
-    logger.info("IPC capture done: id=%s success=%s", request_id, result.get('success'))
+    logger.info(
+        "IPC capture done: ipc=%s client=%s success=%s",
+        request_id,
+        client_request_id or '-',
+        result.get('success'),
+    )
     return True
 
 
@@ -729,6 +768,7 @@ def capture_photo(camera, settings: dict, profile: dict, detected_at: float = No
 
 
 def main():
+    os.makedirs(CAPTURE_RESULTS_DIR, exist_ok=True)
     # WiFi AP安定化: camera_serviceのCPU優先度を下げる
     # 撮影時のCPUスパイクでWiFiビーコンフレームが送出できなくなりiOSが切断される問題の対策
     try:
@@ -755,6 +795,7 @@ def main():
     current_lores_size = None
     last_capture_time = 0
     last_settings_load = 0
+    rearmed_for_capture = True
     threshold = BRIGHTNESS_THRESHOLD
     settings = DEFAULT_SETTINGS.copy()
     last_brightness = None
@@ -809,7 +850,11 @@ def main():
                 camera_mode = str(settings.get('camera_mode', 'standard') or 'standard').strip().lower()
                 active_profile = MODE_PROFILES.get(camera_mode, _DEFAULT_PROFILE)
 
-                threshold = int(settings.get('brightness_threshold', BRIGHTNESS_THRESHOLD))
+                threshold = int(
+                    settings.get('brightness_threshold')
+                    or settings.get('detection_threshold')
+                    or BRIGHTNESS_THRESHOLD
+                )
 
                 # プロファイルの値を適用（ユーザー設定で上書き可能だが下限はプロファイルが決定）
                 profile_check = active_profile['check_interval']
@@ -1034,6 +1079,19 @@ def main():
                     change_percent = change_amount * 100
                 sensor_state['last_change_percent'] = round(float(change_percent), 3)
 
+                if not rearmed_for_capture:
+                    if brightness <= REARM_BRIGHTNESS_MAX:
+                        rearmed_for_capture = True
+                        sensor_state['rearmed'] = True
+                    else:
+                        sensor_state['rearmed'] = False
+                        request.release()
+                        request = None
+                        time.sleep(check_interval)
+                        continue
+                else:
+                    sensor_state['rearmed'] = True
+
                 # --- 撮影判定 ---
                 required_change_amount = MIN_CHANGE_AMOUNT
                 if prev_brightness < DARK_SCENE_BRIGHTNESS_CUTOFF:
@@ -1070,6 +1128,8 @@ def main():
                     request = None
                     if result['success']:
                         last_capture_time = time.time()
+                        rearmed_for_capture = False
+                        sensor_state['rearmed'] = False
                         sensor_state['last_capture_at'] = datetime.now().isoformat()
                         sensor_state['last_detect_to_capture_ms'] = result.get('delay_ms')
                         sensor_state['last_camera_ms'] = result.get('camera_ms')

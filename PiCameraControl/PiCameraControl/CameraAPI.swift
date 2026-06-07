@@ -218,7 +218,10 @@ actor CameraAPI {
 
     /// 検知閾値を更新
     func updateDetectionThreshold(_ threshold: Int, temporary: Bool = true) async throws {
-        try await updateSettings(["detection_threshold": threshold], temporary: temporary)
+        try await updateSettings([
+            "detection_threshold": threshold,
+            "brightness_threshold": threshold,
+        ], temporary: temporary)
     }
 
     /// 画質を更新
@@ -351,7 +354,7 @@ actor CameraAPI {
         location: CaptureLocationPayload? = nil,
         includePreview: Bool = false
     ) async throws
-        -> (SafeFilename, PhotoMetadata?, UIImage?)
+        -> (SafeFilename, PhotoMetadata?, UIImage?, Bool)
     {
         guard let url = URL(string: "\(baseURL)/api/capture") else {
             throw CameraAPIError.invalidURL
@@ -360,6 +363,8 @@ actor CameraAPI {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let clientRequestId = UUID().uuidString.prefix(8).lowercased()
+        request.setValue(String(clientRequestId), forHTTPHeaderField: "X-Client-Request-Id")
         var body: [String: Any] = ["include_preview": includePreview]
         if manualMode != .current {
             body["manual_mode"] = manualMode.rawValue
@@ -380,8 +385,18 @@ actor CameraAPI {
 
         let decoder = JSONDecoder()
         let decodedResult = try? decoder.decode(CaptureResponse.self, from: data)
+        let previewImage = Self.decodePreviewImage(
+            base64: decodedResult?.previewBase64,
+            mime: decodedResult?.previewMime
+        )
 
         if httpResponse.statusCode != 200 {
+            if let decodedResult,
+               decodedResult.savedOnDevice == true,
+               let filename = decodedResult.filename,
+               let safeFilename = sanitizeFilename(filename) {
+                return (safeFilename, decodedResult.metadata, previewImage, true)
+            }
             if let decodedResult, let error = decodedResult.error {
                 throw CameraAPIError.captureFailed(error)
             }
@@ -393,6 +408,10 @@ actor CameraAPI {
         }
 
         guard result.success, let filename = result.filename else {
+            if result.savedOnDevice == true, let filename = result.filename,
+               let safeFilename = sanitizeFilename(filename) {
+                return (safeFilename, result.metadata, previewImage, true)
+            }
             throw CameraAPIError.captureFailed(result.error ?? "Unknown error")
         }
 
@@ -400,11 +419,7 @@ actor CameraAPI {
             throw CameraAPIError.invalidFilename
         }
 
-        let previewImage = Self.decodePreviewImage(
-            base64: result.previewBase64,
-            mime: result.previewMime
-        )
-        return (safeFilename, result.metadata, previewImage)
+        return (safeFilename, result.metadata, previewImage, result.savedOnDevice ?? true)
     }
 
     private static func decodePreviewImage(base64: String?, mime: String?) -> UIImage? {
@@ -431,7 +446,7 @@ actor CameraAPI {
         meta: String? = nil,
         location: CaptureLocationPayload? = nil
     ) async throws -> SafeFilename {
-        let (filename, _, _) = try await captureWithMetadata(
+        let (filename, _, _, _) = try await captureWithMetadata(
             manualMode: manualMode,
             meta: meta,
             location: location

@@ -171,8 +171,9 @@ final class ConnectionMonitor: ObservableObject {
             isConnected = true
             consecutiveFailures = 0
             lastSuccessfulCheck = Date()
-            if !wasConnected {
-                Task { await self.synchronizePiClockIfNeeded(ip: serverIP, serverTimeUnix: primaryProbe.serverTimeUnix) }
+            Task {
+                await self.synchronizePiClockIfNeeded(
+                    ip: serverIP, serverTimeUnix: primaryProbe.serverTimeUnix)
             }
         } else {
             consecutiveFailures += 1
@@ -190,8 +191,9 @@ final class ConnectionMonitor: ObservableObject {
                     consecutiveFailures = 0
                     lastSuccessfulCheck = Date()
                     lastChecked = Date()
-                    if !wasConnected {
-                        Task { await self.synchronizePiClockIfNeeded(ip: serverIP, serverTimeUnix: recycled.serverTimeUnix) }
+                    Task {
+                        await self.synchronizePiClockIfNeeded(
+                            ip: serverIP, serverTimeUnix: recycled.serverTimeUnix)
                     }
                     if !wasConnected { scheduleTimer() }
                     lastChecked = Date()
@@ -209,8 +211,9 @@ final class ConnectionMonitor: ObservableObject {
                         isConnected = true
                         consecutiveFailures = 0
                         lastSuccessfulCheck = Date()
-                        if !wasConnected {
-                            Task { await self.synchronizePiClockIfNeeded(ip: fallback, serverTimeUnix: fb.serverTimeUnix) }
+                        Task {
+                            await self.synchronizePiClockIfNeeded(
+                                ip: fallback, serverTimeUnix: fb.serverTimeUnix)
                         }
                         break
                     }
@@ -240,11 +243,13 @@ final class ConnectionMonitor: ObservableObject {
         request.cachePolicy = .reloadIgnoringLocalCacheData
         do {
             let (data, response) = try await session.data(for: request)
-            guard let http = response as? HTTPURLResponse,
-                  (200...499).contains(http.statusCode) else {
+            guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
                 return (false, nil)
             }
             let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            guard obj?["server_time_unix"] != nil || obj?["photo_count"] != nil else {
+                return (false, nil)
+            }
             let u = obj?["server_time_unix"] as? Double
             return (true, u)
         } catch {
