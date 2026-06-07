@@ -27,6 +27,29 @@ else
   _SCP=(scp)
 fi
 
+# AP 経由の scp は遅くハングしやすいため、Python/シェルは SSH stdin パイプを優先
+_pipe_deploy_file() {
+  local src="$1"
+  local dest="$2"
+  local base
+  base="$(basename "$src")"
+  echo "  pipe: $base -> $dest"
+  "${_SSH[@]}" "${SSH_OPTS[@]}" -T "pi@$RASPI_HOST" "cat > '$dest'" < "$src"
+}
+
+_scp_or_pipe() {
+  local src="$1"
+  local dest="$2"
+  case "$src" in
+    *.py|*.sh|*.service)
+      _pipe_deploy_file "$src" "$dest"
+      ;;
+    *)
+      "${_SCP[@]}" "${SSH_OPTS[@]}" "$src" "pi@$RASPI_HOST:$dest"
+      ;;
+  esac
+}
+
 _try_ssh_reach() {
   local h="$1"
   "${_SSH[@]}" "${SSH_OPTS[@]}" -T "pi@$h" "echo ok" >/dev/null 2>&1
@@ -71,16 +94,16 @@ cd "$CURRENT_DIR"
 
 # Pythonスクリプトの転送
 echo "Transffering Python scripts..."
-"${_SCP[@]}" "${SSH_OPTS[@]}" wifi_manager.py pi@$RASPI_HOST:/home/pi/
-"${_SCP[@]}" "${SSH_OPTS[@]}" camera_service.py pi@$RASPI_HOST:/home/pi/
-"${_SCP[@]}" "${SSH_OPTS[@]}" api_server.py pi@$RASPI_HOST:/home/pi/
-"${_SCP[@]}" "${SSH_OPTS[@]}" metering_calibrate.py pi@$RASPI_HOST:/home/pi/
-"${_SCP[@]}" "${SSH_OPTS[@]}" enable_usb_otg_gadget.sh pi@$RASPI_HOST:/home/pi/
-"${_SCP[@]}" "${SSH_OPTS[@]}" camera-service.service pi@$RASPI_HOST:/home/pi/
-"${_SCP[@]}" "${SSH_OPTS[@]}" api-server.service pi@$RASPI_HOST:/home/pi/
-"${_SCP[@]}" "${SSH_OPTS[@]}" usb0-static-ip.service pi@$RASPI_HOST:/home/pi/
-"${_SCP[@]}" "${SSH_OPTS[@]}" picamera-wifi-bootstrap.sh pi@$RASPI_HOST:/home/pi/
-"${_SCP[@]}" "${SSH_OPTS[@]}" picamera-wifi-bootstrap.service pi@$RASPI_HOST:/home/pi/
+_scp_or_pipe wifi_manager.py /home/pi/wifi_manager.py
+_scp_or_pipe camera_service.py /home/pi/camera_service.py
+_scp_or_pipe api_server.py /home/pi/api_server.py
+_scp_or_pipe metering_calibrate.py /home/pi/metering_calibrate.py
+_scp_or_pipe enable_usb_otg_gadget.sh /home/pi/enable_usb_otg_gadget.sh
+_scp_or_pipe camera-service.service /home/pi/camera-service.service
+_scp_or_pipe api-server.service /home/pi/api-server.service
+_scp_or_pipe usb0-static-ip.service /home/pi/usb0-static-ip.service
+_scp_or_pipe picamera-wifi-bootstrap.sh /home/pi/picamera-wifi-bootstrap.sh
+_scp_or_pipe picamera-wifi-bootstrap.service /home/pi/picamera-wifi-bootstrap.service
 
 # 性能調整スクリプトと zram-tools オフライン用 deb（AP でも tune が完走しやすい）
 if [[ -f "$CURRENT_DIR/tune_performance_zero2w.sh" ]]; then

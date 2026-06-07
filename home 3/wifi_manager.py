@@ -17,6 +17,30 @@ import hashlib
 
 logger = logging.getLogger(__name__)
 
+LAST_CAPTURE_UNIX_FILE = '/run/picamera/last_capture_unix'
+_AP_HEALTH_CACHE = {'ok_until': 0.0, 'last_ok_at': 0.0}
+
+
+def _recent_capture_within(grace_sec: float) -> bool:
+    """撮影直後は AP 再構築・不健全判定を抑止する。"""
+    try:
+        if os.path.exists(LAST_CAPTURE_UNIX_FILE):
+            with open(LAST_CAPTURE_UNIX_FILE, 'r', encoding='utf-8') as f:
+                last_unix = float((f.read() or '').strip())
+            if time.time() - last_unix < grace_sec:
+                return True
+    except Exception:
+        pass
+    return False
+
+
+def _apply_ap_radio_tuning(iface=None):
+    """AP 接続を切らずに powersave OFF 等の軽量調整のみ行う。"""
+    if not iface:
+        iface = _detect_wifi_interface()
+    iw_cmd = _resolve_executable('iw')
+    _run(['sudo', '-n', iw_cmd, 'dev', iface, 'set', 'power_save', 'off'])
+
 def _resolve_executable(name):
     text = str(name)
     if os.path.isabs(text) and os.path.exists(text):
@@ -917,22 +941,35 @@ def scan_wifi_networks(max_results=25, rescan=True, timeout=25):
     }
 
 def _is_ap_healthy():
-    """APモードが正常に動作しているかを非破壊的にチェック"""
+    """APモードが正常に動作しているかを非破壊的にチェック。
+    撮影中の CPU 高負荷で nmcli が失敗しやすいため、不明時は healthy 扱い（fail-open）。
+    """
+    now = time.time()
+    if _AP_HEALTH_CACHE['ok_until'] > now:
+        return True
+    if _recent_capture_within(60.0):
+        _AP_HEALTH_CACHE['ok_until'] = now + 30.0
+        return True
+
     try:
         nmcli_cmd = _resolve_executable('nmcli')
-        # Hotspotプロファイルがアクティブか
-        active = _run([nmcli_cmd, '-t', '-f', 'NAME,TYPE', 'connection', 'show', '--active'], timeout=10)
+        active = _run([nmcli_cmd, '-t', '-f', 'NAME,TYPE', 'connection', 'show', '--active'], timeout=8)
         if active['returncode'] != 0:
-            return False
+            logger.warning("AP health: nmcli active check failed (fail-open): %s", active.get('stderr') or active.get('stdout'))
+            return True
         if not any('Hotspot' in line for line in active['stdout'].splitlines()):
             return False
-        # AP IPが割り当てられているか
         ip = _get_primary_ip()
         if ip and (ip.startswith('192.168.4.') or ip.startswith('10.42.0.')):
+            _AP_HEALTH_CACHE['last_ok_at'] = now
+            _AP_HEALTH_CACHE['ok_until'] = now + 45.0
             return True
         return False
-    except Exception:
-        return False
+    except Exception as e:
+        logger.warning("AP health check error (fail-open): %s", e)
+        if now - _AP_HEALTH_CACHE.get('last_ok_at', 0.0) < 120.0:
+            return True
+        return True
 
 
 def ensure_ap_persistence(allow_recursive_ap_recovery=True):
@@ -947,11 +984,21 @@ def ensure_ap_persistence(allow_recursive_ap_recovery=True):
     nmcli_cmd = _resolve_executable('nmcli')
     iw_cmd = _resolve_executable('iw')
 
+    if _recent_capture_within(60.0):
+        logger.info("ensure_ap_persistence: recent capture, lightweight tuning only (no rebuild)")
+        _apply_ap_radio_tuning(iface)
+        ip = _get_primary_ip() or AP_IP
+        return {
+            'success': True,
+            'ip': ip,
+            'ip_address': ip,
+            'action': 'capture_grace_tuning',
+        }
+
     # --- フェーズ1: APが正常動作中なら軽量調整のみ（接続を切断しない） ---
     if _is_ap_healthy():
         logger.info("ensure_ap_persistence: AP is healthy, applying lightweight tuning only")
-        # powersave OFFだけ確実に適用（接続を切らない）
-        _run(['sudo', '-n', iw_cmd, 'dev', iface, 'set', 'power_save', 'off'])
+        _apply_ap_radio_tuning(iface)
         # 不要なサービスを静かに停止（ネットワークに影響しない）
         _run(['sudo', '-n', 'systemctl', 'stop', 'wpa_supplicant'], timeout=5)
         _run(['sudo', '-n', 'systemctl', 'stop', 'dhcpcd'], timeout=5)
