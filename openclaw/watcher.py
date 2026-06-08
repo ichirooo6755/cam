@@ -8,6 +8,11 @@ import config
 REPORT_PATH = "shared_memory/REPORT.md"
 
 async def watch_and_notify():
+    if not config.TELEGRAM_TOKEN:
+        raise RuntimeError(
+            'TELEGRAM_TOKEN が未設定です。openclaw/.env を作成してください。'
+            '漏洩した旧トークンは @BotFather で revoke してください。'
+        )
     bot = Bot(token=config.TELEGRAM_TOKEN)
     last_size = os.path.getsize(REPORT_PATH) if os.path.exists(REPORT_PATH) else 0
     

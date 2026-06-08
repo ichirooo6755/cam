@@ -473,6 +473,7 @@ struct MeteringRecommendation: Codable {
     let cameraMode: String?
     let lux: Double?
     let brightness: Double?
+    let clientLux: Double?
 
     enum CodingKeys: String, CodingKey {
         case recommendedISO = "recommended_iso"
@@ -486,6 +487,7 @@ struct MeteringRecommendation: Codable {
         case cameraMode = "camera_mode"
         case lux
         case brightness
+        case clientLux = "client_lux"
     }
 }
 

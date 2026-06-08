@@ -220,6 +220,7 @@ struct ContentView: View {
     @State private var captureToast: String? = nil
     @State private var sensorStatus: SensorRuntimeStatus? = nil
     @State private var meteringRecommendation: MeteringRecommendation? = nil
+    @State private var lastIPhoneLux: Double? = nil
     @StateObject private var captureLocationProvider = CaptureLocationProvider()
 
     // Section expansion state（タブ分割後はカメラタブ内の開閉のみ）
@@ -726,22 +727,34 @@ struct ContentView: View {
     }
 
 
-    private func runMetering() {
+    private func runMetering(useIPhone: Bool = true) {
         isMetering = true
         errorMessage = nil
         let apiClient = api
         let (targetISO, targetShutter) = meteringTargetsFromSelection()
         Task {
             do {
+                var clientLux: Double?
+                if useIPhone {
+                    if let reading = try? await iPhoneAmbientMeter.measureLux() {
+                        clientLux = reading.estimatedLux
+                        await MainActor.run { lastIPhoneLux = reading.estimatedLux }
+                    }
+                }
                 let recommendation = try await apiClient.fetchMeteringRecommendation(
                     targetISO: targetISO,
-                    targetShutterUs: targetShutter
+                    targetShutterUs: targetShutter,
+                    clientLux: clientLux
                 )
                 let sensor = try? await apiClient.fetchSensorStatus()
                 await MainActor.run {
                     meteringRecommendation = recommendation
                     sensorStatus = sensor?.sensor
                     isMetering = false
+                    if clientLux != nil, recommendation.source == "client_lux" {
+                        syncState = .success(
+                            String(format: "iPhone測光 %.0f lux → ISO %d", clientLux!, recommendation.recommendedISO))
+                    }
                 }
             } catch {
                 await MainActor.run {
@@ -750,6 +763,16 @@ struct ContentView: View {
                 }
             }
         }
+    }
+
+    /// 撮影前に iPhone で測光して Pi の ISO/SS を一時設定（Pi 側 calibrate より軽い）
+    private func preMeterWithIPhone(apiClient: CameraAPI) async {
+        guard let reading = try? await iPhoneAmbientMeter.measureLux() else { return }
+        await MainActor.run { lastIPhoneLux = reading.estimatedLux }
+        guard let rec = try? await apiClient.fetchMeteringRecommendation(clientLux: reading.estimatedLux) else {
+            return
+        }
+        try? await apiClient.applyMeteringRecommendation(rec, temporary: true)
     }
 
     private func applyMeteringRecommendation(_ recommendation: MeteringRecommendation) {
@@ -1020,9 +1043,9 @@ struct ContentView: View {
                 }
 
                 Button {
-                    runMetering()
+                    runMetering(useIPhone: true)
                 } label: {
-                    Text("測光")
+                    Text("iPhone測光")
                         .font(.caption.weight(.bold))
                         .padding(.horizontal, 10)
                         .padding(.vertical, 6)
@@ -1031,6 +1054,25 @@ struct ContentView: View {
                         .cornerRadius(8)
                 }
                 .disabled(isMetering)
+
+                Button {
+                    runMetering(useIPhone: false)
+                } label: {
+                    Text("Pi測光")
+                        .font(.caption.weight(.bold))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(Color.gray.opacity(0.35))
+                        .foregroundColor(.white)
+                        .cornerRadius(8)
+                }
+                .disabled(isMetering)
+            }
+
+            if let lux = lastIPhoneLux {
+                Text(String(format: "iPhone: %.0f lux", lux))
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
             }
 
             if let sensorStatus {
@@ -2105,6 +2147,7 @@ struct ContentView: View {
         Task {
             let knownPhotos = Set((try? await apiClient.fetchPhotos()) ?? [])
             do {
+                await preMeterWithIPhone(apiClient: apiClient)
                 // 1枚目: PiのSD保存を優先（軽量JSON応答 + サムネDL）
                 let (filename1, metadata, preview1, savedOnDevice1) = try await apiClient.captureWithMetadata(
                     manualMode: mode, meta: meta, location: locationPayload, includePreview: true
@@ -2114,6 +2157,9 @@ struct ContentView: View {
                     image = preview1
                 } else {
                     image = try? await apiClient.downloadImage(filename: filename1, preferThumbnail: false)
+                    if image == nil {
+                        image = try? await apiClient.downloadImage(filename: filename1, preferThumbnail: true)
+                    }
                 }
                 guard var image else {
                     await MainActor.run {

@@ -23,6 +23,8 @@ struct PhotoDetailView: View {
     @State private var imageToShare: UIImage?
     @State private var isLoadingFullImage = false
     @State private var fullImage: UIImage?
+    @State private var loadError: String?
+    @State private var useThumbnailFallback = false
 
     private var api: SimpleCameraAPI {
         SimpleCameraAPI(baseURL: "http://\(serverIP):8001")
@@ -40,6 +42,14 @@ struct PhotoDetailView: View {
     // RAWファイル（.dng）か判定
     private var isRawPhoto: Bool {
         photoGroup.id.lowercased().hasSuffix(".dng")
+    }
+
+    private var displayImage: UIImage? {
+        if let version = currentVersion, !version.isOriginal {
+            if let data = version.imageData, let img = UIImage(data: data) { return img }
+            if let img = version.image { return img }
+        }
+        return fullImage ?? currentVersion?.image
     }
 
     enum DeleteMode {
@@ -67,7 +77,7 @@ struct PhotoDetailView: View {
 
                     Menu {
                         Button {
-                            if fullImage != nil || currentVersion?.image != nil {
+                            if displayImage != nil {
                                 showEditor = true
                             }
                         } label: {
@@ -75,7 +85,7 @@ struct PhotoDetailView: View {
                         }
 
                         Button {
-                            if let image = fullImage ?? currentVersion?.image {
+                            if let image = displayImage {
                                 imageToShare = image
                                 showShareSheet = true
                             }
@@ -123,9 +133,9 @@ struct PhotoDetailView: View {
                     .background(MinimalTheme.Background.surface)
             }
         }
-        .task { loadOriginalImage() }
+        .task(id: currentVersionIndex) { loadImageForCurrentVersion() }
         .fullScreenCover(isPresented: $showEditor) {
-            if let image = fullImage ?? currentVersion?.image {
+            if let image = displayImage {
                 PhotoEditorView(originalImage: image, photoGroup: photoGroup)
                     .environment(\.managedObjectContext, viewContext)
             }
@@ -155,19 +165,63 @@ struct PhotoDetailView: View {
     // MARK: - Subviews
 
     private var imageCarousel: some View {
+        TabView(selection: $currentVersionIndex) {
+            ForEach(Array(versions.enumerated()), id: \.element.id) { index, version in
+                versionImagePage(version: version)
+                    .tag(index)
+            }
+        }
+        .tabViewStyle(.page(indexDisplayMode: .never))
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onChange(of: currentVersionIndex) { _, _ in
+            loadError = nil
+            useThumbnailFallback = false
+        }
+    }
+
+    @ViewBuilder
+    private func versionImagePage(version: PhotoVersion) -> some View {
         ZStack {
             Color.black
-            if let image = fullImage ?? currentVersion?.image {
+            if indexMatchesDisplay(version: version), let image = displayImage {
                 Image(uiImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if let img = versionImage(version) {
+                Image(uiImage: img)
                     .resizable()
                     .aspectRatio(contentMode: .fit)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if isLoadingFullImage {
                 VStack(spacing: 12) {
                     ProgressView().scaleEffect(1.4).tint(.white)
-                    Text("読み込み中...")
+                    Text(useThumbnailFallback ? "サムネイル読込中..." : "読み込み中...")
                         .font(MinimalTypography.caption)
                         .foregroundColor(.white.opacity(0.7))
+                }
+            } else if let loadError {
+                VStack(spacing: 16) {
+                    Image(systemName: "wifi.exclamationmark")
+                        .font(.system(size: 40))
+                        .foregroundColor(.orange)
+                    Text(loadError)
+                        .font(MinimalTypography.caption)
+                        .foregroundColor(.white.opacity(0.85))
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 24)
+                    HStack(spacing: 12) {
+                        Button("再試行") { loadImageForCurrentVersion(force: true) }
+                            .buttonStyle(.borderedProminent)
+                        if !useThumbnailFallback {
+                            Button("サムネイル") {
+                                useThumbnailFallback = true
+                                loadImageForCurrentVersion(force: true)
+                            }
+                            .buttonStyle(.bordered)
+                            .tint(.white)
+                        }
+                    }
                 }
             } else {
                 Image(systemName: "photo")
@@ -175,16 +229,36 @@ struct PhotoDetailView: View {
                     .foregroundColor(.white.opacity(0.3))
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func indexMatchesDisplay(version: PhotoVersion) -> Bool {
+        guard let current = currentVersion else { return false }
+        return version.id == current.id
+    }
+
+    private func versionImage(_ version: PhotoVersion) -> UIImage? {
+        if let data = version.imageData, let img = UIImage(data: data) { return img }
+        return version.image
     }
 
     private var versionIndicator: some View {
         HStack(spacing: 6) {
-            ForEach(Array(versions.enumerated()), id: \.element.id) { index, _ in
-                Circle()
-                    .fill(index == currentVersionIndex ? Color.white : Color.white.opacity(0.3))
-                    .frame(width: 6, height: 6)
-                    .animation(MinimalAnimation.standardEase, value: currentVersionIndex)
+            ForEach(Array(versions.enumerated()), id: \.element.id) { index, version in
+                Button {
+                    withAnimation { currentVersionIndex = index }
+                } label: {
+                    VStack(spacing: 2) {
+                        Circle()
+                            .fill(index == currentVersionIndex ? Color.white : Color.white.opacity(0.3))
+                            .frame(width: 6, height: 6)
+                        if index == currentVersionIndex {
+                            Text(version.displayName)
+                                .font(.caption2)
+                                .foregroundColor(.white.opacity(0.8))
+                        }
+                    }
+                }
+                .buttonStyle(.plain)
             }
         }
     }
@@ -294,26 +368,52 @@ struct PhotoDetailView: View {
 
     // MARK: - Image Loading
 
-    private func loadOriginalImage() {
-        if fullImage != nil { return }
-        if let cached = currentVersion?.image { fullImage = cached; return }
+    private func loadImageForCurrentVersion(force: Bool = false) {
+        guard let version = currentVersion else { return }
+
+        if !version.isOriginal {
+            if versionImage(version) != nil { return }
+        } else {
+            if !force, fullImage != nil { return }
+            if !force, let cached = versionImage(version) {
+                fullImage = cached
+                return
+            }
+        }
 
         let filename = photoGroup.id
         isLoadingFullImage = true
+        loadError = nil
         Task {
             do {
-                let image = try await api.downloadPhoto(filename: filename)
+                let image: UIImage
+                if useThumbnailFallback || isRawPhoto {
+                    image = try await api.downloadPhoto(
+                        filename: filename, thumbnail: true, maxDimension: 1600)
+                } else {
+                    image = try await api.downloadPhoto(filename: filename)
+                }
                 await MainActor.run {
-                    fullImage = image
-                    if let version = currentVersion,
-                       let data = image.jpegData(compressionQuality: 0.9) {
-                        version.imageData = data
-                        try? viewContext.save()
+                    if version.isOriginal {
+                        fullImage = image
+                        if let data = image.jpegData(compressionQuality: 0.9) {
+                            version.imageData = data
+                            try? viewContext.save()
+                        }
+                    } else {
+                        if let data = image.jpegData(compressionQuality: 0.9) {
+                            version.imageData = data
+                            try? viewContext.save()
+                        }
                     }
                     isLoadingFullImage = false
+                    loadError = nil
                 }
             } catch {
-                await MainActor.run { isLoadingFullImage = false }
+                await MainActor.run {
+                    isLoadingFullImage = false
+                    loadError = error.localizedDescription
+                }
             }
         }
     }

@@ -13,3 +13,6 @@ PROJECT_HANDOVER.md
 diag_output.txt
 **/*.xcodeproj/*.backup
 **/*.pbxproj.backup
+# シークレット（Telegram token 等）
+openclaw/.env
+openclaw/config.local.py

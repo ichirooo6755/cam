@@ -66,7 +66,7 @@ actor SimpleCameraAPI {
 
         let useThumbnail = thumbnail || safeFilename.lowercased().hasSuffix(".dng")
 
-        return try await withRetry(maxRetries: 3, delay: 1.5) {
+        return try await withRetry(maxRetries: 4, delay: 2.0) {
             guard let url = URL(string: "\(self.baseURL)/api/photo") else {
                 throw APIError.invalidURL
             }
@@ -83,9 +83,11 @@ actor SimpleCameraAPI {
 
             let (data, response) = try await self.session.data(for: request)
 
-            guard let httpResponse = response as? HTTPURLResponse,
-                  httpResponse.statusCode == 200 else {
-                throw APIError.downloadFailed
+            guard let httpResponse = response as? HTTPURLResponse else {
+                throw APIError.downloadFailed(statusCode: nil)
+            }
+            guard httpResponse.statusCode == 200 else {
+                throw APIError.downloadFailed(statusCode: httpResponse.statusCode)
             }
 
         if let image = UIImageDecode.fromJPEGData(data) {
@@ -251,7 +253,7 @@ enum APIError: LocalizedError {
     case invalidURL
     case invalidFilename
     case serverError
-    case downloadFailed
+    case downloadFailed(statusCode: Int?)
     case invalidImageData
     case updateFailed
     
@@ -260,7 +262,10 @@ enum APIError: LocalizedError {
         case .invalidURL: return "無効なURL"
         case .invalidFilename: return "無効なファイル名"
         case .serverError: return "サーバーエラー"
-        case .downloadFailed: return "ダウンロード失敗"
+        case .downloadFailed(let code):
+            if code == 404 { return "サーバー上に写真が見つかりません" }
+            if let code { return "ダウンロード失敗 (HTTP \(code))" }
+            return "ダウンロード失敗"
         case .invalidImageData: return "無効な画像データ"
         case .updateFailed: return "更新失敗"
         }

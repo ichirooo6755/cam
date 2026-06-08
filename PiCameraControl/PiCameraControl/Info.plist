@@ -17,5 +17,7 @@
 	<string>写真の編集・保存のためにフォトライブラリへのアクセスが必要です。</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>撮影メタデータに場所を記録し、写真管理をしやすくするため位置情報を使用します。</string>
+	<key>NSCameraUsageDescription</key>
+	<string>周囲の明るさを測って Pi カメラの ISO・シャッターを事前に決めるために、短時間カメラを使用します。</string>
 </dict>
 </plist>

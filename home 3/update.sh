@@ -95,43 +95,60 @@ CURRENT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 echo "Source directory: $CURRENT_DIR"
 cd "$CURRENT_DIR"
 
-# Pythonスクリプトの転送
-echo "Transffering Python scripts..."
-_scp_or_pipe wifi_manager.py /home/pi/wifi_manager.py
-_scp_or_pipe camera_service.py /home/pi/camera_service.py
-_scp_or_pipe api_server.py /home/pi/api_server.py
-_scp_or_pipe metering_calibrate.py /home/pi/metering_calibrate.py
-_scp_or_pipe enable_usb_otg_gadget.sh /home/pi/enable_usb_otg_gadget.sh
-_scp_or_pipe camera-service.service /home/pi/camera-service.service
-_scp_or_pipe api-server.service /home/pi/api-server.service
-_scp_or_pipe usb0-static-ip.service /home/pi/usb0-static-ip.service
-_scp_or_pipe picamera-wifi-bootstrap.sh /home/pi/picamera-wifi-bootstrap.sh
-_scp_or_pipe picamera-wifi-bootstrap.service /home/pi/picamera-wifi-bootstrap.service
-if [[ -f "$CURRENT_DIR/journald-persistent.conf" ]]; then
-  _scp_or_pipe journald-persistent.conf /home/pi/journald-persistent.conf
-fi
-if [[ -f "$CURRENT_DIR/setup_zero2w_system.sh" ]]; then
-  _scp_or_pipe setup_zero2w_system.sh /home/pi/setup_zero2w_system.sh
-fi
-if [[ -f "$CURRENT_DIR/tune_performance_zero2w.sh" ]]; then
-  _scp_or_pipe tune_performance_zero2w.sh /home/pi/tune_performance_zero2w.sh
-fi
-if [[ -f "$CURRENT_DIR/sysctl-picamera-zero2w.conf" ]]; then
-  _scp_or_pipe sysctl-picamera-zero2w.conf /home/pi/sysctl-picamera-zero2w.conf
-fi
-if [[ -f "$CURRENT_DIR/timesync-picamera.conf" ]]; then
-  _scp_or_pipe timesync-picamera.conf /home/pi/timesync-picamera.conf
-fi
-_scp_or_pipe picamera-time-sync.service /home/pi/picamera-time-sync.service
-_scp_or_pipe picamera-system-tune.service /home/pi/picamera-system-tune.service
+# Pythonスクリプトの転送（1回の SSH + tar で AP 瞬断に強くする）
+_deploy_payload_tar() {
+  echo "Transferring payload (single tar stream)..."
+  local -a _files=(
+    wifi_manager.py camera_service.py api_server.py metering_calibrate.py
+    enable_usb_otg_gadget.sh camera-service.service api-server.service
+    usb0-static-ip.service picamera-wifi-bootstrap.sh picamera-wifi-bootstrap.service
+    journald-persistent.conf setup_zero2w_system.sh tune_performance_zero2w.sh
+    sysctl-picamera-zero2w.conf timesync-picamera.conf
+    picamera-time-sync.service picamera-system-tune.service
+  )
+  local -a _present=()
+  local f
+  for f in "${_files[@]}"; do
+    [[ -f "$CURRENT_DIR/$f" ]] && _present+=("$f")
+  done
+  if [[ ${#_present[@]} -eq 0 ]]; then
+    echo "WARN: no payload files to transfer"
+    return 1
+  fi
+  tar czf - -C "$CURRENT_DIR" "${_present[@]}" | \
+    "${_SSH[@]}" "${SSH_OPTS[@]}" -T "pi@$RASPI_HOST" "cd /home/pi && tar xzf -"
+}
 
-# 性能調整スクリプトと zram-tools オフライン用 deb（AP でも tune が完走しやすい）
 _pipe_deploy_binary() {
   local src="$1"
   local dest="$2"
   echo "  pipe(binary): $(basename "$src") -> $dest"
   "${_SSH[@]}" "${SSH_OPTS[@]}" -T "pi@$RASPI_HOST" "cat > '$dest'" < "$src"
 }
+
+echo "Transffering Python scripts..."
+if ! _deploy_payload_tar; then
+  echo "WARN: tar deploy failed — falling back to per-file pipe"
+  _scp_or_pipe wifi_manager.py /home/pi/wifi_manager.py
+  _scp_or_pipe camera_service.py /home/pi/camera_service.py
+  _scp_or_pipe api_server.py /home/pi/api_server.py
+  _scp_or_pipe metering_calibrate.py /home/pi/metering_calibrate.py
+  _scp_or_pipe enable_usb_otg_gadget.sh /home/pi/enable_usb_otg_gadget.sh
+  _scp_or_pipe camera-service.service /home/pi/camera-service.service
+  _scp_or_pipe api-server.service /home/pi/api-server.service
+  _scp_or_pipe usb0-static-ip.service /home/pi/usb0-static-ip.service
+  _scp_or_pipe picamera-wifi-bootstrap.sh /home/pi/picamera-wifi-bootstrap.sh
+  _scp_or_pipe picamera-wifi-bootstrap.service /home/pi/picamera-wifi-bootstrap.service
+  [[ -f "$CURRENT_DIR/journald-persistent.conf" ]] && _scp_or_pipe journald-persistent.conf /home/pi/journald-persistent.conf
+  [[ -f "$CURRENT_DIR/setup_zero2w_system.sh" ]] && _scp_or_pipe setup_zero2w_system.sh /home/pi/setup_zero2w_system.sh
+  [[ -f "$CURRENT_DIR/tune_performance_zero2w.sh" ]] && _scp_or_pipe tune_performance_zero2w.sh /home/pi/tune_performance_zero2w.sh
+  [[ -f "$CURRENT_DIR/sysctl-picamera-zero2w.conf" ]] && _scp_or_pipe sysctl-picamera-zero2w.conf /home/pi/sysctl-picamera-zero2w.conf
+  [[ -f "$CURRENT_DIR/timesync-picamera.conf" ]] && _scp_or_pipe timesync-picamera.conf /home/pi/timesync-picamera.conf
+  _scp_or_pipe picamera-time-sync.service /home/pi/picamera-time-sync.service
+  _scp_or_pipe picamera-system-tune.service /home/pi/picamera-system-tune.service
+fi
+
+# zram-tools オフライン deb
 shopt -s nullglob
 for ZDEB in "$CURRENT_DIR"/vendor/debian/zram-tools_*_all.deb; do
   _pipe_deploy_binary "$ZDEB" "/home/pi/$(basename "$ZDEB")"
@@ -157,7 +174,7 @@ echo "Restarting services..."
 
 # サービスの再起動（最大3回、TTY 無しで banner 待ちを短縮）
 _restart_remote() {
-  "${_SSH[@]}" "${RESTART_SSH_OPTS[@]}" -T pi@$RASPI_HOST "sudo -n sh -c 'echo 1 > /run/picamera_boot_network_applied'; if [ \$? -ne 0 ]; then echo 'Skip restart: sudo -n is not permitted'; exit 0; fi; mkdir -p /home/pi/logs /run/picamera/capture_results; sudo -n systemctl stop camera-control 2>/dev/null; sudo -n systemctl disable camera-control 2>/dev/null; sudo -n systemctl stop shutter-trigger 2>/dev/null; sudo -n systemctl disable shutter-trigger 2>/dev/null; sudo -n systemctl stop photo-server 2>/dev/null; sudo -n systemctl disable photo-server 2>/dev/null; sudo -n rm -f /etc/systemd/system/camera-control.service /etc/systemd/system/shutter-trigger.service /etc/systemd/system/photo-server.service 2>/dev/null || true; sudo -n rm -f /home/pi/camera_control.py /home/pi/shutter_trigger.py /home/pi/light_detection_algorithm.py /home/pi/server.py /home/pi/index.html /home/pi/gallery.html /home/pi/style.css 2>/dev/null || true; if [ -f /home/pi/camera-service.service ]; then sudo -n install -m 644 /home/pi/camera-service.service /etc/systemd/system/camera-service.service; fi; if [ -f /home/pi/api-server.service ]; then sudo -n install -m 644 /home/pi/api-server.service /etc/systemd/system/api-server.service; fi; if [ -f /home/pi/picamera-wifi-bootstrap.service ]; then sudo -n install -m 644 /home/pi/picamera-wifi-bootstrap.service /etc/systemd/system/picamera-wifi-bootstrap.service; fi; sudo -n chmod 755 /home/pi/picamera-wifi-bootstrap.sh 2>/dev/null || true; sudo -n systemctl daemon-reload; sudo -n systemctl enable picamera-wifi-bootstrap.service 2>/dev/null || true; sudo -n systemctl start picamera-wifi-bootstrap.service 2>/dev/null || true; sudo -n systemctl enable camera-service api-server 2>/dev/null || true; sudo -n systemctl restart camera-service api-server"
+  "${_SSH[@]}" "${RESTART_SSH_OPTS[@]}" -T pi@$RASPI_HOST "sudo -n sh -c 'echo 1 > /run/picamera_boot_network_applied'; if [ \$? -ne 0 ]; then echo 'Skip restart: sudo -n is not permitted'; exit 0; fi; mkdir -p /home/pi/logs /run/picamera/capture_results; if [ -f /home/pi/picamera-time-sync.service ]; then sudo -n install -m 644 /home/pi/picamera-time-sync.service /etc/systemd/system/picamera-time-sync.service; fi; if [ -f /home/pi/picamera-system-tune.service ]; then sudo -n install -m 644 /home/pi/picamera-system-tune.service /etc/systemd/system/picamera-system-tune.service; fi; sudo -n systemctl enable picamera-time-sync.service picamera-system-tune.service 2>/dev/null || true; sudo -n systemctl stop camera-control 2>/dev/null; sudo -n systemctl disable camera-control 2>/dev/null; sudo -n systemctl stop shutter-trigger 2>/dev/null; sudo -n systemctl disable shutter-trigger 2>/dev/null; sudo -n systemctl stop photo-server 2>/dev/null; sudo -n systemctl disable photo-server 2>/dev/null; sudo -n rm -f /etc/systemd/system/camera-control.service /etc/systemd/system/shutter-trigger.service /etc/systemd/system/photo-server.service 2>/dev/null || true; sudo -n rm -f /home/pi/camera_control.py /home/pi/shutter_trigger.py /home/pi/light_detection_algorithm.py /home/pi/server.py /home/pi/index.html /home/pi/gallery.html /home/pi/style.css 2>/dev/null || true; if [ -f /home/pi/camera-service.service ]; then sudo -n install -m 644 /home/pi/camera-service.service /etc/systemd/system/camera-service.service; fi; if [ -f /home/pi/api-server.service ]; then sudo -n install -m 644 /home/pi/api-server.service /etc/systemd/system/api-server.service; fi; if [ -f /home/pi/picamera-wifi-bootstrap.service ]; then sudo -n install -m 644 /home/pi/picamera-wifi-bootstrap.service /etc/systemd/system/picamera-wifi-bootstrap.service; fi; sudo -n chmod 755 /home/pi/picamera-wifi-bootstrap.sh 2>/dev/null || true; sudo -n systemctl daemon-reload; sudo -n systemctl enable picamera-wifi-bootstrap.service 2>/dev/null || true; sudo -n systemctl start picamera-wifi-bootstrap.service 2>/dev/null || true; sudo -n systemctl enable camera-service api-server 2>/dev/null || true; sudo -n systemctl restart camera-service api-server"
 }
 
 _ok=0

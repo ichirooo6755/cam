@@ -1249,15 +1249,43 @@ def _default_metering_shutter_us(camera_mode):
         return 33333
     return 16666
 
-def _calc_metering_recommendation(sensor_status, settings, target_iso=None, target_shutter_us=None):
+def _lux_to_base_exposure(lux):
+    """iPhone 等の client_lux から基準露出積を推定（EV = log2(lux/2.5)）。"""
+    import math
+    lux = max(0.05, float(lux))
+    ev = math.log2(lux / 2.5)
+    n_sq = 2.8 * 2.8
+    base_iso = 200
+    t_sec = n_sq / (math.pow(2, ev) * (base_iso / 100.0))
+    base_shutter_us = int(max(2500, min(20_000_000, t_sec * 1_000_000)))
+    return base_iso, base_shutter_us
+
+def _calc_metering_recommendation(
+    sensor_status,
+    settings,
+    target_iso=None,
+    target_shutter_us=None,
+    client_lux=None,
+):
     base_iso = None
     base_shutter_us = None
     source = 'fallback'
+    client_lux_value = None
+
+    if client_lux is not None:
+        try:
+            cl = float(client_lux)
+            if cl > 0:
+                base_iso, base_shutter_us = _lux_to_base_exposure(cl)
+                source = 'client_lux'
+                client_lux_value = cl
+        except (TypeError, ValueError):
+            pass
 
     ae_gain = sensor_status.get('ae_gain')
     ae_exposure_us = sensor_status.get('ae_exposure_us')
     try:
-        if ae_gain is not None and ae_exposure_us is not None:
+        if base_iso is None and ae_gain is not None and ae_exposure_us is not None:
             base_iso = int(round(float(ae_gain) * 100.0))
             base_shutter_us = int(float(ae_exposure_us))
             source = 'ae_metadata'
@@ -1335,6 +1363,7 @@ def _calc_metering_recommendation(sensor_status, settings, target_iso=None, targ
         'camera_mode': settings.get('camera_mode', 'standard'),
         'lux': sensor_status.get('lux'),
         'brightness': sensor_status.get('brightness'),
+        'client_lux': client_lux_value,
     }
 
 def _thumbnail_path(filename, max_dim):
@@ -1514,7 +1543,7 @@ class APIHandler(BaseHTTPRequestHandler):
             return
         status = self._access_status or 500
         duration_ms = (time.time() - self._access_started) * 1000.0
-        parsed = urlparse(self.path or '/')
+        parsed = urlparse(getattr(self, 'path', None) or '/')
         path = parsed.path or '/'
         detail_parts = []
         for key in ('event', 'ipc_request_id', 'saved_on_device', 'success', 'error', 'client_disconnect'):
@@ -1629,11 +1658,19 @@ class APIHandler(BaseHTTPRequestHandler):
             if target_shutter_us is not None:
                 target_shutter_us = int(target_shutter_us)
 
+            client_lux = data.get('client_lux')
+            if client_lux is not None:
+                try:
+                    client_lux = float(client_lux)
+                except (TypeError, ValueError):
+                    client_lux = None
+
             recommendation = _calc_metering_recommendation(
                 sensor_status=sensor,
                 settings=settings,
                 target_iso=target_iso,
                 target_shutter_us=target_shutter_us,
+                client_lux=client_lux,
             )
 
             response = {'success': True, 'recommendation': recommendation}

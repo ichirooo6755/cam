@@ -358,6 +358,7 @@ struct PhotoCell: View {
     var serverIP: String
     @State private var thumbnailImage: UIImage?
     @State private var isLoading = false
+    @State private var thumbnailFailed = false
 
     var body: some View {
         // グリッドから渡される列幅をそのまま一辺にした正方形（LazyVGrid と整合）
@@ -406,6 +407,19 @@ struct PhotoCell: View {
             Rectangle()
                 .fill(MinimalTheme.Background.variant)
                 .overlay { ProgressView() }
+        } else if thumbnailFailed {
+            Rectangle()
+                .fill(MinimalTheme.Background.variant)
+                .overlay {
+                    VStack(spacing: 4) {
+                        Image(systemName: "arrow.clockwise")
+                            .font(.caption)
+                        Text("再試行")
+                            .font(.caption2)
+                    }
+                    .foregroundStyle(MinimalTheme.Text.secondary)
+                }
+                .onTapGesture { loadFromServer(force: true) }
         } else {
             Rectangle()
                 .fill(MinimalTheme.Background.variant)
@@ -433,8 +447,9 @@ struct PhotoCell: View {
         loadFromServer()
     }
 
-    private func loadFromServer() {
+    private func loadFromServer(force: Bool = false) {
         let filename = group.id
+        if force { thumbnailFailed = false }
         isLoading = true
         Task {
             let api = SimpleCameraAPI(baseURL: "http://\(serverIP):8001")
@@ -443,6 +458,7 @@ struct PhotoCell: View {
                 await MainActor.run {
                     thumbnailImage = image
                     isLoading = false
+                    thumbnailFailed = false
                     // Core Data にサムネイルをキャッシュ（次回オフラインでも表示可能）
                     if let version = group.latestVersion,
                        let data = image.jpegData(compressionQuality: 0.7) {
@@ -453,6 +469,7 @@ struct PhotoCell: View {
             } else {
                 await MainActor.run {
                     isLoading = false
+                    thumbnailFailed = true
                 }
             }
         }

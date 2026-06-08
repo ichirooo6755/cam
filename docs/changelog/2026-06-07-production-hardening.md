@@ -174,8 +174,8 @@ grep -a "$(date +%Y-%m-%d)" /home/pi/logs/api_access.log | grep -a $'\tPOST\t/ap
 
 | 優先度 | 問題 | 状態 |
 |--------|------|------|
-| P1 | **Zero2W system tune の Pi 反映** | `update.sh` 実行時 SSH が途中で `Permission denied` になることがあり、**最終デプロイ未完了の可能性**。Pi 到達後に再実行要。 |
-| P1 | **Pi 時計ずれ** | tune + iPhone 同期で改善見込み。`sudo NOPASSWD` 無しだと `/api/system/time` 失敗。 |
+| P1 | **Zero2W system tune の Pi 反映** | 2026-06-07 夜デプロイで **zram 208MB + swap 128MB 確認済み** |
+| P1 | **Pi 時計ずれ** | AP 中は NTP 同期不可（正常）。iPhone 接続で `/api/system/time` |
 | P2 | **検知漏れ**（暗→明が弱い） | reaction + 再武装で改善。閾値・near-miss ログは今後検討。 |
 | P2 | **二重撮影** | 再武装を入れたが、フィールド再確認待ち。 |
 | P3 | **iOS 実機再インストール** | 時刻同期・savedOnDevice・client_id は新ビルド必須。 |
@@ -226,4 +226,20 @@ ssh pi@192.168.4.1 "sudo bash /home/pi/setup_zero2w_system.sh --full"
 ## 作業ログ
 
 - 2026-06-07: ログ恒久化、IPC 改善、iOS 相関、フィールドテスト分析
-- 2026-06-07 後半: Zero2W system tune、再武装、iOS 時刻同期強化（デプロイ一部未完了）
+- 2026-06-07 後半: Zero2W system tune、再武装、iOS 時刻同期強化
+- 2026-06-07 夜: **根本修正**
+  - **毎秒 `set_controls` バグ**: 1 秒ごとに AE/gain を再適用＋ INFO ログ連打 → 署名変更時のみ適用、ログは DEBUG
+  - **検知**: `dark_open` 経路（reaction・真っ暗→幕開き）、Near miss ログ、再武装に減光検知
+  - **デプロイ**: `update.sh` tar 一括転送、zram 50% + swap 128MB 適用確認
+  - **Pi デプロイ**: system-tune ok（zram 208MB active）
+
+## 根本原因メモ（2026-06-07 夜）
+
+| 問題 | 根因 | 修正 |
+|------|------|------|
+| Wi-Fi 不安定・CPU 高 | 毎秒 `_apply_camera_controls()` | 署名ベースの再適用のみ |
+| ログが読めない | 同上 + adaptive gain INFO | DEBUG 化 |
+| 検知漏れ | 立ち上がり率のみ | `dark_open` 絶対 lux 経路 |
+| 二重撮影 | 幕閉じ前に再トリガ | 再武装 + 減光待ち + baseline リセット |
+| デプロイ失敗 | 17 回 SSH | tar 1 ストリーム |
+| 時計ずれ | AP で NTP 不可 | zram 同梱 tune + iPhone 同期（継続） |

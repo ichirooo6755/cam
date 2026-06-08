@@ -93,10 +93,10 @@ actor CameraAPI {
         captureConfig.timeoutIntervalForResource = 120
         self.captureSession = URLSession(configuration: captureConfig)
 
-        // ダウンロード: 接続自体は素早く確立されるはず、転送に余裕を持たせる
+        // ダウンロード: AP 上の大きな JPEG / SD 読み出しに余裕
         let dlConfig = URLSessionConfiguration.default
-        dlConfig.timeoutIntervalForRequest = 15
-        dlConfig.timeoutIntervalForResource = 60
+        dlConfig.timeoutIntervalForRequest = 30
+        dlConfig.timeoutIntervalForResource = 180
         self.downloadSession = URLSession(configuration: dlConfig)
 
         // 後方互換のためプロパティを残す
@@ -511,15 +511,15 @@ actor CameraAPI {
             let (data, response) = try await self.downloadSession.data(for: request)
 
             guard let httpResponse = response as? HTTPURLResponse else {
-                throw CameraAPIError.downloadFailed
+                throw CameraAPIError.downloadFailed(statusCode: nil)
             }
 
             if httpResponse.statusCode == 404 {
-                throw CameraAPIError.downloadFailed
+                throw CameraAPIError.downloadFailed(statusCode: 404)
             }
 
             guard httpResponse.statusCode == 200 else {
-                throw CameraAPIError.downloadFailed
+                throw CameraAPIError.downloadFailed(statusCode: httpResponse.statusCode)
             }
 
             #if canImport(UIKit)
@@ -727,7 +727,8 @@ actor CameraAPI {
 
     func fetchMeteringRecommendation(
         targetISO: Int? = nil,
-        targetShutterUs: Int? = nil
+        targetShutterUs: Int? = nil,
+        clientLux: Double? = nil
     ) async throws -> MeteringRecommendation {
         guard let url = URL(string: "\(baseURL)/api/metering") else {
             throw CameraAPIError.invalidURL
@@ -743,6 +744,9 @@ actor CameraAPI {
         }
         if let targetShutterUs {
             body["target_shutter_us"] = targetShutterUs
+        }
+        if let clientLux, clientLux > 0 {
+            body["client_lux"] = clientLux
         }
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
@@ -780,7 +784,7 @@ enum CameraAPIError: LocalizedError {
     case serverError
     case updateFailed(String)
     case captureFailed(String)
-    case downloadFailed
+    case downloadFailed(statusCode: Int?)
     case invalidImageData
 
     var errorDescription: String? {
@@ -795,10 +799,16 @@ enum CameraAPIError: LocalizedError {
             return "設定更新失敗: \(msg)"
         case .captureFailed(let msg):
             return "撮影失敗: \(msg)"
-        case .downloadFailed:
+        case .downloadFailed(let code):
+            if code == 404 {
+                return "サーバー上に写真が見つかりません（削除済みの可能性があります）"
+            }
+            if let code {
+                return "サーバーから写真の取得に失敗しました（HTTP \(code)）。PiのSDカードには保存されている可能性があります。ギャラリーから再読み込みしてください。"
+            }
             return "サーバーから写真の取得に失敗しました（PiのSDカードには保存されている可能性があります。ギャラリーから再読み込みしてください）"
         case .invalidImageData:
-            return "無効な画像データ"
+            return "画像データの形式が不正です。サムネイル表示を試してください。"
         }
     }
 }

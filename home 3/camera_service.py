@@ -60,13 +60,25 @@ CAPTURE_REQUEST_FILE = '/run/picamera/capture_request.json'
 CAPTURE_RESULT_FILE  = '/run/picamera/capture_result.json'  # 後方互換
 CAPTURE_RESULTS_DIR = '/run/picamera/capture_results'
 LAST_CAPTURE_FILE = '/run/picamera/last_capture_unix'
-_IPC_LISTENER_POLL_SEC = 0.008  # 8ms: メインループの check_interval に依存しない
+_IPC_LISTENER_POLL_SEC = 0.02  # IPC 待ち（8ms は Zero2W で CPU 無駄）
+_COOLDOWN_MIN_SLEEP_SEC = 0.05  # reaction の check_interval=0 でも busy loop しない
+_IDLE_METADATA_MIN_INTERVAL = 0.05  # 幕閉じ中: metadata のみ監視（~20Hz）
+_MONITORING_DISABLED_SLEEP_SEC = 0.05
 _camera_lock = threading.Lock()
 _ipc_shared = {
     'camera': None,
     'settings': None,
     'active_profile': None,
     'running': True,
+}
+# 光検知と IPC 手動撮影で共有（二重撮影・クールダウン取り違え防止）
+_detection_state_lock = threading.Lock()
+_detection_state = {
+    'last_capture_time': 0.0,
+    'rearmed_for_capture': True,
+    'saw_dimming_since_capture': False,
+    'last_brightness': None,
+    'post_capture_peak_lux': None,
 }
 _CAPTURE_IPC_TIMEOUT_SEC = 45.0  # api_server の待ち時間+猶予と整合（キュー滞留の expire）
 
@@ -82,10 +94,18 @@ DARK_SCENE_BRIGHTNESS_CUTOFF = 20.0
 DARK_SCENE_MIN_CHANGE_AMOUNT = 0.8
 # 1シャッター1枚: 撮影後は暗さに戻るまで再武装しない（幕閉じ相当）
 REARM_BRIGHTNESS_MAX = 8.0
-SETTINGS_RELOAD_INTERVAL = 1.0       # 設定変更を最大1秒以内に反映
-SENSOR_STATUS_WRITE_INTERVAL = 2.0
+DIMMING_REARM_AMOUNT = 0.5
+DIMMING_REARM_FRACTION = 0.35  # ピーク lux からこれ以上減ったら幕閉じ相当
+# reaction: 真っ暗→幕開きの絶対 lux 経路（立ち上がり率だけでは拾えない弱い光）
+DARK_OPEN_LUX_MIN = 10.0
+_NEAR_MISS_LOG_INTERVAL_SEC = 2.0
+SETTINGS_RELOAD_INTERVAL = 2.0       # 設定変更は mtime 監視で即反映、無変更時は JSON 読み込みをスキップ
+SENSOR_STATUS_WRITE_INTERVAL = 5.0
+SENSOR_STATUS_HEARTBEAT_SEC = 20.0
 # 設定ファイルのmtimeキャッシュ（即時反映用）
 _settings_file_mtime_cache: float = 0.0
+_session_overrides_mtime_cache: float = 0.0
+_sensor_status_snapshot: tuple | None = None
 
 # --- モード別パフォーマンスプロファイル ---
 # check_interval    : 光検知ポーリング間隔（秒）
@@ -97,7 +117,7 @@ _settings_file_mtime_cache: float = 0.0
 MODE_PROFILES = {
     'reaction': {
         'check_interval': 0.0,
-        'min_cooldown': 0.3,
+        'min_cooldown': 0.8,  # フィルムシャッター跳ね返り・AE settling による二重検知を抑える
         'max_per_minute': 60,
         'lores_size': (128, 96),
         'quality': 70,
@@ -208,6 +228,23 @@ def _record_capture():
     _capture_timestamps.append(time.time())
 
 
+def _note_capture_completed(brightness_at_capture: float | None = None) -> None:
+    """光検知・IPC いずれの撮影後も再武装状態を同期する。"""
+    with _detection_state_lock:
+        _detection_state['last_capture_time'] = time.time()
+        _detection_state['rearmed_for_capture'] = False
+        _detection_state['saw_dimming_since_capture'] = False
+        _detection_state['last_brightness'] = None
+        if brightness_at_capture is not None:
+            _detection_state['post_capture_peak_lux'] = float(brightness_at_capture)
+        else:
+            _detection_state['post_capture_peak_lux'] = None
+
+
+def _dimming_rearm_threshold(peak_lux: float) -> float:
+    return max(DIMMING_REARM_AMOUNT, peak_lux * DIMMING_REARM_FRACTION)
+
+
 def get_sensor_sample(camera):
     """メタデータから明るさ情報を取得（低負荷）"""
     metadata = camera.capture_metadata()
@@ -244,6 +281,96 @@ def get_sensor_sample_from_request(request):
             brightness = float(np.mean(array))
 
     return brightness, lux, ae_gain, ae_exposure_us
+
+
+def _release_capture_request(request) -> None:
+    if request is not None:
+        try:
+            request.release()
+        except Exception:
+            pass
+
+
+def _settings_files_mtime() -> tuple[float, float]:
+    try:
+        main = os.path.getmtime(SETTINGS_FILE) if os.path.exists(SETTINGS_FILE) else 0.0
+    except OSError:
+        main = 0.0
+    try:
+        over = os.path.getmtime(SESSION_OVERRIDES_FILE) if os.path.exists(SESSION_OVERRIDES_FILE) else 0.0
+    except OSError:
+        over = 0.0
+    return main, over
+
+
+def _settings_files_changed() -> bool:
+    global _settings_file_mtime_cache, _session_overrides_mtime_cache
+    main, over = _settings_files_mtime()
+    return main != _settings_file_mtime_cache or over != _session_overrides_mtime_cache
+
+
+def _mark_settings_files_cached() -> None:
+    global _settings_file_mtime_cache, _session_overrides_mtime_cache
+    _settings_file_mtime_cache, _session_overrides_mtime_cache = _settings_files_mtime()
+
+
+def _loop_sleep_seconds(check_interval: float, *, metadata_idle: bool = False) -> float:
+    if metadata_idle:
+        return max(_IDLE_METADATA_MIN_INTERVAL, check_interval)
+    if check_interval > 0.001:
+        return check_interval
+    return 0.0
+
+
+def _should_use_metadata_monitoring(settings: dict, rearmed_for_capture: bool, last_brightness) -> bool:
+    """幕閉じ待ち・暗所では capture_request せず metadata のみ（CPU/メモリ節約）。"""
+    mode = str(settings.get('camera_mode', 'standard') or 'standard').strip().lower()
+    if mode not in ('reaction', 'manual'):
+        return False
+    if not rearmed_for_capture:
+        return True
+    if last_brightness is None:
+        return True
+    return float(last_brightness) <= REARM_BRIGHTNESS_MAX * 1.5
+
+
+def _sample_from_metadata(metadata: dict) -> tuple[float, float | None, float | None, float | None] | None:
+    lux = metadata.get('Lux')
+    ae_gain = metadata.get('AnalogueGain')
+    ae_exposure_us = metadata.get('ExposureTime')
+    if lux is not None:
+        return float(lux), lux, ae_gain, ae_exposure_us
+    return None
+
+
+def _should_write_sensor_status(state: dict, last_write: float, now: float) -> bool:
+    global _sensor_status_snapshot
+    if now - last_write >= SENSOR_STATUS_HEARTBEAT_SEC:
+        return True
+    if now - last_write < SENSOR_STATUS_WRITE_INTERVAL:
+        return False
+    snap = (
+        state.get('state'),
+        state.get('brightness'),
+        state.get('lux'),
+        state.get('rearmed'),
+        state.get('last_capture_at'),
+        state.get('threshold_percent'),
+    )
+    if snap != _sensor_status_snapshot:
+        _sensor_status_snapshot = snap
+        return True
+    return False
+
+
+def _resolve_brightness_threshold(settings: dict) -> int:
+    """brightness_threshold / detection_threshold を解決（0 は有効値として扱う）。"""
+    bt = settings.get('brightness_threshold')
+    if bt is None:
+        bt = settings.get('detection_threshold')
+    if bt is None:
+        return BRIGHTNESS_THRESHOLD
+    return int(bt)
 
 
 def _normalize_threshold_keys(settings: dict) -> dict:
@@ -358,6 +485,47 @@ def _write_capture_result(result: dict) -> None:
         logger.warning("Failed to write capture result: %s", e)
 
 
+def _camera_controls_signature(settings: dict, profile: dict) -> tuple:
+    """露出関連が変わったときだけ set_controls する（毎秒の再適用を防ぐ）。"""
+    return (
+        settings.get('iso'),
+        settings.get('shutter_speed'),
+        settings.get('white_balance'),
+        settings.get('denoise_mode'),
+        profile.get('denoise_override'),
+        _adaptive_gain,
+    )
+
+
+def _required_change_amount(prev_brightness: float) -> float:
+    if prev_brightness < DARK_SCENE_BRIGHTNESS_CUTOFF:
+        return max(DARK_SCENE_MIN_CHANGE_AMOUNT, prev_brightness * 0.25)
+    return MIN_CHANGE_AMOUNT
+
+
+def _evaluate_light_trigger(
+    *,
+    prev_brightness: float,
+    brightness: float,
+    change_amount: float,
+    change_percent: float,
+    threshold: int,
+    camera_mode: str,
+) -> tuple[bool, str]:
+    """フィルムシャッター幕開き検知。 (should_capture, reason)"""
+    req = _required_change_amount(prev_brightness)
+    if change_percent >= threshold and change_amount >= req:
+        return True, 'edge'
+    if (
+        camera_mode == 'reaction'
+        and prev_brightness <= REARM_BRIGHTNESS_MAX
+        and brightness >= DARK_OPEN_LUX_MIN
+        and change_amount >= DARK_SCENE_MIN_CHANGE_AMOUNT
+    ):
+        return True, 'dark_open'
+    return False, ''
+
+
 def _apply_camera_controls(camera: Picamera2, settings: dict, profile: dict) -> None:
     """カメラ制御パラメータを設定"""
     controls = {}
@@ -384,7 +552,7 @@ def _apply_camera_controls(camera: Picamera2, settings: dict, profile: dict) -> 
     elif _adaptive_gain is not None:
         # auto時のみ適応型gainを使用（撮影結果から自動調整）
         controls['AnalogueGain'] = max(_ADAPTIVE_GAIN_MIN, min(_ADAPTIVE_GAIN_MAX, _adaptive_gain))
-        logger.info("Using adaptive gain: %.2f (ISO %d)", _adaptive_gain, int(_adaptive_gain * 100))
+        logger.debug("Using adaptive gain: %.2f (ISO %d)", _adaptive_gain, int(_adaptive_gain * 100))
     else:
         # 初回起動時: ISO 100（gain=1.0）を安全なデフォルトとして設定
         # AEが暗所に適応してgain=8にする前に上書きする
@@ -408,7 +576,10 @@ def _apply_camera_controls(camera: Picamera2, settings: dict, profile: dict) -> 
         except ValueError:
             logger.warning(f"Invalid shutter value: {shutter_value}")
 
-    logger.info("Controls: AE=%s AG=%s ET=%s", controls.get('AeEnable'), controls.get('AnalogueGain'), controls.get('ExposureTime'))
+    logger.debug(
+        "Controls: AE=%s AG=%s ET=%s",
+        controls.get('AeEnable'), controls.get('AnalogueGain'), controls.get('ExposureTime'),
+    )
 
     if libcamera is not None:
         if wb_value == 'auto':
@@ -554,6 +725,8 @@ def _handle_manual_capture_request(camera, settings: dict, active_profile: dict)
     api_server.py からの IPC 手動撮影リクエストを処理する。
     リクエストがあれば撮影して結果を書き込み True を返す。
     リクエストがなければ False を返す。
+
+    呼び出し元は _camera_lock を保持した状態で呼ぶこと（再取得すると非再入 Lock でデッドロック）。
     """
     if not os.path.exists(CAPTURE_REQUEST_FILE):
         return False
@@ -637,6 +810,9 @@ def _handle_manual_capture_request(camera, settings: dict, active_profile: dict)
         except Exception as e:
             logger.warning("IPC: camera reconfig failed: %s", e)
 
+    if camera is not None:
+        _apply_camera_controls(camera, req_settings, req_profile)
+
     result = capture_photo(camera, req_settings, req_profile)
     # 手動撮影経路でも frontend timeout 系は一度だけ自己復旧して再試行
     if (not result.get('success')
@@ -681,7 +857,14 @@ def save_request_to_file(request, filepath, settings, profile):
     return filepath
 
 
-def capture_photo(camera, settings: dict, profile: dict, detected_at: float = None, request=None) -> dict:
+def capture_photo(
+    camera,
+    settings: dict,
+    profile: dict,
+    detected_at: float = None,
+    request=None,
+    brightness_at_capture: float | None = None,
+) -> dict:
     """撮影して保存。requestが渡された場合はそのフレームを保存（光検知と同一フレーム）。"""
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
     raw_mode = settings.get('raw_mode', False)
@@ -743,13 +926,16 @@ def capture_photo(camera, settings: dict, profile: dict, detected_at: float = No
         )
         _record_capture()
         _mark_last_capture_unix()
+        _note_capture_completed(brightness_at_capture)
 
         # WiFi AP安定化スリープと適応型露出をまとめてバックグラウンドで実行。
         # 呼び出し元はすぐに結果を受け取れるので連続撮影の遅延を最小化できる。
         def _post_capture_bg(fp=filepath, ws=wifi_sleep_s, s=settings, c=camera):
             if ws > 0:
                 time.sleep(ws)
-            if str(s.get('iso', 'auto')).lower() == 'auto':
+            iso_auto = str(s.get('iso', 'auto')).lower() == 'auto'
+            ss_auto = str(s.get('shutter_speed', 'auto')).lower() == 'auto'
+            if iso_auto and ss_auto:
                 _adapt_exposure_background(c, fp, s)
 
         threading.Thread(target=_post_capture_bg, daemon=True).start()
@@ -769,13 +955,8 @@ def capture_photo(camera, settings: dict, profile: dict, detected_at: float = No
 
 def main():
     os.makedirs(CAPTURE_RESULTS_DIR, exist_ok=True)
-    # WiFi AP安定化: camera_serviceのCPU優先度を下げる
-    # 撮影時のCPUスパイクでWiFiビーコンフレームが送出できなくなりiOSが切断される問題の対策
-    try:
-        os.nice(10)
-        logger.info("Process priority lowered (nice=10) for WiFi stability")
-    except OSError as e:
-        logger.warning(f"Failed to set nice level: {e}")
+    # CPU 優先度は camera-service.service の Nice=-2 / CPUWeight=200 で設定。
+    # os.nice() で加算すると systemd の意図と逆転するためここでは触らない。
 
     logger.info("Starting light detection camera service (Pi Zero 2W)...")
 
@@ -793,12 +974,11 @@ def main():
     camera = None
     current_main_size = None
     current_lores_size = None
-    last_capture_time = 0
     last_settings_load = 0
-    rearmed_for_capture = True
+    last_near_miss_log = 0.0
+    last_controls_signature = None
     threshold = BRIGHTNESS_THRESHOLD
     settings = DEFAULT_SETTINGS.copy()
-    last_brightness = None
     _brightness_history: deque = deque(maxlen=3)  # 輝度スムージング用リングバッファ
     check_interval = 0.5
     capture_cooldown = 3.0
@@ -829,234 +1009,247 @@ def main():
         while True:
             current_time = time.time()
 
+            with _detection_state_lock:
+                last_capture_time = _detection_state['last_capture_time']
+                rearmed_for_capture = _detection_state['rearmed_for_capture']
+                saw_dimming_since_capture = _detection_state['saw_dimming_since_capture']
+                last_brightness = _detection_state['last_brightness']
+                post_capture_peak_lux = _detection_state['post_capture_peak_lux']
+
             # クールダウン中はスキップ（ただし設定ファイルが変わっていたら即リロード）
             # 手動撮影IPCは専用スレッドが処理
             if current_time - last_capture_time < capture_cooldown:
-                # 設定ファイルが変更されていたらクールダウン中でも即リロード
-                try:
-                    global _settings_file_mtime_cache
-                    mtime = os.path.getmtime(SETTINGS_FILE) if os.path.exists(SETTINGS_FILE) else 0.0
-                    if mtime != _settings_file_mtime_cache:
-                        _settings_file_mtime_cache = mtime
-                        last_settings_load = 0.0  # 次ループで即リロード
-                except OSError:
-                    pass
-                time.sleep(check_interval)
+                if _settings_files_changed():
+                    last_settings_load = 0.0
+                time.sleep(max(check_interval, _COOLDOWN_MIN_SLEEP_SEC))
                 continue
 
-            # --- 設定リロード（通常: 1秒インターバル、設定変更時: 即時） ---
+            # --- 設定リロード（mtime 変化時のみ JSON 読み込み） ---
             if current_time - last_settings_load > SETTINGS_RELOAD_INTERVAL:
-                settings = load_settings()
-                camera_mode = str(settings.get('camera_mode', 'standard') or 'standard').strip().lower()
-                active_profile = MODE_PROFILES.get(camera_mode, _DEFAULT_PROFILE)
+                if _settings_files_changed():
+                    controls_applied = False
+                    last_controls_signature = None
+                    settings = load_settings()
+                    camera_mode = str(settings.get('camera_mode', 'standard') or 'standard').strip().lower()
+                    active_profile = MODE_PROFILES.get(camera_mode, _DEFAULT_PROFILE)
 
-                threshold = int(
-                    settings.get('brightness_threshold')
-                    or settings.get('detection_threshold')
-                    or BRIGHTNESS_THRESHOLD
-                )
+                    threshold = _resolve_brightness_threshold(settings)
 
-                # プロファイルの値を適用（ユーザー設定で上書き可能だが下限はプロファイルが決定）
-                profile_check = active_profile['check_interval']
-                profile_cooldown = active_profile['min_cooldown']
-                _active_max_per_minute = active_profile['max_per_minute']
+                    profile_check = active_profile['check_interval']
+                    profile_cooldown = active_profile['min_cooldown']
+                    _active_max_per_minute = active_profile['max_per_minute']
 
-                # check_interval: ユーザー明示値があればそれを使い、なければプロファイル値
-                # DEFAULT_SETTINGSの0.5がプロファイルの0.0を潰さないようにする
-                raw_check = settings.get('check_interval')
-                if raw_check is not None and raw_check != DEFAULT_SETTINGS.get('check_interval'):
-                    try:
-                        user_check = float(raw_check)
-                    except (TypeError, ValueError):
-                        user_check = profile_check
-                    check_interval = max(profile_check, min(user_check, 5.0))
-                else:
-                    check_interval = profile_check
-
-                raw_cooldown = settings.get('capture_cooldown')
-                if raw_cooldown is not None and raw_cooldown != DEFAULT_SETTINGS.get('capture_cooldown'):
-                    try:
-                        user_cooldown = float(raw_cooldown)
-                    except (TypeError, ValueError):
-                        user_cooldown = profile_cooldown
-                    capture_cooldown = max(profile_cooldown, min(user_cooldown, 30.0))
-                else:
-                    capture_cooldown = profile_cooldown
-
-                monitoring_enabled = bool(settings.get('monitoring_enabled', True))
-                try:
-                    width = int(settings.get('width', 1920))
-                    height = int(settings.get('height', 1080))
-                    if width <= 0 or height <= 0:
-                        raise ValueError
-                except Exception:
-                    width, height = 1920, 1080
-
-                # フレームレートプリセット: detection_fpsが指定されていれば解像度を自動調整
-                detection_fps = settings.get('detection_fps')
-                if detection_fps is not None:
-                    try:
-                        detection_fps = int(detection_fps)
-                    except (TypeError, ValueError):
-                        detection_fps = None
-                fps_preset = FPS_PRESETS.get(detection_fps) if detection_fps else None
-                if fps_preset:
-                    desired_size = fps_preset['main_size']
-                else:
-                    desired_size = (width, height)
-                desired_lores = active_profile['lores_size']
-
-                sensor_state.update({
-                    'camera_mode': camera_mode,
-                    'monitoring_enabled': monitoring_enabled,
-                    'threshold_percent': threshold,
-                    'check_interval': check_interval,
-                    'capture_cooldown': capture_cooldown,
-                    'max_per_minute': _active_max_per_minute,
-                    'width': width,
-                    'height': height,
-                })
-
-                # 光検知OFFでも手動撮影IPCのためカメラは維持する
-                need_reconfig = (
-                    camera is None
-                    or current_main_size != desired_size
-                    or current_lores_size != desired_lores
-                )
-                if need_reconfig:
-                    with _camera_lock:
-                        if camera is not None:
-                            try:
-                                camera.stop()
-                            except Exception:
-                                pass
-                            try:
-                                camera.close()
-                            except Exception:
-                                pass
-                            camera = None
-
-                        cam = None
+                    raw_check = settings.get('check_interval')
+                    if raw_check is not None and raw_check != DEFAULT_SETTINGS.get('check_interval'):
                         try:
-                            cam = Picamera2()
-                            config = cam.create_still_configuration(
-                                main={"size": desired_size},
-                                lores={"size": desired_lores},
-                            )
-                            cam.configure(config)
-                            if fps_preset:
+                            user_check = float(raw_check)
+                        except (TypeError, ValueError):
+                            user_check = profile_check
+                        check_interval = max(profile_check, min(user_check, 5.0))
+                    else:
+                        check_interval = profile_check
+
+                    raw_cooldown = settings.get('capture_cooldown')
+                    if raw_cooldown is not None and raw_cooldown != DEFAULT_SETTINGS.get('capture_cooldown'):
+                        try:
+                            user_cooldown = float(raw_cooldown)
+                        except (TypeError, ValueError):
+                            user_cooldown = profile_cooldown
+                        capture_cooldown = max(profile_cooldown, min(user_cooldown, 30.0))
+                    else:
+                        capture_cooldown = profile_cooldown
+
+                    monitoring_enabled = bool(settings.get('monitoring_enabled', True))
+                    try:
+                        width = int(settings.get('width', 1920))
+                        height = int(settings.get('height', 1080))
+                        if width <= 0 or height <= 0:
+                            raise ValueError
+                    except Exception:
+                        width, height = 1920, 1080
+
+                    detection_fps = settings.get('detection_fps')
+                    if detection_fps is not None:
+                        try:
+                            detection_fps = int(detection_fps)
+                        except (TypeError, ValueError):
+                            detection_fps = None
+                    fps_preset = FPS_PRESETS.get(detection_fps) if detection_fps else None
+                    if fps_preset:
+                        desired_size = fps_preset['main_size']
+                    else:
+                        desired_size = (width, height)
+                    desired_lores = active_profile['lores_size']
+
+                    sensor_state.update({
+                        'camera_mode': camera_mode,
+                        'monitoring_enabled': monitoring_enabled,
+                        'threshold_percent': threshold,
+                        'check_interval': check_interval,
+                        'capture_cooldown': capture_cooldown,
+                        'max_per_minute': _active_max_per_minute,
+                        'width': width,
+                        'height': height,
+                    })
+
+                    need_reconfig = (
+                        camera is None
+                        or current_main_size != desired_size
+                        or current_lores_size != desired_lores
+                    )
+                    if need_reconfig:
+                        with _camera_lock:
+                            if camera is not None:
                                 try:
-                                    fd = fps_preset['frame_duration']
-                                    ss = settings.get('shutter_speed', 'auto')
-                                    if ss and ss != 'auto':
-                                        try:
-                                            if isinstance(ss, str) and '/' in ss:
-                                                n, d = ss.split('/', 1)
-                                                et = int(float(n) / float(d) * 1_000_000)
-                                            else:
-                                                et = int(ss)
-                                            if et > fd:
-                                                fd = et + 10000
-                                        except (ValueError, TypeError):
-                                            pass
-                                    cam.set_controls({'FrameDurationLimits': (fd, fd)})
-                                    logger.info("FrameDuration set to %dµs", fd)
-                                except Exception as e:
-                                    logger.warning("Failed to set FrameDurationLimits: %s", e)
-                            cam.start()
-                            camera = cam
-                            current_main_size = desired_size
-                            current_lores_size = desired_lores
-                            last_brightness = None
-                            controls_applied = False
-                            _camera_retry_delay = 10.0
-                            logger.info(
-                                "Camera started: mode=%s, main=%s, lores=%s, cooldown=%.1fs",
-                                camera_mode, desired_size, desired_lores, capture_cooldown,
-                            )
-                        except Exception as cam_err:
-                            if cam is not None:
-                                try:
-                                    cam.close()
+                                    camera.stop()
                                 except Exception:
                                     pass
-                            logger.warning(
-                                "Camera not available (%s). Retrying in %.0fs...",
-                                cam_err, _camera_retry_delay,
-                            )
-                            sensor_state['state'] = 'camera_unavailable'
-                            sensor_state['last_error'] = str(cam_err)
-                            write_sensor_status(sensor_state)
-                            last_sensor_status_write = current_time
-                            time.sleep(_camera_retry_delay)
-                            _camera_retry_delay = min(_camera_retry_delay * 2, 120.0)
-                            last_settings_load = 0
-                            continue
+                                try:
+                                    camera.close()
+                                except Exception:
+                                    pass
+                                camera = None
 
-                if camera is not None:
-                    with _camera_lock:
-                        _apply_camera_controls(camera, settings, active_profile)
-                        controls_applied = True
-                        camera.options["quality"] = active_profile.get(
-                            'quality', settings.get('quality', 90))
+                            cam = None
+                            try:
+                                cam = Picamera2()
+                                config = cam.create_still_configuration(
+                                    main={"size": desired_size},
+                                    lores={"size": desired_lores},
+                                )
+                                cam.configure(config)
+                                if fps_preset:
+                                    try:
+                                        fd = fps_preset['frame_duration']
+                                        ss = settings.get('shutter_speed', 'auto')
+                                        if ss and ss != 'auto':
+                                            try:
+                                                if isinstance(ss, str) and '/' in ss:
+                                                    n, d = ss.split('/', 1)
+                                                    et = int(float(n) / float(d) * 1_000_000)
+                                                else:
+                                                    et = int(ss)
+                                                if et > fd:
+                                                    fd = et + 10000
+                                            except (ValueError, TypeError):
+                                                pass
+                                        cam.set_controls({'FrameDurationLimits': (fd, fd)})
+                                        logger.info("FrameDuration set to %dµs", fd)
+                                    except Exception as e:
+                                        logger.warning("Failed to set FrameDurationLimits: %s", e)
+                                cam.start()
+                                camera = cam
+                                current_main_size = desired_size
+                                current_lores_size = desired_lores
+                                with _detection_state_lock:
+                                    _detection_state['last_brightness'] = None
+                                controls_applied = False
+                                last_controls_signature = None
+                                _camera_retry_delay = 10.0
+                                logger.info(
+                                    "Camera started: mode=%s, main=%s, lores=%s, cooldown=%.1fs",
+                                    camera_mode, desired_size, desired_lores, capture_cooldown,
+                                )
+                            except Exception as cam_err:
+                                if cam is not None:
+                                    try:
+                                        cam.close()
+                                    except Exception:
+                                        pass
+                                logger.warning(
+                                    "Camera not available (%s). Retrying in %.0fs...",
+                                    cam_err, _camera_retry_delay,
+                                )
+                                sensor_state['state'] = 'camera_unavailable'
+                                sensor_state['last_error'] = str(cam_err)
+                                write_sensor_status(sensor_state)
+                                last_sensor_status_write = current_time
+                                time.sleep(_camera_retry_delay)
+                                _camera_retry_delay = min(_camera_retry_delay * 2, 120.0)
+                                last_settings_load = 0
+                                continue
 
-                # 設定ファイルの最終更新時刻もキャッシュ更新
-                try:
-                    _settings_file_mtime_cache = os.path.getmtime(SETTINGS_FILE) if os.path.exists(SETTINGS_FILE) else 0.0
-                except OSError:
-                    pass
+                    if camera is not None:
+                        sig = _camera_controls_signature(settings, active_profile)
+                        with _camera_lock:
+                            if (not controls_applied) or (sig != last_controls_signature):
+                                _apply_camera_controls(camera, settings, active_profile)
+                                controls_applied = True
+                                last_controls_signature = sig
+                            camera.options["quality"] = active_profile.get(
+                                'quality', settings.get('quality', 90))
+
+                    _mark_settings_files_cached()
+                    _ipc_shared['camera'] = camera
+                    _ipc_shared['settings'] = settings
+                    _ipc_shared['active_profile'] = active_profile
                 last_settings_load = current_time
-                _ipc_shared['camera'] = camera
-                _ipc_shared['settings'] = settings
-                _ipc_shared['active_profile'] = active_profile
 
             # --- モニタリング無効（手動撮影専用: IPCスレッド待ちで軽くスリープ） ---
             if not settings.get('monitoring_enabled', True):
                 sensor_state['state'] = 'monitoring_disabled'
-                if current_time - last_sensor_status_write >= SENSOR_STATUS_WRITE_INTERVAL:
+                if _should_write_sensor_status(sensor_state, last_sensor_status_write, current_time):
                     write_sensor_status(sensor_state)
                     last_sensor_status_write = current_time
                 _ipc_shared['camera'] = camera
                 _ipc_shared['settings'] = settings
                 _ipc_shared['active_profile'] = active_profile
-                time.sleep(_IPC_LISTENER_POLL_SEC)
+                time.sleep(_MONITORING_DISABLED_SLEEP_SEC)
                 continue
 
             # --- カメラ未初期化 ---
             if camera is None:
                 sensor_state['state'] = 'camera_unavailable'
-                if current_time - last_sensor_status_write >= SENSOR_STATUS_WRITE_INTERVAL:
+                if _should_write_sensor_status(sensor_state, last_sensor_status_write, current_time):
                     write_sensor_status(sensor_state)
                     last_sensor_status_write = current_time
-                time.sleep(check_interval)
+                time.sleep(max(check_interval, _COOLDOWN_MIN_SLEEP_SEC))
                 continue
 
             _ipc_shared['camera'] = camera
             _ipc_shared['settings'] = settings
             _ipc_shared['active_profile'] = active_profile
 
-            # --- 光検知ループ（同一フレーム撮影方式） ---
-            # capture_request() で取得したフレームで明るさを判定し、
-            # トリガ時はそのフレームをそのまま保存。
-            # 「検知→新フレーム待ち」の遅延を完全に除去する。
+            # --- 光検知ループ ---
+            # 幕閉じ中は capture_metadata のみ（フレームバッファ dequeue を省略）。
+            # トリガ時だけ capture_request で同一フレーム保存。
             request = None
+            metadata_idle = False
             try:
-                with _camera_lock:
-                    request = camera.capture_request()
+                use_metadata = _should_use_metadata_monitoring(
+                    settings, rearmed_for_capture, last_brightness)
+                if use_metadata:
+                    with _camera_lock:
+                        meta = camera.capture_metadata()
+                    parsed = _sample_from_metadata(meta)
+                    if parsed is not None:
+                        brightness, lux, ae_gain, ae_exposure_us = parsed
+                        metadata_idle = True
+                    else:
+                        use_metadata = False
+
+                if not use_metadata:
+                    with _camera_lock:
+                        request = camera.capture_request()
                     brightness, lux, ae_gain, ae_exposure_us = get_sensor_sample_from_request(request)
 
                 _brightness_history.append(brightness)
                 smoothed_brightness = float(np.median(list(_brightness_history)))
 
                 if last_brightness is None:
-                    last_brightness = smoothed_brightness
-                    request.release()
+                    with _detection_state_lock:
+                        _detection_state['last_brightness'] = smoothed_brightness
+                    _release_capture_request(request)
                     request = None
-                    time.sleep(check_interval)
+                    sleep_s = _loop_sleep_seconds(check_interval, metadata_idle=metadata_idle)
+                    if sleep_s > 0.001:
+                        time.sleep(sleep_s)
                     continue
 
                 prev_brightness = last_brightness
                 change_amount = smoothed_brightness - prev_brightness
+                with _detection_state_lock:
+                    _detection_state['last_brightness'] = smoothed_brightness
                 last_brightness = smoothed_brightness
                 brightness = smoothed_brightness  # センサーステータスにも反映
 
@@ -1068,9 +1261,17 @@ def main():
                 sensor_state['last_change_amount'] = round(float(change_amount), 3)
 
                 if change_amount < 0:
-                    request.release()
+                    if not rearmed_for_capture and post_capture_peak_lux is not None:
+                        drop = post_capture_peak_lux - brightness
+                        if drop >= _dimming_rearm_threshold(post_capture_peak_lux):
+                            saw_dimming_since_capture = True
+                            with _detection_state_lock:
+                                _detection_state['saw_dimming_since_capture'] = True
+                    _release_capture_request(request)
                     request = None
-                    time.sleep(check_interval)
+                    sleep_s = _loop_sleep_seconds(check_interval, metadata_idle=metadata_idle)
+                    if sleep_s > 0.001:
+                        time.sleep(sleep_s)
                     continue
 
                 if prev_brightness > 0:
@@ -1080,55 +1281,89 @@ def main():
                 sensor_state['last_change_percent'] = round(float(change_percent), 3)
 
                 if not rearmed_for_capture:
-                    if brightness <= REARM_BRIGHTNESS_MAX:
+                    if brightness <= REARM_BRIGHTNESS_MAX or saw_dimming_since_capture:
                         rearmed_for_capture = True
+                        saw_dimming_since_capture = False
+                        with _detection_state_lock:
+                            _detection_state['rearmed_for_capture'] = True
+                            _detection_state['saw_dimming_since_capture'] = False
+                            _detection_state['post_capture_peak_lux'] = None
                         sensor_state['rearmed'] = True
                     else:
                         sensor_state['rearmed'] = False
-                        request.release()
+                        _release_capture_request(request)
                         request = None
-                        time.sleep(check_interval)
+                        sleep_s = _loop_sleep_seconds(check_interval, metadata_idle=metadata_idle)
+                        if sleep_s > 0.001:
+                            time.sleep(sleep_s)
                         continue
                 else:
                     sensor_state['rearmed'] = True
 
-                # --- 撮影判定 ---
-                required_change_amount = MIN_CHANGE_AMOUNT
-                if prev_brightness < DARK_SCENE_BRIGHTNESS_CUTOFF:
-                    # 暗所ではLux/brightness絶対値が小さいため、固定5.0だと検知しづらい。
-                    required_change_amount = max(
-                        DARK_SCENE_MIN_CHANGE_AMOUNT,
-                        prev_brightness * 0.25,
+                camera_mode = str(settings.get('camera_mode', 'standard') or 'standard').strip().lower()
+                required_change_amount = _required_change_amount(prev_brightness)
+                should_capture, trigger_reason = _evaluate_light_trigger(
+                    prev_brightness=prev_brightness,
+                    brightness=brightness,
+                    change_amount=change_amount,
+                    change_percent=change_percent,
+                    threshold=threshold,
+                    camera_mode=camera_mode,
+                )
+
+                if (
+                    not should_capture
+                    and rearmed_for_capture
+                    and change_percent >= threshold * 0.5
+                    and current_time - last_near_miss_log >= _NEAR_MISS_LOG_INTERVAL_SEC
+                ):
+                    last_near_miss_log = current_time
+                    logger.info(
+                        "Near miss: lux=%.2f chg=%.1f%% need=%d req=%.2f rearmed=%s",
+                        brightness, change_percent, threshold, required_change_amount,
+                        sensor_state.get('rearmed'),
                     )
-                if (change_percent >= threshold
-                        and change_amount >= required_change_amount
-                        and current_time - last_capture_time >= capture_cooldown):
+
+                if should_capture and current_time - last_capture_time >= capture_cooldown:
 
                     if not _rate_limit_ok():
                         logger.warning(
                             "Rate limit (%d/min). Skipping.", _active_max_per_minute)
                         sensor_state['state'] = 'rate_limited'
-                        request.release()
+                        _release_capture_request(request)
                         request = None
-                        time.sleep(check_interval)
+                        sleep_s = _loop_sleep_seconds(check_interval, metadata_idle=metadata_idle)
+                        if sleep_s > 0.001:
+                            time.sleep(sleep_s)
                         continue
 
+                    if request is None:
+                        with _camera_lock:
+                            request = camera.capture_request()
+                        cap_brightness, lux, ae_gain, ae_exposure_us = get_sensor_sample_from_request(
+                            request)
+                        brightness = cap_brightness
+
                     logger.info(
-                        "Light detected: lux=%.2f, change=%.1f%%, thr=%d, req=%.2f",
+                        "Light detected: lux=%.2f, change=%.1f%%, thr=%d, req=%.2f, via=%s%s",
                         brightness, change_percent, threshold, required_change_amount,
+                        trigger_reason,
+                        ' (meta→frame)' if metadata_idle else '',
                     )
                     detected_at = time.time()
                     sensor_state['last_detected_at'] = datetime.now().isoformat()
 
-                    # 同一フレームを保存（検知フレーム = 撮影フレーム）
                     result = capture_photo(
                         camera, settings, active_profile,
-                        detected_at=detected_at, request=request)
-                    request.release()
+                        detected_at=detected_at, request=request,
+                        brightness_at_capture=brightness)
+                    _release_capture_request(request)
                     request = None
                     if result['success']:
-                        last_capture_time = time.time()
-                        rearmed_for_capture = False
+                        with _detection_state_lock:
+                            last_capture_time = _detection_state['last_capture_time']
+                            rearmed_for_capture = _detection_state['rearmed_for_capture']
+                            post_capture_peak_lux = _detection_state['post_capture_peak_lux']
                         sensor_state['rearmed'] = False
                         sensor_state['last_capture_at'] = datetime.now().isoformat()
                         sensor_state['last_detect_to_capture_ms'] = result.get('delay_ms')
@@ -1155,26 +1390,23 @@ def main():
                         camera = None
                     current_main_size = None
                     current_lores_size = None
-                    last_brightness = None
+                    with _detection_state_lock:
+                        _detection_state['last_brightness'] = None
                     controls_applied = False
                     last_settings_load = 0  # 次ループで即再初期化
                     time.sleep(1.0)
             finally:
-                if request is not None:
-                    try:
-                        request.release()
-                    except Exception:
-                        pass
+                _release_capture_request(request)
 
-            # --- センサーステータス書き込み ---
-            if current_time - last_sensor_status_write >= SENSOR_STATUS_WRITE_INTERVAL:
+            # --- センサーステータス書き込み（変化時 + 定期ハートビート） ---
+            if _should_write_sensor_status(sensor_state, last_sensor_status_write, time.time()):
                 write_sensor_status(sensor_state)
-                last_sensor_status_write = current_time
+                last_sensor_status_write = time.time()
 
-            # adaptive sleep: check_interval=0ならsleep無し（フレームレート限界で監視）
-            if check_interval > 0.001:
+            sleep_s = _loop_sleep_seconds(check_interval, metadata_idle=metadata_idle)
+            if sleep_s > 0.001:
                 elapsed = time.time() - current_time
-                remaining = check_interval - elapsed
+                remaining = sleep_s - elapsed
                 if remaining > 0.001:
                     time.sleep(remaining)
 
